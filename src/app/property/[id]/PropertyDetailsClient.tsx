@@ -2,16 +2,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { FlattenedProperty, ImageType } from './page';
-
-// Temporarily remove Carousel to rule it out as an issue
-// import {
-//   Carousel,
-//   CarouselContent,
-//   CarouselItem,
-//   CarouselPrevious,
-//   CarouselNext,
-// } from '@/components/ui/carousel';
+import type { FlattenedProperty, ImageType } from './page'; // Ensure correct path
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselPrevious,
+  CarouselNext,
+} from '@/components/ui/carousel'; // Ensure this path is correct
 
 type Props = {
   property: FlattenedProperty | null;
@@ -23,8 +21,6 @@ export default function PropertyDetailClient({ property, images }: Props) {
 
   useEffect(() => {
     if (property?.created_at) {
-      // Format the date on the client-side after hydration
-      // This uses the client's locale, which is fine after initial render.
       setDisplayDate(new Date(property.created_at).toLocaleDateString());
     }
   }, [property?.created_at]);
@@ -37,12 +33,9 @@ export default function PropertyDetailClient({ property, images }: Props) {
     );
   }
   
-  // For initial render (before useEffect runs), prepare a consistent fallback or initial format
-  // This helps ensure server and client output the same thing for the date initially.
   const initialDateDisplay = property.created_at 
-    ? new Date(property.created_at).toLocaleDateString('en-CA') // YYYY-MM-DD format, good for consistency
+    ? new Date(property.created_at).toLocaleDateString('en-CA') // YYYY-MM-DD for consistency
     : 'N/A';
-
 
   return (
     <div className="max-w-3xl mx-auto p-4">
@@ -66,52 +59,38 @@ export default function PropertyDetailClient({ property, images }: Props) {
 
       <h2 className="text-2xl font-semibold mt-8 mb-4">Images</h2>
       {images && images.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-          {images.map((img) => (
-            img.image_url && (
-              <div key={img.id} className="border rounded-lg overflow-hidden shadow">
-                <img
-                  src={img.image_url}
-                  alt={`Image of ${property.title}`}
-                  className="w-full h-48 object-cover" 
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).src = "https://via.placeholder.com/300x200?text=Image+Error";
-                    (e.currentTarget as HTMLImageElement).alt = "Image failed to load";
-                  }}
-                />
-              </div>
-            )
-          ))}
-        </div>
-      ) : (
-        <p className="mt-4 italic text-gray-500 text-center">No images available for this property.</p>
-      )}
-
-      {/* // Carousel can be re-introduced here:
-      {images && images.length > 0 ? (
-        <div className="mt-8 max-w-lg mx-auto">
-          <Carousel opts={{ loop: true }}>
+        <div className="mt-8 max-w-lg mx-auto"> {/* Adjusted max-width for typical carousel display */}
+          <Carousel opts={{ loop: images.length > 1 }} className="w-full"> {/* Ensure Carousel takes width */}
             <CarouselContent>
               {images.map((img) => (
-                img.image_url && (
+                img.image_url && ( // Ensure image_url is not null
                   <CarouselItem key={img.id}>
-                    <img
-                      src={img.image_url}
-                      alt={`Image ${img.id} of ${property.title}`}
-                      className="w-full rounded-lg object-cover max-h-96"
-                    />
+                    <div className="p-1"> {/* Embla often uses an inner div for padding/styling */}
+                      <img
+                        src={img.image_url}
+                        alt={`Image ${img.id} of ${property.title}`}
+                        className="w-full h-auto aspect-[16/9] object-cover rounded-lg shadow-md" // Maintain aspect ratio
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src = "https://via.placeholder.com/400x225?text=Image+Error";
+                          (e.currentTarget as HTMLImageElement).alt = `Image ${img.id} failed to load`;
+                        }}
+                      />
+                    </div>
                   </CarouselItem>
                 )
               ))}
             </CarouselContent>
-            <CarouselPrevious />
-            <CarouselNext />
+            {images.length > 1 && ( // Show controls only if multiple images
+              <>
+                <CarouselPrevious />
+                <CarouselNext />
+              </>
+            )}
           </Carousel>
         </div>
       ) : (
-        <p className="mt-4 italic text-gray-500 text-center">No images available.</p>
+        <p className="mt-4 italic text-gray-500 text-center">No images available for this property.</p>
       )}
-      */}
     </div>
   );
 }

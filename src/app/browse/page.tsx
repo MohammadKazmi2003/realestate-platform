@@ -186,7 +186,7 @@ export default function MapPage() {
     if (mapContainer.current && !mapRef.current) {
       mapRef.current = new maplibregl.Map({
         container: mapContainer.current!,
-        style: 'https://api.maptiler.com/maps/bright/style.json?key=TrCfekmv7jylPSiqmMwc', // Ensure this key is valid and has access
+        style: `https://api.maptiler.com/maps/bright/style.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}`, // Ensure this key is valid and has access
         center: [centerCoords.lng, centerCoords.lat],
         zoom: 10,
       });
