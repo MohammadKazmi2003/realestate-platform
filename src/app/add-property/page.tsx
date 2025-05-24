@@ -86,7 +86,7 @@ function AddPropertyPage() {
     }
 
     setLoading(false)
-    router.push(`/view-property/${property.id}`)
+    router.push(`/property/${property.id}`)
   }
 
   return (
