@@ -13,7 +13,7 @@ export default function SignInPage() {
     // Watch for auth state changes and redirect manually
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, _session) => {
       if (event === 'SIGNED_IN') {
         router.push('/')
       }
