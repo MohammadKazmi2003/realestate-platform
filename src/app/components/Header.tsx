@@ -41,8 +41,17 @@ export default function Header() {
         <Link href="/add-property" className="hover:underline">
           Add Property
         </Link>
+        <Link href="/favorites" className="hover:underline">
+           Favorites
+        </Link>
+        <Link href="/my-listings" className="hover:underline"> 
+            My Listings
+        </Link>
         <Link href="/map" className="hover:underline">
           Map View
+        </Link>
+        <Link href="/browse" className="hover:underline">
+          Browse
         </Link>
       </nav>
 

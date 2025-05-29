@@ -1,3 +1,4 @@
+// src/context/AuthContext.tsx
 'use client'
 
 import { useEffect, useState, createContext, useContext } from 'react'
@@ -12,29 +13,34 @@ const supabase = createBrowserClient(
 const AuthContext = createContext<{
   user: User | null
   session: Session | null
+  loading: boolean // Add loading state to context
 }>({
   user: null,
   session: null,
+  loading: true, // Initialize loading as true
 })
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState<boolean>(true) // Internal loading state
 
   useEffect(() => {
-    const getSession = async () => {
+    const getInitialSession = async () => { // Renamed for clarity
       const { data } = await supabase.auth.getSession()
       setSession(data.session)
       setUser(data.session?.user ?? null)
+      setLoading(false) // Set loading to false once initial session is retrieved
     }
 
-    getSession()
+    getInitialSession()
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
       setUser(newSession?.user ?? null)
+      setLoading(false) // Also set loading to false on any auth state change
     })
 
     return () => {
@@ -43,7 +49,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, session }}>
+    <AuthContext.Provider value={{ user, session, loading }}>
       {children}
     </AuthContext.Provider>
   )
