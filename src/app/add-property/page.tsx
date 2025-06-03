@@ -1,3 +1,4 @@
+// src/app/add-property/page.tsx
 'use client'
 
 import { useState, useEffect, FormEvent } from 'react'
@@ -5,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import Header from '@/app/components/Header'
 import { withAuth } from '@/utils/withAuth'
+import imageCompression from 'browser-image-compression'
 
 // Define types for the data we'll fetch for dropdowns
 type BhkType = {
@@ -41,70 +43,49 @@ function AddPropertyPage() {
   const [listingTypesList, setListingTypesList] = useState<ListingType[]>([])
   const [propertyTypesList, setPropertyTypesList] = useState<PropertyType[]>([])
 
-  // >>>>>>>>> START OF useEffect WITH LOGS <<<<<<<<<<
   useEffect(() => {
     const fetchDataForDropdowns = async () => {
-      // ----- LOG 1 -----
-      console.log('AddPropertyPage: useEffect - Fetching dropdown data...');
       setDropdownLoading(true);
       try {
         const { data: bhkData, error: bhkError } = await supabase
           .from('bhk_types')
           .select('id, label');
         if (bhkError) {
-          // ----- LOG 2 (Error Case) -----
-          console.error('AddPropertyPage: useEffect - BHK Fetch Error:', bhkError);
           throw bhkError;
         }
-        // ----- LOG 3 -----
-        console.log('AddPropertyPage: useEffect - Fetched BHK Data:', bhkData);
         setBhkTypesList(bhkData || []);
 
         const { data: listingData, error: listingError } = await supabase
           .from('listing_types')
           .select('id, name');
         if (listingError) {
-          // ----- LOG 4 (Error Case) -----
-          console.error('AddPropertyPage: useEffect - Listing Type Fetch Error:', listingError);
           throw listingError;
         }
-        // ----- LOG 5 -----
-        console.log('AddPropertyPage: useEffect - Fetched Listing Type Data:', listingData);
         setListingTypesList(listingData || []);
 
         const { data: propertyTypeData, error: propertyTypeError } = await supabase
           .from('property_types')
           .select('id, name');
         if (propertyTypeError) {
-          // ----- LOG 6 (Error Case) -----
-          console.error('AddPropertyPage: useEffect - Property Type Fetch Error:', propertyTypeError);
           throw propertyTypeError;
         }
-        // ----- LOG 7 -----
-        console.log('AddPropertyPage: useEffect - Fetched Property Type Data:', propertyTypeData);
         setPropertyTypesList(propertyTypeData || []);
 
       } catch (error: any) {
-        // ----- LOG 8 (Catch Block) -----
-        console.error('AddPropertyPage: useEffect - Error in fetchDataForDropdowns catch block:', error);
         setMessage({ type: 'error', text: `Error fetching selection options: ${error.message}` });
       } finally {
-        // ----- LOG 9 -----
-        console.log('AddPropertyPage: useEffect - Finished fetching dropdown data.');
         setDropdownLoading(false);
       }
     };
 
     fetchDataForDropdowns();
   }, []);
-  // >>>>>>>>> END OF useEffect WITH LOGS <<<<<<<<<<
-
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setMessage(null); 
+    setMessage(null);
 
-    if (!title || !description || !price || !area || !locationText || 
+    if (!title || !description || !price || !area || !locationText ||
         !selectedBhkTypeId || !selectedListingTypeId || !selectedPropertyTypeId) {
       setMessage({ type: 'error', text: 'All fields except images are required, including all type selections.' });
       return;
@@ -129,7 +110,7 @@ function AddPropertyPage() {
     const { data: property, error: propertyError } = await supabase
       .from('properties')
       .insert(propertyPayload)
-      .select('id') 
+      .select('id')
       .single();
 
     if (propertyError || !property) {
@@ -141,22 +122,38 @@ function AddPropertyPage() {
 
     if (images && images.length > 0) {
       const imageUploadPromises = Array.from(images).map(async (file) => {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Date.now()}-${Math.random()}.${fileExt}`;
-        const filePath = `public/${property.id}/${fileName}`;
+        const options = {
+          maxSizeMB: 0.5,
+          maxWidthOrHeight: 1024,
+          useWebWorker: true,
+        };
+        let fileToUpload = file;
+        try {
+          const compressedFile = await imageCompression(file, options);
+          fileToUpload = compressedFile;
+        } catch (compressionError) {
+          console.error(`Could not compress image ${file.name}. Uploading original. Error:`, compressionError);
+        }
+
+        const fileExt = fileToUpload.name.split('.').pop();
+        // --- IMPORTANT CHANGE HERE: Include user.id in the path ---
+        // New path structure: user_id/property_id/timestamp-random.ext
+        const fileNameInStorage = `${Date.now()}-${Math.random()}.${fileExt}`;
+        const filePath = `${user.id}/${property.id}/${fileNameInStorage}`;
+        // --- END IMPORTANT CHANGE ---
 
         const { error: uploadError } = await supabase.storage
           .from('property-images')
-          .upload(filePath, file);
+          .upload(filePath, fileToUpload);
 
         if (uploadError) {
-          console.error(`AddPropertyPage: handleSubmit - Error uploading image ${file.name}:`, uploadError);
-          throw new Error(`Failed to upload ${file.name}: ${uploadError.message}`); 
+          console.error(`AddPropertyPage: handleSubmit - Error uploading image ${fileToUpload.name}:`, uploadError);
+          throw new Error(`Failed to upload ${fileToUpload.name}: ${uploadError.message}`);
         }
         const { data: publicUrlData } = supabase.storage
           .from('property-images')
           .getPublicUrl(filePath);
-        
+
         if (publicUrlData && publicUrlData.publicUrl) {
             return { property_id: property.id, image_url: publicUrlData.publicUrl };
         } else {
@@ -167,7 +164,7 @@ function AddPropertyPage() {
 
       try {
         const uploadedImageObjectsResults = await Promise.allSettled(imageUploadPromises);
-        
+
         const successfulUploads = uploadedImageObjectsResults
             .filter(result => result.status === 'fulfilled' && result.value)
             .map(result => (result as PromiseFulfilledResult<any>).value);
@@ -179,7 +176,7 @@ function AddPropertyPage() {
             const errorMessages = failedUploads.map(fail => (fail as PromiseRejectedResult).reason?.message || 'Unknown upload error').join(', ');
             setMessage({ type: 'error', text: `Property added, but some images failed to upload: ${errorMessages}` });
         }
-        
+
         if (successfulUploads.length > 0) {
           const { error: imageInsertError } = await supabase
             .from('property_images')
@@ -191,7 +188,7 @@ function AddPropertyPage() {
             setMessage({ type: 'error', text: `${currentMessage} Error saving image records: ${imageInsertError.message}` });
           }
         }
-      } catch (overallUploadError: any) { 
+      } catch (overallUploadError: any) {
         console.error('AddPropertyPage: handleSubmit - Overall error during image processing:', overallUploadError);
         if (!message || message.type === 'success') {
              setMessage({ type: 'error', text: `Property added, but an issue occurred with image processing: ${overallUploadError.message}` });
@@ -200,7 +197,7 @@ function AddPropertyPage() {
     }
 
     setLoading(false);
-    if (!message || message.type === 'success') { 
+    if (!message || message.type === 'success') {
         setMessage({ type: 'success', text: 'Property added successfully! Redirecting...' });
     }
 
@@ -208,20 +205,6 @@ function AddPropertyPage() {
       router.push(`/property/${property.id}`);
     }, message && message.type === 'error' ? 3000 : 1500);
   };
-
-  // >>>>>>>>> START OF LOGS BEFORE RETURN <<<<<<<<<<
-  // ----- LOG 10 -----
-  console.log('AddPropertyPage: Render - bhkTypesList:', bhkTypesList);
-  // ----- LOG 11 -----
-  console.log('AddPropertyPage: Render - listingTypesList:', listingTypesList);
-  // ----- LOG 12 -----
-  console.log('AddPropertyPage: Render - propertyTypesList:', propertyTypesList);
-  // ----- LOG 13 -----
-  console.log('AddPropertyPage: Render - dropdownLoading state:', dropdownLoading);
-  // ----- LOG 14 -----
-  console.log('AddPropertyPage: Render - main form loading state:', loading);
-  // >>>>>>>>> END OF LOGS BEFORE RETURN <<<<<<<<<<
-
 
   return (
     <>

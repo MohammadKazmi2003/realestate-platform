@@ -10,8 +10,9 @@ export function createSupabaseServerClient() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
+        // FIX: Make 'get' method async and await cookieStore.get()
+        async get(name: string) {
+          return (await cookieStore.get(name))?.value;
         },
         set(name: string, value: string, options: CookieOptions) {
           try {

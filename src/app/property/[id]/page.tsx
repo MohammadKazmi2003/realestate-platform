@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'; // Ensures dynamic rendering
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 import PropertyDetailsClient from "./PropertyDetailsClient";
 import Header from "@/app/components/Header";
+import { unstable_noStore as noStore } from 'next/cache'; // Import noStore
 
 interface Props {
   params: { id: string };
@@ -20,6 +21,7 @@ export type PropertyDataType = {
   bhk_types: { label: string | null } | null;
   listing_types: { name: string | null } | null;
   property_types: { name: string | null } | null;
+  // FIX: Removed property_images from this type as it's fetched separately
 };
 
 export type FlattenedProperty = {
@@ -41,6 +43,8 @@ export type ImageType = {
 };
 
 export default async function PropertyPage({ params }: Props) {
+  noStore(); // Opt out of data caching for this route
+
   const supabase = createSupabaseServerClient();
 
   const { data: propertyData, error: propertyError } = await supabase
@@ -80,6 +84,16 @@ export default async function PropertyPage({ params }: Props) {
     );
   }
 
+  // Fetch images separately to ensure we can modify their URLs and validate
+  const { data: imagesData, error: imagesError } = await supabase
+    .from("property_images")
+    .select("id, image_url")
+    .eq("property_id", params.id);
+
+  if (imagesError) {
+    console.error(`Error fetching images for property ID ${params.id}:`, imagesError.message);
+  }
+
   const flattenedProperty: FlattenedProperty = {
     id: propertyData.id,
     title: propertyData.title ?? 'N/A',
@@ -87,29 +101,56 @@ export default async function PropertyPage({ params }: Props) {
     price: propertyData.price ?? 0,
     area: propertyData.area ?? 0,
     location_text: propertyData.location_text ?? 'N/A',
-    // Ensure created_at is a consistent ISO string for the client
-    created_at: propertyData.created_at ? new Date(propertyData.created_at).toISOString() : new Date(0).toISOString(), // Fallback to epoch if null
+    created_at: propertyData.created_at ? new Date(propertyData.created_at).toISOString() : new Date(0).toISOString(),
     bhk_type: propertyData.bhk_types?.label ?? 'N/A',
     listing_type: propertyData.listing_types?.name ?? 'N/A',
     property_type: propertyData.property_types?.name ?? 'N/A',
   };
 
-  const { data: images, error: imagesError } = await supabase
-    .from("property_images")
-    .select("id, image_url")
-    .eq("property_id", params.id)
-    .returns<ImageType[]>();
+  // --- IMPORTANT FIX: Server-side validation and cache-busting for image URLs ---
+  const images = await Promise.all(
+    (imagesData || []).map(async (img) => { // Use imagesData here
+      if (!img.image_url || img.image_url.trim() === '') {
+        return null; // Filter out invalid URLs
+      }
 
-  if (imagesError) {
-    console.error(`Error fetching images for property ID ${params.id}:`, imagesError.message);
-  }
+      const url = new URL(img.image_url);
+      // Append a timestamp to force a fresh fetch by the browser
+      url.searchParams.set('cb', Date.now().toString());
+
+      try {
+        // Perform a HEAD request to check if the image exists
+        const response = await fetch(url.toString(), { method: 'HEAD', cache: 'no-store' }); // Disable fetch cache for this check
+
+        if (response.ok) { // Status 2xx means OK
+          return {
+            ...img,
+            image_url: url.toString() // Use the URL with cache-buster
+          };
+        } else if (response.status === 404) {
+          console.warn(`Server-side: Image not found (404) for URL: ${url.toString()}`);
+          return null; // Image does not exist, filter it out
+        } else {
+          console.warn(`Server-side: Unexpected status ${response.status} for image URL: ${url.toString()}`);
+          return null; // Treat other errors as non-existent for rendering purposes
+        }
+      } catch (error) {
+        console.error(`Server-side: Error fetching image HEAD for ${url.toString()}:`, error);
+        return null; // Filter out images that cause network errors
+      }
+    })
+  );
+
+  // Filter out any nulls from the validation process
+  const validatedImages = images.filter(Boolean) as ImageType[];
+  // --- END IMPORTANT FIX ---
 
   return (
     <>
       <Header />
       <PropertyDetailsClient
         property={flattenedProperty}
-        images={images || []}
+        images={validatedImages} // Pass only validated images
       />
     </>
   );

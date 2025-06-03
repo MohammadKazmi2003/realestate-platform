@@ -67,6 +67,7 @@ function MyListingsPage() {
 
   // Handler for deleting a property
   const handleDeleteProperty = async (propertyId: string) => {
+    // IMPORTANT: For a production app, replace `confirm` with a custom modal UI.
     if (!confirm('Are you sure you want to delete this property? This action cannot be undone.')) {
       return; // User cancelled
     }
@@ -75,19 +76,50 @@ function MyListingsPage() {
     setError(null); // Clear any previous errors
 
     try {
-      // First, delete associated images from storage (optional but good practice)
-      // NOTE: This assumes images are stored under a path like `user_id/property_id/image_name`
-      // You might need a function that lists all images for a given property_id in storage
-      // For simplicity, we'll skip direct storage deletion here, but it's a good enhancement.
+      // --- START: Enhanced Image Deletion (Metadata + Storage) ---
+      // 1. Fetch image URLs/paths associated with the property
+      const { data: imagesData, error: fetchImagesError } = await supabase
+        .from('property_images')
+        .select('image_url')
+        .eq('property_id', propertyId);
 
-      // Delete image metadata from property_images table
-      const { error: deleteImagesError } = await supabase
+      if (fetchImagesError) {
+        console.error("Error fetching image URLs for deletion:", fetchImagesError);
+        // Do not throw, proceed with property deletion even if image URL fetch fails
+      }
+
+      if (imagesData && imagesData.length > 0) {
+        const filePathsToDelete = imagesData.map(img => {
+          // Extract the path from the full public URL
+          // The new path structure is: <user-id>/<property-id>/<filename>
+          // Example URL: "https://<project-id>.supabase.co/storage/v1/object/public/property-images/<user-id>/<property-id>/<filename>"
+          const pathSegments = img.image_url?.split('property-images/');
+          // We need the part after 'property-images/', which includes user_id/property_id/filename
+          return pathSegments && pathSegments.length > 1 ? pathSegments[1] : null;
+        }).filter(Boolean) as string[]; // Filter out nulls and assert type
+
+        if (filePathsToDelete.length > 0) {
+          // 2. Delete actual image files from Supabase Storage
+          const { error: storageDeleteError } = await supabase.storage
+            .from('property-images') // Your bucket name
+            .remove(filePathsToDelete);
+
+          if (storageDeleteError) {
+            console.error("Error deleting images from storage:", storageDeleteError);
+            // Do not throw, continue with database deletion
+          }
+        }
+      }
+      // --- END: Enhanced Image Deletion ---
+
+      // Delete image metadata from property_images table (important for FK constraint)
+      const { error: deleteImagesMetadataError } = await supabase
         .from('property_images')
         .delete()
         .eq('property_id', propertyId);
 
-      if (deleteImagesError) {
-        console.error("Error deleting image metadata:", deleteImagesError);
+      if (deleteImagesMetadataError) {
+        console.error("Error deleting image metadata:", deleteImagesMetadataError);
         // Do not throw here, continue to delete property even if image metadata fails
       }
 
@@ -165,14 +197,23 @@ function MyListingsPage() {
                     </p>
                   </div>
                 </Link>
-                {/* Delete Button */}
-                <button
-                  onClick={() => handleDeleteProperty(property.id)}
-                  disabled={deletingId === property.id} // Disable button if this property is being deleted
-                  className="mt-3 px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                >
-                  {deletingId === property.id ? 'Deleting...' : 'Delete Listing'}
-                </button>
+                {/* Action Buttons */}
+                <div className="flex gap-2 mt-3">
+                  {/* Edit Button */}
+                  <Link href={`/edit-property/${property.id}`} passHref>
+                    <span className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm cursor-pointer">
+                      Edit Listing
+                    </span>
+                  </Link>
+                  {/* Delete Button */}
+                  <button
+                    onClick={() => handleDeleteProperty(property.id)}
+                    disabled={deletingId === property.id} // Disable button if this property is being deleted
+                    className="px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    {deletingId === property.id ? 'Deleting...' : 'Delete Listing'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>

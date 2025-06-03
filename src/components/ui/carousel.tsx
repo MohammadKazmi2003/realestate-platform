@@ -6,9 +6,8 @@ import useEmblaCarousel, {
   type EmblaOptionsType as CarouselOptions,
 } from "embla-carousel-react"
 
-import { cn } from "@/lib/utils" //
-// REMOVED: import { Button } from "@/components/ui/button" 
-import { ArrowLeft, ArrowRight } from "lucide-react" // Assuming you use lucide-react for icons
+import { cn } from "@/lib/utils"
+import { ArrowLeft, ArrowRight } from "lucide-react"
 
 type CarouselContextProps = {
   carouselApi: CarouselApi | undefined
@@ -95,7 +94,7 @@ const Carousel = React.forwardRef<HTMLDivElement, CarouselProps>(
       >
         <div
           ref={ref}
-          className={cn("relative", className)} //
+          className={cn("relative", className)}
           role="region"
           aria-roledescription="carousel"
           {...props}
@@ -117,7 +116,7 @@ const CarouselContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HT
       <div ref={mainRef} className="overflow-hidden">
         <div
           ref={ref}
-          className={cn( //
+          className={cn(
             "flex",
             orientation === "horizontal" ? "-ml-4" : "-mt-4 flex-col",
             className
@@ -140,7 +139,7 @@ const CarouselItem = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLD
         ref={ref}
         role="group"
         aria-roledescription="slide"
-        className={cn( //
+        className={cn(
           "min-w-0 shrink-0 grow-0 basis-full",
           orientation === "horizontal" ? "pl-4" : "pt-4",
           className
@@ -162,10 +161,10 @@ const CarouselPrevious = React.forwardRef<HTMLButtonElement, React.HTMLAttribute
         ref={ref}
         onClick={scrollPrev}
         disabled={!canScrollPrev}
-        className={cn( //
+        className={cn(
           "absolute h-8 w-8 rounded-full flex items-center justify-center bg-white/80 hover:bg-white border border-gray-300 shadow-md disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-gray-400",
           orientation === "horizontal"
-            ? "left-2 top-1/2 -translate-y-1/2 sm:left-4" // Adjusted position
+            ? "left-2 top-1/2 -translate-y-1/2 sm:left-4"
             : "top-2 left-1/2 -translate-x-1/2 rotate-90 sm:top-4",
           className
         )}
@@ -189,10 +188,10 @@ const CarouselNext = React.forwardRef<HTMLButtonElement, React.HTMLAttributes<HT
         ref={ref}
         onClick={scrollNext}
         disabled={!canScrollNext}
-        className={cn( //
+        className={cn(
           "absolute h-8 w-8 rounded-full flex items-center justify-center bg-white/80 hover:bg-white border border-gray-300 shadow-md disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-gray-400",
           orientation === "horizontal"
-            ? "right-2 top-1/2 -translate-y-1/2 sm:right-4" // Adjusted position
+            ? "right-2 top-1/2 -translate-y-1/2 sm:right-4"
             : "bottom-2 left-1/2 -translate-x-1/2 rotate-90 sm:bottom-4",
           className
         )}
