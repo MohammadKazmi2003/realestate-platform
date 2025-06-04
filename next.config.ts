@@ -1,8 +1,25 @@
+// next.config.ts
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   images: {
-    domains: ['kueunpcwzvytbyaogyqs.supabase.co'],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'kueunpcwzvytbyaogyqs.supabase.co', // Your Supabase domain
+        port: '', 
+        // Updated to be more specific to your 'property-images' bucket
+        pathname: '/storage/v1/object/public/property-images/**', 
+      },
+      {
+        protocol: 'https',
+        hostname: 'placehold.co', // For placeholder images during development
+        port: '',
+        pathname: '/**', 
+      },
+      // If you use other external image domains, add their patterns here
+    ],
   },
   webpack: (config) => {
     config.resolve.fallback = { fs: false, net: false, tls: false };
@@ -12,10 +29,10 @@ const nextConfig = {
     SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   },
-  eslint: { // Add this section
+  eslint: { 
     ignoreDuringBuilds: true,
   },
-  typescript: { // Add this section
+  typescript: { 
     ignoreBuildErrors: true,
   },
 };
