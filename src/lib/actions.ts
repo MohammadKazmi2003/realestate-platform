@@ -45,7 +45,7 @@ export async function updatePropertyAndManageImages(
       .from('properties')
       .update(formData)
       .eq('id', propertyId)
-      .eq('user_id', userId);
+      .eq('user_id', userId); // Ensure user owns the property (RLS should also enforce this)
 
     if (propertyUpdateError) {
       console.error('Server Action Error: Failed to update property details:', propertyUpdateError);
@@ -55,20 +55,23 @@ export async function updatePropertyAndManageImages(
 
 
     // 2. Handle image deletions: Delete actual files from Storage and then their metadata from the DB
-    if (imagePathsToDelete.length > 0) {
+    if (imagePathsToDelete.length > 0 && imageIdsToDelete.length > 0) {
       console.log(`Server Action: Attempting to delete ${imagePathsToDelete.length} images from storage.`);
+      // Important: Ensure imagePathsToDelete contains the correct, full paths within the bucket.
+      // e.g., "user_id/property_id/filename.jpg"
       const { error: storageDeleteError } = await supabase.storage
-        .from('property-images')
-        .remove(imagePathsToDelete);
+        .from('property-images') // Ensure this is your correct bucket name
+        .remove(imagePathsToDelete); 
+      
       if (storageDeleteError) {
+        // Log error but attempt to continue with DB deletion as a best effort.
+        // Depending on requirements, you might want to handle this more strictly.
         console.error('Server Action Error: Error deleting images from storage:', storageDeleteError);
-        // Continue to DB deletion even if storage fails
       } else {
         console.log('Server Action: Images successfully removed from storage (or no error reported).');
       }
 
       console.log(`Server Action: Attempting to delete ${imageIdsToDelete.length} image metadata records from DB with IDs:`, imageIdsToDelete);
-      // FIX: Removed .select('count') from the delete query
       const { error: dbDeleteError, count } = await supabase
         .from('property_images')
         .delete()
@@ -76,19 +79,20 @@ export async function updatePropertyAndManageImages(
 
       if (dbDeleteError) {
         console.error('Server Action Error: Error deleting image metadata from DB:', dbDeleteError);
+        // If DB deletion fails, this is more critical as it can lead to orphaned storage files
+        // or inconsistencies. Consider if you need to return an error here.
         return { success: false, message: `Failed to delete image metadata: ${dbDeleteError.message}` };
       }
-      // Supabase delete() now returns { data: null, error: null, count: number } on success
-      console.log(`Server Action: Successfully deleted ${count} image metadata records from DB.`);
-      if (count === 0 && imageIdsToDelete.length > 0) {
-          console.warn('Server Action Warning: No image metadata records were deleted from DB, but IDs were provided. Check RLS for public.property_images DELETE policy or provided IDs.');
+      console.log(`Server Action: Successfully deleted ${count ?? 0} image metadata records from DB.`);
+      if ((count === 0 || count === null) && imageIdsToDelete.length > 0) {
+          console.warn('Server Action Warning: No image metadata records were deleted from DB, but IDs were provided. Check RLS or provided IDs.');
       }
     } else {
       console.log('Server Action: No images marked for deletion.');
     }
 
 
-    // 3. Handle new image uploads: Insert metadata into the DB (files are already in storage)
+    // 3. Handle new image uploads: Insert metadata into the DB (files are already in storage by client)
     if (newImageDbEntries.length > 0) {
       console.log(`Server Action: Attempting to insert ${newImageDbEntries.length} new image metadata records.`);
       const { error: imageInsertError } = await supabase
@@ -105,10 +109,11 @@ export async function updatePropertyAndManageImages(
 
 
     // 4. Revalidate cache for affected pages
-    const timestamp = Date.now();
-    revalidatePath(`/property/${propertyId}?v=${timestamp}`);
-    revalidatePath(`/my-listings?v=${timestamp}`);
-    console.log(`Server Action: Revalidated paths with cache-buster: /property/${propertyId}?v=${timestamp} and /my-listings?v=${timestamp}`);
+    revalidatePath(`/property/${propertyId}`);
+    revalidatePath('/my-listings');
+    revalidatePath(`/edit-property/${propertyId}`); // Revalidate the edit page itself
+    
+    console.log(`Server Action: Revalidated paths: /property/${propertyId}, /my-listings, /edit-property/${propertyId}`);
 
     console.log('--- Server Action: Update completed successfully ---');
     return { success: true, message: 'Property and images updated successfully!' };
