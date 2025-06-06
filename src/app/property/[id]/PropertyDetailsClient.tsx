@@ -11,41 +11,39 @@ import {
   CarouselPrevious,
   CarouselNext,
 } from '@/components/ui/carousel';
-
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
-
+import { WhatsAppButton } from '@/app/components/WhatsAppButton'; // Import our new component
+import { FaWhatsapp } from 'react-icons/fa'; // Import an icon for custom button content
 
 type Props = {
   property: FlattenedProperty | null;
-  images: ImageType[]; // This array will now only contain validated, existing images
+  images: ImageType[];
+  ownerPhone: string | null; // Accept the phone number as a prop
 };
 
-export default function PropertyDetailClient({ property, images }: Props) {
+export default function PropertyDetailClient({ property, images, ownerPhone }: Props) {
   const [displayDate, setDisplayDate] = useState<string>('');
   const { user } = useAuth();
   const router = useRouter();
 
   const [isFavorited, setIsFavorited] = useState<boolean>(false);
-  const [isFavoriteLoading, setIsFavoriteLoading] = useState<boolean>(false);
+  const [isFavoriteLoading, setIsFavoriteLoading] = useState<boolean>(true); // Start loading true
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
 
   const [emblaApi, setEmblaApi] = useState<CarouselApi>();
 
-  // Use useCallback for setApi to prevent unnecessary re-renders of Carousel
   const handleSetEmblaApi = useCallback((api: CarouselApi) => {
     setEmblaApi(api);
   }, []);
 
-  // Embla re-initialization on images change
   useEffect(() => {
     if (emblaApi) {
-      emblaApi.reInit(); // Re-initialize the carousel when content changes
-      emblaApi.scrollTo(0); // Ensure it scrolls to the first slide
+      emblaApi.reInit();
+      emblaApi.scrollTo(0);
     }
-  }, [emblaApi, images]); // FIX: Depend on the 'images' prop directly
-
+  }, [emblaApi, images]);
 
   useEffect(() => {
     if (property?.created_at) {
@@ -56,6 +54,7 @@ export default function PropertyDetailClient({ property, images }: Props) {
   useEffect(() => {
     if (!user || !property?.id) {
       setIsFavorited(false);
+      setIsFavoriteLoading(false); // Stop loading if no user
       return;
     }
 
@@ -109,31 +108,26 @@ export default function PropertyDetailClient({ property, images }: Props) {
           .eq('property_id', property.id);
 
         if (error) {
-          console.error("Error removing favorite:", error);
-          setFavoriteError("Could not remove favorite.");
-        } else {
-          setIsFavorited(false);
+          throw error;
         }
+        setIsFavorited(false);
       } else {
         const { error } = await supabase
           .from('user_favorites')
           .insert({ user_id: user.id, property_id: property.id });
 
         if (error) {
-          console.error("Error adding favorite:", error);
-          setFavoriteError("Could not add favorite.");
-        } else {
-          setIsFavorited(true);
+          throw error;
         }
+        setIsFavorited(true);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Unexpected error toggling favorite:", err);
-      setFavoriteError("An unexpected error occurred while updating favorite status.");
+      setFavoriteError(`Could not update favorite: ${err.message}`);
     } finally {
       setIsFavoriteLoading(false);
     }
   };
-
 
   if (!property) {
     return (
@@ -143,31 +137,37 @@ export default function PropertyDetailClient({ property, images }: Props) {
     );
   }
 
-  const initialDateDisplay = property.created_at
-    ? new Date(property.created_at).toLocaleDateString('en-CA')
-    : 'N/A';
-
-  // Removed validImages filtering here, as images prop is now pre-validated by page.tsx
-
   return (
     <div className="max-w-3xl mx-auto p-4">
-      <div className="flex justify-between items-start">
-        <h1 className="text-3xl font-bold mb-4">{property.title}</h1>
-        {/* Favorite Button */}
-        {user && (
-            (<button
-                onClick={handleToggleFavorite}
-                disabled={isFavoriteLoading || !property?.id}
-                className={`px-4 py-2 rounded text-white font-semibold transition-colors duration-150 ease-in-out
-                            ${isFavorited ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}
-                            ${isFavoriteLoading ? 'opacity-50 cursor-not-allowed' : ''}
-                            ml-4`}
+      <div className="flex justify-between items-start mb-2">
+        <h1 className="text-3xl font-bold">{property.title}</h1>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Example of a custom styled WhatsApp button */}
+          <WhatsAppButton
+            phoneNumber={ownerPhone!}
+            propertyTitle={property.title}
+            className="bg-transparent hover:bg-green-100 p-2 rounded-full"
+          >
+            {/* Only the icon is passed as a child */}
+            <FaWhatsapp size={24} className="text-green-600" />
+          </WhatsAppButton>
+          
+          {user && (
+            <button
+              onClick={handleToggleFavorite}
+              disabled={isFavoriteLoading || !property?.id}
+              className={`px-4 py-2 rounded text-white font-semibold transition-colors duration-150 ease-in-out
+                          ${isFavorited ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}
+                          ${isFavoriteLoading ? 'opacity-50 cursor-not-allowed' : ''}
+                          ml-2`}
             >
               {isFavoriteLoading ? '...' : (isFavorited ? 'Unfavorite' : 'Favorite')}
-            </button>)
-        )}
+            </button>
+          )}
+        </div>
       </div>
-      {favoriteError && <p className="text-red-500 text-sm mb-2">{favoriteError}</p>}
+      {favoriteError && <p className="text-red-500 text-sm mb-2 text-right">{favoriteError}</p>}
+      
       <div className="bg-gray-50 p-6 rounded-lg shadow mb-6">
         <p className="mb-2 text-2xl font-semibold text-green-700">
           Price: ₹{property.price.toLocaleString()}
@@ -180,34 +180,31 @@ export default function PropertyDetailClient({ property, images }: Props) {
           <p><strong>Listing For:</strong> {property.listing_type}</p>
           <p><strong>Configuration:</strong> {property.bhk_type}</p>
           <p><strong>Area:</strong> {property.area} sqft</p>
-          <p><strong>Posted On:</strong> {displayDate || initialDateDisplay}</p>
+          <p><strong>Posted On:</strong> {displayDate}</p>
         </div>
       </div>
+      
       <h2 className="text-2xl font-semibold mt-8 mb-4">Images</h2>
-      {/* Use images directly, as they are now pre-validated */}
       {images && images.length > 0 ? (
         <div className="mt-8 max-w-lg mx-auto">
           <Carousel opts={{ loop: images.length > 1 }} className="w-full" setApi={handleSetEmblaApi}>
             <CarouselContent>
-              {images.map((img) => {
-                console.log('Rendering image with src:', img.image_url);
-                return (
-                  <CarouselItem key={img.id}>
-                    <div className="p-1">
-                      <img
-                        src={img.image_url}
-                        alt={`Image ${img.id} of ${property.title}`}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          console.error('Image failed to load (client-side fallback):', e.currentTarget.src);
-                          e.currentTarget.src = 'https://placehold.co/600x400/CCCCCC/FFFFFF?text=Image+Load+Error';
-                          e.currentTarget.onerror = null;
-                        }}
-                      />
-                    </div>
-                  </CarouselItem>
-                );
-              })}
+              {images.map((img) => (
+                <CarouselItem key={img.id}>
+                  <div className="p-1">
+                    <img
+                      src={img.image_url!}
+                      alt={`Image ${img.id} of ${property.title}`}
+                      className="w-full h-full object-cover rounded-lg"
+                      onError={(e) => {
+                        console.error('Image failed to load (client-side fallback):', e.currentTarget.src);
+                        e.currentTarget.src = 'https://placehold.co/600x400/CCCCCC/FFFFFF?text=Image+Not+Available';
+                        e.currentTarget.onerror = null;
+                      }}
+                    />
+                  </div>
+                </CarouselItem>
+              ))}
             </CarouselContent>
             {images.length > 1 && ( <> <CarouselPrevious /> <CarouselNext /> </> )}
           </Carousel>
@@ -218,3 +215,4 @@ export default function PropertyDetailClient({ property, images }: Props) {
     </div>
   );
 }
+
