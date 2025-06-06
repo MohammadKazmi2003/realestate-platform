@@ -14,13 +14,14 @@ import {
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
-import { WhatsAppButton } from '@/app/components/WhatsAppButton'; // Import our new component
-import { FaWhatsapp } from 'react-icons/fa'; // Import an icon for custom button content
+import { WhatsAppButton } from '@/app/components/WhatsAppButton';
+import { FullScreenImageViewer } from '@/app/components/FullScreenImageViewer';
+import { FaWhatsapp } from 'react-icons/fa';
 
 type Props = {
   property: FlattenedProperty | null;
   images: ImageType[];
-  ownerPhone: string | null; // Accept the phone number as a prop
+  ownerPhone: string | null;
 };
 
 export default function PropertyDetailClient({ property, images, ownerPhone }: Props) {
@@ -29,8 +30,12 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
   const router = useRouter();
 
   const [isFavorited, setIsFavorited] = useState<boolean>(false);
-  const [isFavoriteLoading, setIsFavoriteLoading] = useState<boolean>(true); // Start loading true
+  const [isFavoriteLoading, setIsFavoriteLoading] = useState<boolean>(true);
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
+  
+  // State for the full screen image viewer
+  const [isViewerOpen, setIsViewerOpen] = useState(false);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
   const [emblaApi, setEmblaApi] = useState<CarouselApi>();
 
@@ -45,6 +50,7 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
     }
   }, [emblaApi, images]);
 
+
   useEffect(() => {
     if (property?.created_at) {
       setDisplayDate(new Date(property.created_at).toLocaleDateString());
@@ -54,7 +60,7 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
   useEffect(() => {
     if (!user || !property?.id) {
       setIsFavorited(false);
-      setIsFavoriteLoading(false); // Stop loading if no user
+      setIsFavoriteLoading(false);
       return;
     }
 
@@ -123,10 +129,15 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
       }
     } catch (err: any) {
       console.error("Unexpected error toggling favorite:", err);
-      setFavoriteError(`Could not update favorite: ${err.message}`);
+      setFavoriteError("An unexpected error occurred while updating favorite status.");
     } finally {
       setIsFavoriteLoading(false);
     }
+  };
+
+  const openImageViewer = (index: number) => {
+    setSelectedImageIndex(index);
+    setIsViewerOpen(true);
   };
 
   if (!property) {
@@ -138,81 +149,91 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-4">
-      <div className="flex justify-between items-start mb-2">
-        <h1 className="text-3xl font-bold">{property.title}</h1>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Example of a custom styled WhatsApp button */}
-          <WhatsAppButton
-            phoneNumber={ownerPhone!}
-            propertyTitle={property.title}
-            className="bg-transparent hover:bg-green-100 p-2 rounded-full"
-          >
-            {/* Only the icon is passed as a child */}
-            <FaWhatsapp size={24} className="text-green-600" />
-          </WhatsAppButton>
-          
-          {user && (
-            <button
-              onClick={handleToggleFavorite}
-              disabled={isFavoriteLoading || !property?.id}
-              className={`px-4 py-2 rounded text-white font-semibold transition-colors duration-150 ease-in-out
-                          ${isFavorited ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}
-                          ${isFavoriteLoading ? 'opacity-50 cursor-not-allowed' : ''}
-                          ml-2`}
-            >
-              {isFavoriteLoading ? '...' : (isFavorited ? 'Unfavorite' : 'Favorite')}
-            </button>
-          )}
+    <>
+      <div className="max-w-3xl mx-auto p-4">
+        <div className="flex justify-between items-start mb-2">
+          <h1 className="text-3xl font-bold">{property.title}</h1>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {ownerPhone && (
+                <WhatsAppButton
+                    phoneNumber={ownerPhone}
+                    propertyTitle={property.title}
+                    // These props will be needed if you implement analytics tracking
+                    propertyId={property.id}
+                    ownerId={"owner_user_id"} // This would need to be passed down if needed
+                    className="bg-transparent hover:bg-green-100 p-2 rounded-full"
+                >
+                    <FaWhatsapp size={24} className="text-green-600" />
+                </WhatsAppButton>
+            )}
+            {user && (
+              <button
+                onClick={handleToggleFavorite}
+                disabled={isFavoriteLoading || !property?.id}
+                className={`px-4 py-2 rounded text-white font-semibold transition-colors duration-150 ease-in-out
+                            ${isFavorited ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}
+                            ${isFavoriteLoading ? 'opacity-50 cursor-not-allowed' : ''}
+                            ml-2`}
+              >
+                {isFavoriteLoading ? '...' : (isFavorited ? 'Unfavorite' : 'Favorite')}
+              </button>
+            )}
+          </div>
         </div>
-      </div>
-      {favoriteError && <p className="text-red-500 text-sm mb-2 text-right">{favoriteError}</p>}
-      
-      <div className="bg-gray-50 p-6 rounded-lg shadow mb-6">
-        <p className="mb-2 text-2xl font-semibold text-green-700">
-          Price: ₹{property.price.toLocaleString()}
-        </p>
-        <p className="mb-4 text-gray-800 text-md">{property.description}</p>
+        {favoriteError && <p className="text-red-500 text-sm mb-2 text-right">{favoriteError}</p>}
+        
+        <div className="bg-gray-50 p-6 rounded-lg shadow mb-6">
+          <p className="mb-2 text-2xl font-semibold text-green-700">
+            Price: ₹{property.price.toLocaleString()}
+          </p>
+          <p className="mb-4 text-gray-800 text-md">{property.description}</p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mt-4 text-md">
-          <p><strong>Location:</strong> {property.location_text}</p>
-          <p><strong>Property Type:</strong> {property.property_type}</p>
-          <p><strong>Listing For:</strong> {property.listing_type}</p>
-          <p><strong>Configuration:</strong> {property.bhk_type}</p>
-          <p><strong>Area:</strong> {property.area} sqft</p>
-          <p><strong>Posted On:</strong> {displayDate}</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mt-4 text-md">
+            <p><strong>Location:</strong> {property.location_text}</p>
+            <p><strong>Property Type:</strong> {property.property_type}</p>
+            <p><strong>Listing For:</strong> {property.listing_type}</p>
+            <p><strong>Configuration:</strong> {property.bhk_type}</p>
+            <p><strong>Area:</strong> {property.area} sqft</p>
+            <p><strong>Posted On:</strong> {displayDate}</p>
+          </div>
         </div>
+        
+        <h2 className="text-2xl font-semibold mt-8 mb-4">Images</h2>
+        {images && images.length > 0 ? (
+          <div className="mt-8 max-w-lg mx-auto">
+            <Carousel opts={{ loop: images.length > 1 }} className="w-full" setApi={handleSetEmblaApi}>
+              <CarouselContent>
+                {images.map((img, index) => (
+                  <CarouselItem key={img.id} onClick={() => openImageViewer(index)} className="cursor-pointer">
+                    <div className="p-1">
+                      <img
+                        src={img.image_url!}
+                        alt={`Image ${img.id} of ${property.title}`}
+                        className="w-full h-full object-cover rounded-lg"
+                        onError={(e) => {
+                          e.currentTarget.src = 'https://placehold.co/600x400/CCCCCC/FFFFFF?text=Image+Not+Available';
+                          e.currentTarget.onerror = null;
+                        }}
+                      />
+                    </div>
+                  </CarouselItem>
+                ))}
+              </CarouselContent>
+              {images.length > 1 && ( <> <CarouselPrevious /> <CarouselNext /> </> )}
+            </Carousel>
+          </div>
+        ) : (
+          <p className="mt-4 italic text-gray-500 text-center">No images available for this property.</p>
+        )}
       </div>
-      
-      <h2 className="text-2xl font-semibold mt-8 mb-4">Images</h2>
-      {images && images.length > 0 ? (
-        <div className="mt-8 max-w-lg mx-auto">
-          <Carousel opts={{ loop: images.length > 1 }} className="w-full" setApi={handleSetEmblaApi}>
-            <CarouselContent>
-              {images.map((img) => (
-                <CarouselItem key={img.id}>
-                  <div className="p-1">
-                    <img
-                      src={img.image_url!}
-                      alt={`Image ${img.id} of ${property.title}`}
-                      className="w-full h-full object-cover rounded-lg"
-                      onError={(e) => {
-                        console.error('Image failed to load (client-side fallback):', e.currentTarget.src);
-                        e.currentTarget.src = 'https://placehold.co/600x400/CCCCCC/FFFFFF?text=Image+Not+Available';
-                        e.currentTarget.onerror = null;
-                      }}
-                    />
-                  </div>
-                </CarouselItem>
-              ))}
-            </CarouselContent>
-            {images.length > 1 && ( <> <CarouselPrevious /> <CarouselNext /> </> )}
-          </Carousel>
-        </div>
-      ) : (
-        <p className="mt-4 italic text-gray-500 text-center">No images available for this property.</p>
+
+      {isViewerOpen && (
+        <FullScreenImageViewer
+          images={images}
+          initialIndex={selectedImageIndex}
+          onClose={() => setIsViewerOpen(false)}
+        />
       )}
-    </div>
+    </>
   );
 }
-
