@@ -1,9 +1,7 @@
-// src/app/property/[id]/PropertyDetailsClient.tsx
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
 import type { FlattenedProperty, ImageType } from './page';
-import useEmblaCarousel, { type EmblaCarouselType as CarouselApi } from "embla-carousel-react";
 import {
   Carousel,
   CarouselContent,
@@ -16,7 +14,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { WhatsAppButton } from '@/app/components/WhatsAppButton';
 import { FullScreenImageViewer } from '@/app/components/FullScreenImageViewer';
-import { FaWhatsapp } from 'react-icons/fa';
+import { FaWhatsapp, FaBed, FaRulerCombined } from 'react-icons/fa';
+import { Heart, Building, Tag, MapPin, Calendar, Loader2 } from 'lucide-react';
 
 type Props = {
   property: FlattenedProperty | null;
@@ -31,25 +30,9 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
 
   const [isFavorited, setIsFavorited] = useState<boolean>(false);
   const [isFavoriteLoading, setIsFavoriteLoading] = useState<boolean>(true);
-  const [favoriteError, setFavoriteError] = useState<string | null>(null);
   
-  // State for the full screen image viewer
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-
-  const [emblaApi, setEmblaApi] = useState<CarouselApi>();
-
-  const handleSetEmblaApi = useCallback((api: CarouselApi) => {
-    setEmblaApi(api);
-  }, []);
-
-  useEffect(() => {
-    if (emblaApi) {
-      emblaApi.reInit();
-      emblaApi.scrollTo(0);
-    }
-  }, [emblaApi, images]);
-
 
   useEffect(() => {
     if (property?.created_at) {
@@ -66,26 +49,18 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
 
     const checkFavoriteStatus = async () => {
       setIsFavoriteLoading(true);
-      setFavoriteError(null);
       try {
         const { data, error } = await supabase
           .from('user_favorites')
-          .select('*')
+          .select('property_id')
           .eq('user_id', user.id)
           .eq('property_id', property.id)
           .maybeSingle();
 
-        if (error) {
-          console.error("Error checking favorite status:", error);
-          setFavoriteError("Could not check favorite status.");
-          setIsFavorited(false);
-        } else {
-          setIsFavorited(!!data);
-        }
+        if (error) throw error;
+        setIsFavorited(!!data);
       } catch (err) {
-        console.error("Unexpected error checking favorite status:", err);
-        setFavoriteError("An unexpected error occurred.");
-        setIsFavorited(false);
+        console.error("Error checking favorite status:", err);
       } finally {
         setIsFavoriteLoading(false);
       }
@@ -96,40 +71,32 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
 
   const handleToggleFavorite = async () => {
     if (!user) {
-      alert("Please sign in to favorite properties.");
       router.push('/sign-in');
       return;
     }
     if (!property?.id) return;
 
     setIsFavoriteLoading(true);
-    setFavoriteError(null);
 
     try {
       if (isFavorited) {
         const { error } = await supabase
           .from('user_favorites')
           .delete()
-          .eq('user_id', user.id)
-          .eq('property_id', property.id);
+          .match({ user_id: user.id, property_id: property.id });
 
-        if (error) {
-          throw error;
-        }
+        if (error) throw error;
         setIsFavorited(false);
       } else {
         const { error } = await supabase
           .from('user_favorites')
           .insert({ user_id: user.id, property_id: property.id });
 
-        if (error) {
-          throw error;
-        }
+        if (error) throw error;
         setIsFavorited(true);
       }
     } catch (err: any) {
-      console.error("Unexpected error toggling favorite:", err);
-      setFavoriteError("An unexpected error occurred while updating favorite status.");
+      console.error("Error toggling favorite:", err);
     } finally {
       setIsFavoriteLoading(false);
     }
@@ -142,89 +109,96 @@ export default function PropertyDetailClient({ property, images, ownerPhone }: P
 
   if (!property) {
     return (
-      <div className="text-center p-8 text-lg text-red-500">
-        Property details are unavailable at the moment.
+      <div className="text-center p-8 text-lg text-danger-color">
+        Property details are unavailable.
       </div>
     );
   }
+  
+  const DetailItem = ({ icon: Icon, label, value }: { icon: React.ElementType, label: string, value: string | number}) => (
+    <div className="flex items-center gap-4 p-4 rounded-2xl shadow-neumorphic-inset-sm">
+      <Icon className="h-6 w-6 text-text-color-light" />
+      <div>
+        <p className="text-sm text-text-color-light">{label}</p>
+        <p className="font-semibold text-text-color-dark">{value}</p>
+      </div>
+    </div>
+  );
 
   return (
     <>
-      <div className="max-w-3xl mx-auto p-4">
-        <div className="flex justify-between items-start mb-2">
-          <h1 className="text-3xl font-bold">{property.title}</h1>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {ownerPhone && (
-                <WhatsAppButton
-                    phoneNumber={ownerPhone}
-                    propertyTitle={property.title}
-                    // These props will be needed if you implement analytics tracking
-                    propertyId={property.id}
-                    ownerId={"owner_user_id"} // This would need to be passed down if needed
-                    className="bg-transparent hover:bg-green-100 p-2 rounded-full"
+      <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8">
+        <div className="shadow-neumorphic-outset rounded-3xl p-6 md:p-8">
+          <div className="flex flex-col md:flex-row justify-between items-start mb-4">
+            <h1 className="text-3xl font-bold text-text-color-dark mb-2 md:mb-0">{property.title}</h1>
+            <div className="flex items-center gap-2 self-start md:self-center flex-shrink-0">
+              {ownerPhone && (
+                  <WhatsAppButton
+                      phoneNumber={ownerPhone}
+                      propertyTitle={property.title}
+                      propertyId={property.id}
+                      ownerId={""} // Pass actual owner id if available
+                      className="p-3 rounded-full"
+                  >
+                     <FaWhatsapp size={20} />
+                  </WhatsAppButton>
+              )}
+              {user && (
+                <button
+                  onClick={handleToggleFavorite}
+                  disabled={isFavoriteLoading || !property?.id}
+                  className={`neumorphic-button p-3 rounded-full ${isFavorited ? 'bg-danger-color text-white' : ''}`}
                 >
-                    <FaWhatsapp size={24} className="text-green-600" />
-                </WhatsAppButton>
-            )}
-            {user && (
-              <button
-                onClick={handleToggleFavorite}
-                disabled={isFavoriteLoading || !property?.id}
-                className={`px-4 py-2 rounded text-white font-semibold transition-colors duration-150 ease-in-out
-                            ${isFavorited ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}
-                            ${isFavoriteLoading ? 'opacity-50 cursor-not-allowed' : ''}
-                            ml-2`}
-              >
-                {isFavoriteLoading ? '...' : (isFavorited ? 'Unfavorite' : 'Favorite')}
-              </button>
-            )}
+                  {isFavoriteLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Heart className={`h-5 w-5 ${isFavorited ? 'fill-current' : ''}`} />}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-        {favoriteError && <p className="text-red-500 text-sm mb-2 text-right">{favoriteError}</p>}
-        
-        <div className="bg-gray-50 p-6 rounded-lg shadow mb-6">
-          <p className="mb-2 text-2xl font-semibold text-green-700">
-            Price: ₹{property.price.toLocaleString()}
-          </p>
-          <p className="mb-4 text-gray-800 text-md">{property.description}</p>
+          
+          <div className="mb-6">
+            <p className="mb-4 text-text-color-light">{property.description}</p>
+            <p className="text-4xl font-bold text-success-color">
+              ₹{property.price.toLocaleString()}
+            </p>
+          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mt-4 text-md">
-            <p><strong>Location:</strong> {property.location_text}</p>
-            <p><strong>Property Type:</strong> {property.property_type}</p>
-            <p><strong>Listing For:</strong> {property.listing_type}</p>
-            <p><strong>Configuration:</strong> {property.bhk_type}</p>
-            <p><strong>Area:</strong> {property.area} sqft</p>
-            <p><strong>Posted On:</strong> {displayDate}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+             <DetailItem icon={MapPin} label="Location" value={property.location_text} />
+             <DetailItem icon={Building} label="Property Type" value={property.property_type} />
+             <DetailItem icon={Tag} label="Listing For" value={property.listing_type} />
+             <DetailItem icon={FaBed} label="Configuration" value={property.bhk_type} />
+             <DetailItem icon={FaRulerCombined} label="Area" value={`${property.area} sqft`} />
+             <DetailItem icon={Calendar} label="Posted On" value={displayDate} />
           </div>
+
+          <h2 className="text-2xl font-semibold mb-4 text-text-color-dark">Images</h2>
+          {images && images.length > 0 ? (
+            <div className="relative">
+              <Carousel opts={{ loop: images.length > 1 }} className="w-full">
+                <CarouselContent className="-ml-2">
+                  {images.map((img, index) => (
+                    <CarouselItem key={img.id} onClick={() => openImageViewer(index)} className="cursor-pointer pl-2">
+                      <div className="p-1 shadow-neumorphic-inset-sm rounded-2xl">
+                        <img
+                          src={img.image_url!}
+                          alt={`Image ${img.id} of ${property.title}`}
+                          className="w-full h-64 object-cover rounded-xl"
+                          onError={(e) => {
+                            e.currentTarget.src = 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=Image+Error';
+                            e.currentTarget.onerror = null;
+                          }}
+                        />
+                      </div>
+                    </CarouselItem>
+                  ))}
+                </CarouselContent>
+                {images.length > 1 && ( <> <CarouselPrevious /> <CarouselNext /> </> )}
+              </Carousel>
+            </div>
+          ) : (
+            <p className="mt-4 italic text-text-color-light text-center">No images available.</p>
+          )}
         </div>
-        
-        <h2 className="text-2xl font-semibold mt-8 mb-4">Images</h2>
-        {images && images.length > 0 ? (
-          <div className="mt-8 max-w-lg mx-auto">
-            <Carousel opts={{ loop: images.length > 1 }} className="w-full" setApi={handleSetEmblaApi}>
-              <CarouselContent>
-                {images.map((img, index) => (
-                  <CarouselItem key={img.id} onClick={() => openImageViewer(index)} className="cursor-pointer">
-                    <div className="p-1">
-                      <img
-                        src={img.image_url!}
-                        alt={`Image ${img.id} of ${property.title}`}
-                        className="w-full h-full object-cover rounded-lg"
-                        onError={(e) => {
-                          e.currentTarget.src = 'https://placehold.co/600x400/CCCCCC/FFFFFF?text=Image+Not+Available';
-                          e.currentTarget.onerror = null;
-                        }}
-                      />
-                    </div>
-                  </CarouselItem>
-                ))}
-              </CarouselContent>
-              {images.length > 1 && ( <> <CarouselPrevious /> <CarouselNext /> </> )}
-            </Carousel>
-          </div>
-        ) : (
-          <p className="mt-4 italic text-gray-500 text-center">No images available for this property.</p>
-        )}
       </div>
 
       {isViewerOpen && (

@@ -1,54 +1,50 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Neumorphic UI Design Color Palette */
+  --bg-color: #DEE4ED;
+  --shadow-light: #FAFFFF;
+  --shadow-dark: #C2C9D1;
+  --text-color-dark: #3D4A5C;
+  --text-color-light: #8696A8;
+  --cta-gradient: linear-gradient(145deg, #f0f5fd, #d1d8e4);
+  --danger-color: #ef4444; /* red-500 */
+  --success-color: #10b981; /* emerald-500 */
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color-dark);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.input {
-  @apply w-full p-2 border rounded;
+@layer components {
+  /* Reusable Neumorphic Component Styles */
+  .neumorphic-button {
+    @apply shadow-neumorphic-outset transition-all duration-150 ease-in-out rounded-2xl px-4 py-2 text-center font-semibold text-text-color-dark focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+  .neumorphic-button:active:not(:disabled) {
+    @apply shadow-neumorphic-inset;
+  }
+  
+  .neumorphic-input {
+    @apply shadow-neumorphic-inset w-full p-3 rounded-xl bg-transparent focus:outline-none transition-all duration-150 ease-in-out text-text-color-dark;
+  }
+  .neumorphic-input::placeholder {
+    @apply text-text-color-light;
+  }
 }
+/* In src/app/globals.css */
 
-.hover-property-card {
-  background-color: white;
-  border: 1px solid #ccc;
-  padding: 8px;
-  border-radius: 4px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  font-size: 0.8rem;
-  line-height: 1.2;
-  width: 150px; /* Adjust as needed */
-}
-
-.hover-property-card .font-bold {
-  font-weight: bold;
-}
-
-.hover-property-card .text-gray-600 {
-  color: #718096;
-}
-
-.hover-property-card .text-green-700 {
-  color: #2F855A;
-  font-weight: 600;
+/*
+ * FIX: Override MapLibre's default style to prevent rendering bug.
+ * The library's own `overflow: hidden` conflicts with our app's
+ * complex CSS, causing the map canvas to be hidden.
+*/
+.maplibregl-map {
+  overflow: visible !important;
 }

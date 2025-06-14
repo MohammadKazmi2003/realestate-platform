@@ -1,25 +1,25 @@
-// src/app/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import Header from '@/app/components/Header'
-import Link from 'next/link'
-import { WhatsAppButton } from '@/app/components/WhatsAppButton'
+import { PropertyCard } from '@/app/components/PropertyCard'
+import { Loader2 } from 'lucide-react'
 
-// This type now correctly matches the RPC function's return columns
-type Property = {
-  id: string
-  title: string
-  location_text: string
-  price: number
-  area_sqft: number
-  owner_phone: string | null
-  user_id: string; // The property owner's user ID
+// This type now matches the output of our new SQL function
+type PropertyWithImages = {
+  id: string;
+  title: string;
+  location_text: string;
+  price: number;
+  area_sqft: number;
+  owner_phone: string | null;
+  user_id: string;
+  images: { image_url: string }[];
 }
 
 export default function Home() {
-  const [properties, setProperties] = useState<Property[]>([])
+  const [properties, setProperties] = useState<PropertyWithImages[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -28,15 +28,15 @@ export default function Home() {
       setLoading(true);
       setError(null);
       
-      // --- CORRECTED: Calling the new, correct function name for the home page ---
-      const { data, error: rpcError } = await supabase.rpc('get_featured_properties');
+      // We call the function that gets ALL images now
+      const { data, error: rpcError } = await supabase.rpc('get_properties_with_all_images');
 
       if (rpcError) {
-        console.error('Error fetching featured properties:', rpcError);
-        setError(`Failed to load properties: ${rpcError.message}`);
+        console.error('Error fetching properties:', rpcError);
+        setError(`Failed to load properties. Make sure the database function 'get_properties_with_all_images' is created.`);
         setProperties([]);
       } else if (data) {
-        setProperties(data);
+        setProperties(data as PropertyWithImages[]);
       }
       setLoading(false);
     }
@@ -44,50 +44,25 @@ export default function Home() {
   }, []);
 
   return (
-    <>
+    <div className="bg-bg-color min-h-screen">
       <Header />
-      <main className="p-6">
-        <h1 className="text-2xl font-bold mb-4">Featured Properties</h1>
-        {loading && <p className="text-lg text-gray-600 text-center py-10">Loading properties...</p>}
-        {error && <p className="text-lg text-red-600 text-center py-10">{error}</p>}
+      <main className="p-4 sm:p-6 max-w-7xl mx-auto">
+        <h1 className="text-3xl font-bold mb-8 text-center text-text-color-dark">Featured Properties</h1>
+        {loading && <div className="flex justify-center py-20"><Loader2 className="animate-spin h-12 w-12 text-text-color-light" /></div>}
+        {error && <div className="text-lg text-danger-color text-center py-10 bg-red-100 rounded-2xl p-4"><p className="font-semibold">Database Error</p><p className="text-sm mt-1">{error}</p></div>}
         
         {!loading && !error && properties.length === 0 && (
-          <p className="text-lg text-gray-600 text-center py-10">No properties found at the moment. Check back soon!</p>
+          <p className="text-lg text-center py-10 text-text-color-light">No featured properties found. Check back soon!</p>
         )}
 
         {!loading && !error && properties.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {properties.map((property) => (
-              <div key={property.id} className="border p-4 rounded-lg shadow-sm hover:shadow-lg transition-shadow duration-200 ease-in-out flex flex-col justify-between">
-                <Link href={`/property/${property.id}`} className="flex flex-col flex-grow">
-                    <div className="flex-grow">
-                        <h2 className="text-xl font-semibold mb-1 truncate" title={property.title}>{property.title}</h2>
-                        <p className="text-gray-700 mb-1 truncate" title={property.location_text || undefined}>{property.location_text || 'Location not specified'}</p>
-                        <p className="text-green-600 font-semibold mb-1">₹{property.price?.toLocaleString() || 'N/A'}</p>
-                        <p className="text-sm text-gray-600 mb-3">{property.area_sqft} sqft</p>
-                    </div>
-                    <div className="flex justify-between items-center mt-4">
-                        <span className="text-indigo-600 hover:text-indigo-800 font-medium">
-                          View Details &rarr;
-                        </span>
-                    </div>
-                </Link>
-                {property.owner_phone && (
-                  <div className="mt-2">
-                    <WhatsAppButton 
-                      phoneNumber={property.owner_phone}
-                      propertyTitle={property.title}
-                      propertyId={property.id} 
-                      ownerId={property.user_id} 
-                      className="w-full"
-                    />
-                  </div>
-                )}
-              </div>
+              <PropertyCard key={property.id} property={property} />
             ))}
           </div>
         )}
       </main>
-    </>
+    </div>
   )
 }

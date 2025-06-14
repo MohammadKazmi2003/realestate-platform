@@ -1,4 +1,3 @@
-// src/app/my-listings/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -7,35 +6,20 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/context/AuthContext';
 import Header from '@/app/components/Header';
 import { withAuth } from '@/utils/withAuth';
+import { Loader2, Edit, Trash2, PlusSquare } from 'lucide-react';
+import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 
-// Define a type for the property data to display
-type MyListingProperty = {
-  id: string;
-  title: string | null;
-  location_text: string | null;
-  price: number | null;
-  area_sqft: number | null;
-  // You might want to add other fields like created_at or image_url later
-};
-
-/**
- * MyListingsPage component displays a list of properties owned by the currently authenticated user,
- * with an option to delete them.
- */
 function MyListingsPage() {
-  const { user, loading: authLoading } = useAuth(); // Get user and auth loading state
-  const [myProperties, setMyProperties] = useState<MyListingProperty[]>([]);
-  const [loading, setLoading] = useState<boolean>(true); // For data fetching
+  const { user, loading: authLoading } = useAuth();
+  const [myProperties, setMyProperties] = useState<PropertyCardProps['property'][]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null); // To track which property is being deleted
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Effect to fetch properties owned by the logged-in user
   useEffect(() => {
-    // Wait until auth state is not loading and user is available
-    if (authLoading || !user) {
-      if (!user && !authLoading) { // If not loading and no user, it means user is not authenticated
-        // Redirection handled by withAuth HOC
-      }
+    if (authLoading) return;
+    if (!user) {
+      setLoading(false);
       return;
     }
 
@@ -44,18 +28,19 @@ function MyListingsPage() {
       setError(null);
       try {
         const { data, error: fetchError } = await supabase
-          .from('properties')
-          .select('id, title, location_text, price, area_sqft')
-          .eq('user_id', user.id); // Crucially, filter by the current user's ID
+          .rpc('get_user_listings_with_all_images', { p_user_id: user.id });
 
         if (fetchError) {
+          // Pass the specific error object to be handled by the catch block
           throw fetchError;
         }
-        setMyProperties(data || []);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        console.error("Error fetching my properties:", errorMessage);
-        setError("Could not load your listings.");
+        
+        setMyProperties((data as PropertyCardProps['property'][]) || []);
+      } catch (err: any) {
+        // **CORRECTED ERROR HANDLING**
+        // Extract the message property from the Supabase error object
+        console.error("Error fetching my properties:", err);
+        setError(`Failed to load listings: ${err.message || 'An unknown error occurred'}. Please ensure the database function 'get_user_listings_with_all_images' exists.`);
         setMyProperties([]);
       } finally {
         setLoading(false);
@@ -63,165 +48,85 @@ function MyListingsPage() {
     };
 
     fetchMyProperties();
-  }, [user, authLoading]); // Re-fetch when user or authLoading state changes
+  }, [user, authLoading]);
 
-  // Handler for deleting a property
   const handleDeleteProperty = async (propertyId: string) => {
-    // IMPORTANT: For a production app, replace `confirm` with a custom modal UI.
     if (!confirm('Are you sure you want to delete this property? This action cannot be undone.')) {
-      return; // User cancelled
+      return;
     }
-
-    setDeletingId(propertyId); // Set the ID of the property currently being deleted
-    setError(null); // Clear any previous errors
-
+    setDeletingId(propertyId);
+    setError(null);
     try {
-      // --- START: Enhanced Image Deletion (Metadata + Storage) ---
-      // 1. Fetch image URLs/paths associated with the property
-      const { data: imagesData, error: fetchImagesError } = await supabase
-        .from('property_images')
-        .select('image_url')
-        .eq('property_id', propertyId);
-
-      if (fetchImagesError) {
-        console.error("Error fetching image URLs for deletion:", fetchImagesError);
-        // Do not throw, proceed with property deletion even if image URL fetch fails
-      }
-
-      if (imagesData && imagesData.length > 0) {
-        const filePathsToDelete = imagesData.map(img => {
-          // Extract the path from the full public URL
-          // The new path structure is: <user-id>/<property-id>/<filename>
-          // Example URL: "https://<project-id>.supabase.co/storage/v1/object/public/property-images/<user-id>/<property-id>/<filename>"
-          const pathSegments = img.image_url?.split('property-images/');
-          // We need the part after 'property-images/', which includes user_id/property_id/filename
-          return pathSegments && pathSegments.length > 1 ? pathSegments[1] : null;
-        }).filter(Boolean) as string[]; // Filter out nulls and assert type
-
-        if (filePathsToDelete.length > 0) {
-          // 2. Delete actual image files from Supabase Storage
-          const { error: storageDeleteError } = await supabase.storage
-            .from('property-images') // Your bucket name
-            .remove(filePathsToDelete);
-
-          if (storageDeleteError) {
-            console.error("Error deleting images from storage:", storageDeleteError);
-            // Do not throw, continue with database deletion
-          }
-        }
-      }
-      // --- END: Enhanced Image Deletion ---
-
-      // Delete image metadata from property_images table (important for FK constraint)
-      const { error: deleteImagesMetadataError } = await supabase
-        .from('property_images')
-        .delete()
-        .eq('property_id', propertyId);
-
-      if (deleteImagesMetadataError) {
-        console.error("Error deleting image metadata:", deleteImagesMetadataError);
-        // Do not throw here, continue to delete property even if image metadata fails
-      }
-
-      // Then, delete the property itself
       const { error: deletePropertyError } = await supabase
         .from('properties')
         .delete()
         .eq('id', propertyId)
-        .eq('user_id', user?.id); // Double check user_id for security (RLS handles this but good client-side practice)
+        .eq('user_id', user?.id);
 
-      if (deletePropertyError) {
-        throw deletePropertyError;
-      }
-
-      // If successful, update the state to remove the deleted property from the list
+      if (deletePropertyError) throw deletePropertyError;
       setMyProperties(prevProperties => prevProperties.filter(p => p.id !== propertyId));
-      alert('Property deleted successfully!');
-
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      console.error("Error deleting property:", errorMessage);
-      setError(`Failed to delete property: ${errorMessage}`);
-      alert(`Failed to delete property: ${errorMessage}`); // Provide feedback to user
+    } catch (err: any) {
+      console.error("Error deleting property:", err);
+      setError(`Failed to delete property: ${err.message}`);
     } finally {
-      setDeletingId(null); // Clear deleting state
+      setDeletingId(null);
     }
   };
 
   return (
-    <>
+    <div className="bg-bg-color min-h-screen">
       <Header />
-      <main className="p-6 max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 text-gray-800">My Listings</h1>
+      <main className="p-6 max-w-7xl mx-auto">
+        <h1 className="text-3xl font-bold mb-8 text-center text-text-color-dark">My Listings</h1>
 
-        {authLoading && ( // Show auth loading first
-          <p className="text-lg text-gray-600 text-center py-10">Checking authentication...</p>
+        {(authLoading || loading) && (
+          <div className="flex justify-center items-center py-20">
+            <Loader2 className="h-12 w-12 animate-spin text-text-color-light" />
+          </div>
         )}
 
-        {!authLoading && loading && ( // Then show data loading
-          <p className="text-lg text-gray-600 text-center py-10">Loading your listings...</p>
-        )}
-
-        {!authLoading && !loading && error && (
-          <p className="text-lg text-red-600 text-center py-10">{error}</p>
+        {!loading && error && (
+          <div className="text-lg text-center py-10 text-danger-color bg-red-100 p-4 rounded-2xl"><p className="font-semibold">Error</p><p className="text-sm mt-1">{error}</p></div>
         )}
 
         {!authLoading && !loading && !error && myProperties.length === 0 && (
-          <div className="text-center py-10">
-            <p className="text-lg text-gray-600 mb-4">You have not listed any properties yet.</p>
-            <Link href="/add-property" passHref>
-              <span className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 cursor-pointer">
-                Add Your First Property
-              </span>
+          <div className="text-center py-20 shadow-neumorphic-outset rounded-3xl p-8">
+            <PlusSquare className="mx-auto h-16 w-16 text-text-color-light" />
+            <p className="mt-4 text-lg text-text-color-light">You have not listed any properties yet.</p>
+            <Link href="/add-property" className="mt-6 inline-block neumorphic-button bg-cta-gradient">
+              Add Your First Property
             </Link>
           </div>
         )}
 
         {!authLoading && !loading && !error && myProperties.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {myProperties.map((property) => (
-              <div key={property.id} className="border p-4 rounded-lg shadow-sm hover:shadow-lg transition-shadow duration-200 ease-in-out relative">
-                <Link href={`/property/${property.id}`} passHref>
-                  <div className="block cursor-pointer"> {/* This div acts as the clickable area for details */}
-                    <h2 className="text-xl font-semibold mb-1 truncate" title={property.title || undefined}>
-                      {property.title || 'N/A'}
-                    </h2>
-                    <p className="text-gray-700 mb-1 truncate" title={property.location_text || undefined}>
-                      {property.location_text || 'Location not specified'}
-                    </p>
-                    <p className="text-green-600 font-semibold mb-1">
-                      {property.price ? `₹${property.price.toLocaleString()}` : 'Price N/A'}
-                    </p>
-                    <p className="text-sm text-gray-600 mb-3">
-                      {property.area_sqft ? `${property.area_sqft} sqft` : 'Area N/A'}
-                    </p>
-                  </div>
-                </Link>
-                {/* Action Buttons */}
-                <div className="flex gap-2 mt-3">
-                  {/* Edit Button */}
-                  <Link href={`/edit-property/${property.id}`} passHref>
-                    <span className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm cursor-pointer">
-                      Edit Listing
-                    </span>
-                  </Link>
-                  {/* Delete Button */}
-                  <button
-                    onClick={() => handleDeleteProperty(property.id)}
-                    disabled={deletingId === property.id} // Disable button if this property is being deleted
-                    className="px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                  >
-                    {deletingId === property.id ? 'Deleting...' : 'Delete Listing'}
-                  </button>
-                </div>
-              </div>
+              <PropertyCard 
+                key={property.id} 
+                property={property}
+                actions={
+                  <>
+                    <Link href={`/edit-property/${property.id}`} className="neumorphic-button flex-1 flex items-center justify-center gap-2">
+                      <Edit size={16} /> Edit
+                    </Link>
+                    <button
+                      onClick={() => handleDeleteProperty(property.id)}
+                      disabled={deletingId === property.id}
+                      className="neumorphic-button !bg-danger-color !text-white flex-1 flex items-center justify-center gap-2"
+                    >
+                      {deletingId === property.id ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+                      {deletingId === property.id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </>
+                }
+              />
             ))}
           </div>
         )}
       </main>
-    </>
+    </div>
   );
 }
 
-// Wrap the page with withAuth to protect it
 export default withAuth(MyListingsPage);
