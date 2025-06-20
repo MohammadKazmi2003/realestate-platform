@@ -16,8 +16,9 @@ type Props = {
   property: PropertyDataType;
 };
 
+// FIX #1: The check for `value === 0` has been removed.
 const DetailItem = ({ icon: Icon, label, value }: { icon: React.ElementType, label: string, value?: string | number | boolean | null }) => {
-    if (value === null || value === undefined || value === '' || value === 0) return null;
+    if (value === null || value === undefined || value === '') return null;
     const displayValue = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
     return (
         <div className="flex items-start gap-4 p-4 rounded-2xl shadow-neumorphic-inset">
@@ -155,7 +156,8 @@ export default function PropertyDetailClient({ property }: Props) {
                     {commercialDetails && (
                         <>
                             <DetailItem icon={Briefcase} label="Commercial Type" value={commercialDetails.lookup_commercial_sub_types?.name} />
-                            <DetailItem icon={FaRulerCombined} label="Area" value={residentialDetails?.carpet_area ? `${residentialDetails.carpet_area} sqft` : null}/>
+                            {/* FIX #2: Accessing commercialDetails.carpet_area instead of residentialDetails */}
+                            <DetailItem icon={FaRulerCombined} label="Carpet Area" value={commercialDetails.carpet_area ? `${commercialDetails.carpet_area} sqft` : null} />
                             <DetailItem icon={FaChair} label="Workstations" value={commercialDetails.workstations} />
                             <DetailItem icon={FaChair} label="Cabins" value={commercialDetails.cabins} />
                             <DetailItem icon={FaBath} label="Private Washrooms" value={commercialDetails.private_washrooms} />
