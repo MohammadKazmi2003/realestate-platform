@@ -5,122 +5,66 @@ import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 import PropertyDetailsClient from "./PropertyDetailsClient";
 import Header from "@/app/components/Header";
 import { unstable_noStore as noStore } from 'next/cache';
+import type { PropertyDataType } from '@/lib/types';
 
-// Type for the data structure returned by the Supabase query
-export type PropertyDataType = {
-  id: string;
-  user_id: string | null;
-  title: string | null;
-  description: string | null;
-  price: number | null;
-  area_sqft: number | null;
-  location_text: string | null;
-  created_at: string | null;
-  bhk_types: { label: string | null } | null;
-  listing_types: { name: string | null } | null;
-  property_types: { name: string | null } | null;
-};
-
-// This type is for the data structure passed to the client component
-export type FlattenedProperty = {
-  id: string;
-  title: string;
-  description: string;
-  price: number;
-  area: number; 
-  location_text: string;
-  created_at: string;
-  bhk_type: string;
-  listing_type: string;
-  property_type: string;
-};
-
-// Type for image data
-export type ImageType = {
-  id: number;
-  image_url: string | null;
-};
-
-// The component function is now async to correctly handle server-side data fetching
 export default async function PropertyPage({ params }: { params: { id: string } }) {
   noStore();
   const supabase = createSupabaseServerClient();
-  const { id } = params; // Destructuring here is safe inside an async component
+  const { id } = params;
 
-  console.log(`PropertyPage Server Component: Fetching property ID ${id}`);
-
-  const { data: propertyData, error: propertyError } = await supabase
+  // This is the final, comprehensive query. It fetches all related data
+  // for a property in a single network request, using the correct table names and relationships.
+  const { data: property, error } = await supabase
     .from("properties")
     .select(`
-      id, user_id, title, description, price, area_sqft, location_text, created_at,
-      bhk_types (label), listing_types (name), property_types (name)
+      id,
+      user_id,
+      title,
+      description,
+      price,
+      is_price_negotiable,
+      location_text,
+      created_at,
+      profiles!inner ( name, phone_number ),
+      property_types ( name ),
+      lookup_listing_purposes ( name ),
+      lookup_availability_statuses ( name ),
+      lookup_ownership_types ( name ),
+      details_residential (
+        bathrooms, balconies, carpet_area, super_built_up_area, total_floors, property_on_floor,
+        bhk_types ( label ),
+        lookup_furnishing_statuses ( name )
+      ),
+      details_commercial (
+        cabins, workstations, meeting_rooms, private_washrooms, is_pre_leased, has_noc, has_occupancy_cert,
+        lookup_commercial_sub_types ( name )
+      ),
+      property_media ( id, media_url, media_type, tag ),
+      lookup_amenities ( name ),
+      lookup_furnishing_items ( name ),
+      lookup_other_rooms ( name ),
+      lookup_location_advantages ( name )
     `)
     .eq("id", id)
     .single<PropertyDataType>();
 
-  if (propertyError || !propertyData) {
-    console.error(`Error fetching property with ID ${id}:`, propertyError?.message);
+  if (error || !property) {
+    console.error(`Error fetching property ${id}:`, error?.message);
     return (
-      <>
+      <div className="bg-bg-color min-h-screen">
         <Header />
         <div className="text-center p-8">
-          <h1 className="text-2xl font-bold text-red-600 mb-4">Property Not Found</h1>
-          <p className="text-gray-700">We couldn't find the property with ID: {id}.</p>
-          {propertyError && <p className="text-sm text-gray-500 mt-2">Error: {propertyError.message}</p>}
+          <h1 className="text-2xl font-bold text-danger-color mb-4">Property Not Found</h1>
+          <p className="text-gray-700">We couldn't find the details for this property. It may have been removed.</p>
         </div>
-      </>
+      </div>
     );
   }
 
-  let ownerPhone: string | null = null;
-  if (propertyData.user_id) {
-    const { data: profileData } = await supabase
-      .from('profiles')
-      .select('phone_number')
-      .eq('id', propertyData.user_id)
-      .single();
-    ownerPhone = profileData?.phone_number || null;
-  }
-
-  const { data: imagesData } = await supabase
-    .from("property_images")
-    .select("id, image_url")
-    .eq("property_id", id);
-
-  const images = await Promise.all(
-    (imagesData || []).map(async (img) => {
-      if (!img.image_url) return null;
-      try {
-        const response = await fetch(img.image_url, { method: 'HEAD', cache: 'no-store' });
-        return response.ok ? { ...img, image_url: img.image_url } : null;
-      } catch {
-        return null;
-      }
-    })
-  );
-  const validatedImages = images.filter(Boolean) as ImageType[];
-
-  const flattenedProperty: FlattenedProperty = {
-    id: propertyData.id,
-    title: propertyData.title ?? 'N/A',
-    description: propertyData.description ?? 'No description available.',
-    price: propertyData.price ?? 0,
-    area: propertyData.area_sqft ?? 0,
-    location_text: propertyData.location_text ?? 'N/A',
-    created_at: propertyData.created_at ? new Date(propertyData.created_at).toISOString() : new Date(0).toISOString(),
-    bhk_type: propertyData.bhk_types?.label ?? 'N/A',
-    listing_type: propertyData.listing_types?.name ?? 'N/A',
-    property_type: propertyData.property_types?.name ?? 'N/A',
-  };
-
   return (
-    <>
+    <div className="bg-bg-color min-h-screen">
       <Header />
-      <PropertyDetailsClient
-        property={flattenedProperty}
-        images={validatedImages}
-        ownerPhone={ownerPhone}
-      />
-    </>
+      <PropertyDetailsClient property={property} />
+    </div>
   );
 }

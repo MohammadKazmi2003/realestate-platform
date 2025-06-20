@@ -1,11 +1,14 @@
+// src/app/components/FullScreenImageViewer.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
 import { FaArrowLeft, FaArrowRight, FaTimes } from 'react-icons/fa';
-import type { ImageType } from '@/app/property/[id]/page';
+// UPDATE THE IMPORTED TYPE to use our new central types file
+import type { MediaItem } from '@/lib/types';
 
 interface FullScreenImageViewerProps {
-  images: ImageType[];
+  // UPDATE THE PROP TYPE
+  images: MediaItem[];
   initialIndex: number;
   onClose: () => void;
 }
@@ -21,7 +24,7 @@ export const FullScreenImageViewer: React.FC<FullScreenImageViewerProps> = ({ im
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, []); // Note: Empty dependency array is correct here as functions don't change
 
   const showPrevious = (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -47,7 +50,9 @@ export const FullScreenImageViewer: React.FC<FullScreenImageViewerProps> = ({ im
 
       <div className="max-w-[90vw] max-h-[90vh] flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
         <img
-          src={images[currentIndex]?.image_url || ''}
+          // THE FIX IS HERE: Use `media_url` and do not fall back to an empty string.
+          // React handles `undefined` src gracefully by not rendering the attribute, which prevents the error.
+          src={images[currentIndex]?.media_url}
           alt={`Property image ${currentIndex + 1}`}
           className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
         />
