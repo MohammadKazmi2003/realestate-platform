@@ -21,50 +21,48 @@ export default function ListPage() {
 
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
+  
+  const itemsPerPage = 12;
 
-  const fetchProperties = useCallback(async (pageToFetch: number) => {
+  const fetchProperties = useCallback(async (pageToFetch: number, shouldReset: boolean = false) => {
     setLoading(true);
-    const itemsPerPage = 12;
-    const from = (pageToFetch - 1) * itemsPerPage;
-    const to = from + itemsPerPage - 1;
 
-    // This query now fetches all images for each property
-    let query = supabase.from('properties').select(`
-        id, title, price, location_text, area_sqft, user_id,
-        bhk_types ( label ), 
-        property_types ( name ),
-        images:property_images ( image_url )
-      `, { count: 'exact' });
-    
-    if (filters.location) query = query.ilike('location_text', `%${filters.location}%`);
-    if (filters.bhkTypeId) query = query.eq('bhk_type_id', filters.bhkTypeId);
-    if (filters.propertyTypeId) query = query.eq('property_type_id', filters.propertyTypeId);
-    
-    if (sort === 'price_asc') query = query.order('price', { ascending: true });
-    else if (sort === 'price_desc') query = query.order('price', { ascending: false });
-    else query = query.order('created_at', { ascending: false });
-
-    query = query.range(from, to);
-
-    const { data, error, count } = await query;
+    const { data, error } = await supabase.rpc('get_all_listings_paginated', {
+        p_location_text: filters.location || null,
+        p_bhk_type_id: filters.bhkTypeId ? Number(filters.bhkTypeId) : null,
+        p_property_type_id: filters.propertyTypeId ? Number(filters.propertyTypeId) : null,
+        p_sort_by: sort,
+        p_page_num: pageToFetch,
+        p_items_per_page: itemsPerPage,
+    });
     
     if (error) {
       console.error('Error fetching properties:', error);
+      setProperties([]);
+      setHasMore(false);
     } else {
-      const formattedData = data.map(p => ({
-        ...p,
-        images: p.images || [],
-      })) as PropertyCardProps['property'][];
-
-      setProperties(pageToFetch === 1 ? formattedData : prev => [...prev, ...formattedData]);
-      setHasMore((count || 0) > from + formattedData.length);
+      const formattedData = (data || []) as PropertyCardProps['property'][];
+      setProperties(shouldReset ? formattedData : prev => [...prev, ...formattedData]);
+      setHasMore(formattedData.length === itemsPerPage);
     }
     setLoading(false);
-  }, [filters, sort]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.location, filters.bhkTypeId, filters.propertyTypeId, sort]);
 
-  useEffect(() => { setPage(1); fetchProperties(1); }, [filters, sort, fetchProperties]);
-  useEffect(() => { if (page > 1) { fetchProperties(page); } }, [page]);
+  // Effect to fetch on filter/sort change (resets properties)
+  useEffect(() => {
+    setPage(1); 
+    fetchProperties(1, true); 
+  }, [filters, sort, fetchProperties]);
   
+  // Effect for infinite scroll (appends properties)
+  const handleLoadMore = () => {
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchProperties(nextPage, false);
+  }
+
+  // Effect to fetch dropdown data
   useEffect(() => {
     const fetchDropdowns = async () => {
       const [bhkRes, propTypeRes] = await Promise.all([
@@ -83,14 +81,14 @@ export default function ListPage() {
       <div className="container mx-auto px-4 py-8">
         <h1 className="text-3xl font-bold text-text-color-dark mb-6 text-center">Browse All Properties</h1>
         
-        <div className="shadow-neumorphic-outset p-6 rounded-3xl mb-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end">
-            <div className="lg:col-span-2">
+        <div className="shadow-neumorphic-outset p-6 rounded-3xl mb-8 grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+            <div className="md:col-span-1">
                 <label className="text-sm font-medium text-text-color-light mb-1 block">Location</label>
                 <input type="text" name="location" placeholder="e.g., Mumbai, Bandra..." value={filters.location} onChange={(e) => setFilters(prev => ({...prev, location: e.target.value}))} className="neumorphic-input"/>
             </div>
             <div>
-                <label className="text-sm font-medium text-text-color-light mb-1 block">BHK Type</label>
-                <select name="bhkTypeId" value={filters.bhkTypeId} onChange={(e) => setFilters(prev => ({...prev, bhkTypeId: e.target.value}))} className="neumorphic-input w-full"><option value="">Any</option>{bhkTypes.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}</select>
+                <label className="text-sm font-medium text-text-color-light mb-1 block">Property Type</label>
+                <select name="propertyTypeId" value={filters.propertyTypeId} onChange={(e) => setFilters(prev => ({...prev, propertyTypeId: e.target.value}))} className="neumorphic-input w-full"><option value="">Any Type</option>{propertyTypes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
             </div>
             <div>
                 <label className="text-sm font-medium text-text-color-light mb-1 block">Sort By</label>
@@ -102,7 +100,7 @@ export default function ListPage() {
             </div>
         </div>
 
-        {loading && properties.length === 0 ? (
+        {loading && page === 1 ? (
           <div className="flex justify-center py-20"><Loader2 className="animate-spin text-4xl text-text-color-light" /></div>
         ) : properties.length > 0 ? (
           <>
@@ -113,7 +111,7 @@ export default function ListPage() {
             </div>
             {hasMore && (
               <div className="text-center mt-12">
-                <button onClick={() => setPage(p => p + 1)} disabled={loading} className="neumorphic-button bg-cta-gradient w-48">
+                <button onClick={handleLoadMore} disabled={loading} className="neumorphic-button bg-cta-gradient w-48">
                   {loading ? 'Loading...' : 'Load More'}
                 </button>
               </div>

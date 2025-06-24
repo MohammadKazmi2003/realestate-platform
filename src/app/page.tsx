@@ -3,20 +3,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import Header from '@/app/components/Header'
-import { PropertyCard } from '@/app/components/PropertyCard'
+import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard'
 import { Loader2 } from 'lucide-react'
 
-// This type now matches the output of our new SQL function
-type PropertyWithImages = {
-  id: string;
-  title: string;
-  location_text: string;
-  price: number;
-  area_sqft: number;
-  owner_phone: string | null;
-  user_id: string;
-  images: { image_url: string }[];
-}
+// Use the same type definition as our PropertyCard for consistency
+type PropertyWithImages = PropertyCardProps['property'];
 
 export default function Home() {
   const [properties, setProperties] = useState<PropertyWithImages[]>([])
@@ -28,7 +19,7 @@ export default function Home() {
       setLoading(true);
       setError(null);
       
-      // We call the function that gets ALL images now
+      // We now call our new, reliable database function
       const { data, error: rpcError } = await supabase.rpc('get_properties_with_all_images');
 
       if (rpcError) {
@@ -36,6 +27,7 @@ export default function Home() {
         setError(`Failed to load properties. Make sure the database function 'get_properties_with_all_images' is created.`);
         setProperties([]);
       } else if (data) {
+        // The data from the RPC function should now match our type perfectly
         setProperties(data as PropertyWithImages[]);
       }
       setLoading(false);

@@ -26,6 +26,7 @@ function FavoritesPage() {
       setError(null);
 
       try {
+        // This RPC call now points to our new, working function
         const { data, error: fetchError } = await supabase
           .rpc('get_user_favorites_with_all_images', { p_user_id: user.id });
 
@@ -33,9 +34,8 @@ function FavoritesPage() {
 
         setFavoriteProperties((data as PropertyCardProps['property'][]) || []);
       } catch (err: any) {
-        // **CORRECTED ERROR HANDLING**
         console.error("Error fetching favorite properties:", err);
-        setError(`Could not load your favorites: ${err.message || 'An unknown error occurred'}. Please ensure the database function 'get_user_favorites_with_all_images' exists.`);
+        setError(`Could not load your favorites: ${err.message || 'An unknown error occurred'}.`);
         setFavoriteProperties([]);
       } finally {
         setLoading(false);

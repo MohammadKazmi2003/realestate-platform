@@ -27,20 +27,18 @@ function MyListingsPage() {
       setLoading(true);
       setError(null);
       try {
+        // This RPC call now points to our new, working function
         const { data, error: fetchError } = await supabase
           .rpc('get_user_listings_with_all_images', { p_user_id: user.id });
 
         if (fetchError) {
-          // Pass the specific error object to be handled by the catch block
           throw fetchError;
         }
         
         setMyProperties((data as PropertyCardProps['property'][]) || []);
       } catch (err: any) {
-        // **CORRECTED ERROR HANDLING**
-        // Extract the message property from the Supabase error object
         console.error("Error fetching my properties:", err);
-        setError(`Failed to load listings: ${err.message || 'An unknown error occurred'}. Please ensure the database function 'get_user_listings_with_all_images' exists.`);
+        setError(`Failed to load listings: ${err.message || 'An unknown error occurred'}.`);
         setMyProperties([]);
       } finally {
         setLoading(false);
@@ -57,6 +55,7 @@ function MyListingsPage() {
     setDeletingId(propertyId);
     setError(null);
     try {
+      // Deletion logic can remain the same, as RLS protects it.
       const { error: deletePropertyError } = await supabase
         .from('properties')
         .delete()

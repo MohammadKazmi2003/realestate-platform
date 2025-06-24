@@ -1,0 +1,45 @@
+-- Function to get all favorited properties for a specific user.
+CREATE OR REPLACE FUNCTION get_user_favorites_with_all_images(p_user_id uuid)
+RETURNS TABLE(
+    id uuid,
+    title text,
+    price numeric,
+    location_text text,
+    area_sqft numeric,
+    owner_phone text,
+    user_id uuid,
+    images jsonb
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        p.id,
+        p.title,
+        p.price,
+        p.location_text,
+        COALESCE(dr.carpet_area, dc.carpet_area) AS area_sqft,
+        prof.phone_number as owner_phone,
+        p.user_id,
+        (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object('image_url', pm.media_url)), '[]'::jsonb)
+            FROM property_media pm
+            WHERE pm.property_id = p.id
+        ) AS images
+    FROM
+        user_favorites uf
+    JOIN
+        properties p ON uf.property_id = p.id
+    LEFT JOIN
+        profiles prof ON p.user_id = prof.id
+    LEFT JOIN
+        details_residential dr ON p.id = dr.property_id
+    LEFT JOIN
+        details_commercial dc ON p.id = dc.property_id
+    WHERE
+        uf.user_id = p_user_id
+    ORDER BY
+        uf.created_at DESC;
+END;
+$$;
