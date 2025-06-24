@@ -4,122 +4,126 @@
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
 
-type PropertyUpdatePayload = {
-  title: string;
-  description: string;
-  price: number;
-  bhk_type_id: number;
-  listing_type_id: number;
-  property_type_id: number;
-  area_sqft: number;
-  location_text: string;
+// --- TYPE DEFINITIONS TO MATCH THE FORM STATE ---
+type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; };
+type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
+type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; };
+type NewImageDbEntry = { media_url: string; tag: string; media_type: string; display_order: number; };
+
+// --- HELPER FUNCTIONS ---
+const safeParseInt = (val: string | null | undefined): number | null => {
+  if (!val || val.trim() === '') return null;
+  const num = parseInt(val, 10);
+  return isNaN(num) ? null : num;
 };
 
-type NewImageDbEntry = {
-  property_id: string;
-  image_url: string;
+const safeParseFloat = (val: string | null | undefined): number | null => {
+  if (!val || val.trim() === '') return null;
+  const num = parseFloat(val);
+  return isNaN(num) ? null : num;
 };
 
+// --- THE COMPLETE SERVER ACTION ---
 export async function updatePropertyAndManageImages(
   propertyId: string,
   userId: string,
-  formData: PropertyUpdatePayload,
-  imagePathsToDelete: string[], // Paths of images to delete from storage
-  imageIdsToDelete: number[],    // IDs of images to delete from DB metadata
+  propertyTypeId: string,
+  commonData: CommonFormData,
+  residentialData: ResidentialFormData,
+  commercialData: CommercialFormData,
+  imagesToDelete: { id: number; file_path: string }[],
   newImageDbEntries: NewImageDbEntry[],
 ) {
   const supabase = createSupabaseServerClient();
 
-  console.log('--- Server Action: updatePropertyAndManageImages Called ---');
-  console.log('Property ID:', propertyId);
-  console.log('User ID:', userId);
-  console.log('FormData:', formData);
-  console.log('Image Paths to Delete (from storage):', imagePathsToDelete);
-  console.log('Image IDs to Delete (from DB metadata):', imageIdsToDelete);
-  console.log('New Image DB Entries (metadata to insert):', newImageDbEntries);
-  console.log('---------------------------------------------------------');
-
   try {
-    // 1. Update main property details in the database
+    // TRANSACTION: In a real-world scenario, you would wrap these operations in a transaction
+    // using a database function (RPC) to ensure that if one step fails, all steps are rolled back.
+    // For simplicity with server actions, we perform them sequentially and handle errors at each step.
+
+    // 1. Update the main 'properties' table
     const { error: propertyUpdateError } = await supabase
       .from('properties')
-      .update(formData)
+      .update({
+        title: commonData.title,
+        description: commonData.description,
+        price: safeParseFloat(commonData.price),
+        location_text: commonData.location_text,
+        listing_purpose_id: safeParseInt(commonData.listing_purpose_id),
+        ownership_type_id: safeParseInt(commonData.ownership_type_id),
+        availability_status_id: safeParseInt(commonData.availability_status_id),
+      })
       .eq('id', propertyId)
-      .eq('user_id', userId); // Ensure user owns the property (RLS should also enforce this)
+      .eq('user_id', userId);
 
-    if (propertyUpdateError) {
-      console.error('Server Action Error: Failed to update property details:', propertyUpdateError);
-      return { success: false, message: `Failed to update property details: ${propertyUpdateError.message}` };
+    if (propertyUpdateError) throw propertyUpdateError;
+
+    // 2. Conditionally update the 'details' tables based on property type
+    if (propertyTypeId === '1') { // Residential
+        const { error: resError } = await supabase.from('details_residential').update({
+            bhk_type_id: safeParseInt(residentialData.bhk_type_id),
+            bathrooms: safeParseInt(residentialData.bathrooms),
+            balconies: safeParseInt(residentialData.balconies),
+            total_floors: safeParseInt(residentialData.total_floors),
+            property_on_floor: safeParseInt(residentialData.property_on_floor),
+            furnishing_status_id: safeParseInt(residentialData.furnishing_status_id),
+            carpet_area: safeParseFloat(residentialData.carpet_area),
+            built_up_area: safeParseFloat(residentialData.built_up_area),
+            super_built_up_area: safeParseFloat(residentialData.super_built_up_area),
+        }).eq('property_id', propertyId);
+        if (resError) console.warn("Warning: Could not update residential details:", resError.message);
+    } else if (propertyTypeId === '2') { // Commercial
+        const { error: commError } = await supabase.from('details_commercial').update({
+            commercial_sub_type_id: safeParseInt(commercialData.commercial_sub_type_id),
+            office_type_id: safeParseInt(commercialData.office_type_id),
+            min_seats: safeParseInt(commercialData.min_seats),
+            max_seats: safeParseInt(commercialData.max_seats),
+            cabins: safeParseInt(commercialData.cabins),
+            meeting_rooms: safeParseInt(commercialData.meeting_rooms),
+            private_washrooms: safeParseInt(commercialData.private_washrooms),
+            shared_washrooms: safeParseInt(commercialData.shared_washrooms),
+            passenger_lifts: safeParseInt(commercialData.passenger_lifts),
+            service_lifts: safeParseInt(commercialData.service_lifts),
+            is_pre_leased: commercialData.is_pre_leased,
+            has_noc: commercialData.has_noc,
+            has_occupancy_cert: commercialData.has_occupancy_cert,
+            carpet_area: safeParseFloat(commercialData.carpet_area),
+        }).eq('property_id', propertyId);
+        if (commError) console.warn("Warning: Could not update commercial details:", commError.message);
     }
-    console.log('Server Action: Property details updated successfully.');
+    // No action needed for Land/Plot (type '3') as it has no details table yet.
 
-
-    // 2. Handle image deletions: Delete actual files from Storage and then their metadata from the DB
-    if (imagePathsToDelete.length > 0 && imageIdsToDelete.length > 0) {
-      console.log(`Server Action: Attempting to delete ${imagePathsToDelete.length} images from storage.`);
-      // Important: Ensure imagePathsToDelete contains the correct, full paths within the bucket.
-      // e.g., "user_id/property_id/filename.jpg"
-      const { error: storageDeleteError } = await supabase.storage
-        .from('property-images') // Ensure this is your correct bucket name
-        .remove(imagePathsToDelete); 
-      
-      if (storageDeleteError) {
-        // Log error but attempt to continue with DB deletion as a best effort.
-        // Depending on requirements, you might want to handle this more strictly.
-        console.error('Server Action Error: Error deleting images from storage:', storageDeleteError);
-      } else {
-        console.log('Server Action: Images successfully removed from storage (or no error reported).');
+    // 3. Handle image deletions from Storage and DB
+    if (imagesToDelete.length > 0) {
+      const imagePathsToDelete = imagesToDelete.map(img => img.file_path).filter(Boolean);
+      const imageIdsToDelete = imagesToDelete.map(img => img.id);
+      if (imagePathsToDelete.length > 0) {
+        await supabase.storage.from('property-images').remove(imagePathsToDelete);
       }
-
-      console.log(`Server Action: Attempting to delete ${imageIdsToDelete.length} image metadata records from DB with IDs:`, imageIdsToDelete);
-      const { error: dbDeleteError, count } = await supabase
-        .from('property_images')
-        .delete()
-        .in('id', imageIdsToDelete);
-
-      if (dbDeleteError) {
-        console.error('Server Action Error: Error deleting image metadata from DB:', dbDeleteError);
-        // If DB deletion fails, this is more critical as it can lead to orphaned storage files
-        // or inconsistencies. Consider if you need to return an error here.
-        return { success: false, message: `Failed to delete image metadata: ${dbDeleteError.message}` };
+      if (imageIdsToDelete.length > 0) {
+        await supabase.from('property_media').delete().in('id', imageIdsToDelete);
       }
-      console.log(`Server Action: Successfully deleted ${count ?? 0} image metadata records from DB.`);
-      if ((count === 0 || count === null) && imageIdsToDelete.length > 0) {
-          console.warn('Server Action Warning: No image metadata records were deleted from DB, but IDs were provided. Check RLS or provided IDs.');
-      }
-    } else {
-      console.log('Server Action: No images marked for deletion.');
     }
 
-
-    // 3. Handle new image uploads: Insert metadata into the DB (files are already in storage by client)
+    // 4. Insert new image metadata into the DB
     if (newImageDbEntries.length > 0) {
-      console.log(`Server Action: Attempting to insert ${newImageDbEntries.length} new image metadata records.`);
-      const { error: imageInsertError } = await supabase
-        .from('property_images')
-        .insert(newImageDbEntries);
-      if (imageInsertError) {
-        console.error('Server Action Error: Error inserting new image URLs into DB:', imageInsertError);
-        return { success: false, message: `Failed to save new image records: ${imageInsertError.message}` };
-      }
-      console.log('Server Action: New image metadata inserted into DB successfully.');
-    } else {
-      console.log('Server Action: No new images to upload.');
+      const entriesToInsert = newImageDbEntries.map(entry => ({
+        ...entry,
+        property_id: propertyId,
+      }));
+      const { error: imageInsertError } = await supabase.from('property_media').insert(entriesToInsert);
+      if (imageInsertError) throw imageInsertError;
     }
 
-
-    // 4. Revalidate cache for affected pages
+    // 5. Revalidate Next.js cache to show updated data immediately
     revalidatePath(`/property/${propertyId}`);
     revalidatePath('/my-listings');
-    revalidatePath(`/edit-property/${propertyId}`); // Revalidate the edit page itself
-    
-    console.log(`Server Action: Revalidated paths: /property/${propertyId}, /my-listings, /edit-property/${propertyId}`);
+    revalidatePath(`/edit-property/${propertyId}`);
 
-    console.log('--- Server Action: Update completed successfully ---');
-    return { success: true, message: 'Property and images updated successfully!' };
+    return { success: true, message: 'Property updated successfully!' };
 
   } catch (error: any) {
-    console.error('Server Action Critical Error: An unexpected error occurred during update:', error);
+    console.error('Server Action Critical Error:', error);
     return { success: false, message: `An unexpected error occurred: ${error.message}` };
   }
 }
