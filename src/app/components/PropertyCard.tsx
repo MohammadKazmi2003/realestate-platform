@@ -9,8 +9,9 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from '@/components/ui/carousel'
-import { MapPin } from 'lucide-react'
+import { MapPin, Dot } from 'lucide-react' // Using Dot for a cleaner separator
 import { cn } from '@/lib/utils'
+import { FaWhatsapp } from 'react-icons/fa'; // FIXED: Import the icon
 
 export type PropertyCardProps = {
   property: {
@@ -18,19 +19,25 @@ export type PropertyCardProps = {
     title: string | null;
     location_text: string | null;
     price: number | null;
-    area_sqft: number | null;
-    owner_phone?: string | null; // Optional for cards where owner isn't relevant
-    user_id?: string; // Optional
-    images: { image_url: string }[]; // Changed to accept an array of images
+    area_sqft?: number | null;
+    plot_area?: number | null; // ADDED
+    area_unit?: string | null; // ADDED
+    owner_phone?: string | null;
+    user_id?: string;
+    images: { image_url: string }[];
   };
-  actions?: React.ReactNode; // To pass Edit/Delete buttons for my-listings
+  actions?: React.ReactNode;
 }
 
 export function PropertyCard({ property, actions }: PropertyCardProps) {
-  // Defensive check for images to ensure it's always an array
   const images = Array.isArray(property.images) && property.images.length > 0
     ? property.images
     : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }];
+
+  // FIXED: Displays plot area for land, otherwise falls back to area_sqft
+  const displayArea = property.plot_area 
+    ? `${property.plot_area} ${property.area_unit || 'sqft'}` 
+    : (property.area_sqft ? `${property.area_sqft} sqft` : 'Area N/A');
 
   return (
     <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color">
@@ -77,7 +84,7 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
               {property.price ? `₹${property.price.toLocaleString()}` : 'Price N/A'}
             </p>
             <p className="text-sm text-text-color-light">
-              {property.area_sqft ? `${property.area_sqft} sqft` : 'Area N/A'}
+              {displayArea}
             </p>
           </div>
         </Link>
@@ -90,16 +97,19 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
                 </Link>
             )}
 
+            {/* FIXED: Using a self-closing component and providing all necessary props */}
             {property.owner_phone && property.user_id && (
                 <WhatsAppButton
                     phoneNumber={property.owner_phone}
-                    propertyTitle={property.title || ''}
+                    propertyTitle={property.title || 'this property'}
                     propertyId={property.id}
                     ownerId={property.user_id}
-                    className={cn("!p-3 rounded-full neumorphic-button !bg-green-500 hover:!bg-green-600 !text-white", {
-                        "ml-auto": !actions // Push to the right if there are no actions
+                    className={cn("!p-3 !w-auto !h-auto", {
+                        "ml-auto": !actions
                     })}
-                />
+                >
+                    <FaWhatsapp size={18} />
+                </WhatsAppButton>
             )}
         </div>
       </div>

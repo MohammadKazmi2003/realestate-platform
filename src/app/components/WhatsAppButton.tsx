@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { FaWhatsapp } from 'react-icons/fa';
 
 type WhatsAppButtonProps = {
-  phoneNumber: string;
+  phoneNumber: string | null;
   propertyTitle: string;
   className?: string;
   children?: React.ReactNode;
@@ -23,8 +23,11 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
     e.stopPropagation();
     e.preventDefault();
 
+    if (!phoneNumber) return;
+
     const message = encodeURIComponent(`Hello, I'm interested in your property "${propertyTitle}". Kindly share more details regarding it.`);
-    const cleanPhoneNumber = phoneNumber.replace(/\+/g, '').replace(/\s/g, '');
+    // Remove all non-digit characters to ensure a valid wa.me link
+    const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     const whatsappUrl = `https://wa.me/${cleanPhoneNumber}?text=${message}`;
     
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
@@ -40,9 +43,11 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
       title="Contact owner on WhatsApp"
       className={cn(
         'neumorphic-button bg-green-500 hover:bg-green-600 text-white',
+        'flex items-center justify-center gap-2', // Ensure flex properties for alignment
         className
       )}
     >
+      {/* If children are provided, render them. Otherwise, render the default icon and text. */}
       {children || (
         <>
           <FaWhatsapp size={18} />

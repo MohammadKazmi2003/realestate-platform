@@ -12,7 +12,6 @@ export default async function PropertyPage({ params }: { params: { id: string } 
   const supabase = createSupabaseServerClient();
   const { id } = params;
 
-  // FIX: Call the new, reliable database function instead of building a complex query
   const { data: property, error } = await supabase
     .rpc('get_property_details', { p_property_id: id })
     .returns<PropertyDataType>()
@@ -26,7 +25,6 @@ export default async function PropertyPage({ params }: { params: { id: string } 
         <div className="text-center p-8">
           <h1 className="text-2xl font-bold text-danger-color mb-4">Property Not Found</h1>
           <p className="text-gray-700">We couldn't find the details for this property. It may have been removed.</p>
-          {error && <p className="text-sm mt-2 text-danger-color/80">Database Error: {error.message}</p>}
         </div>
       </div>
     );

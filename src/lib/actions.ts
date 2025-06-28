@@ -5,9 +5,11 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
 
 // --- TYPE DEFINITIONS TO MATCH THE FORM STATE ---
-type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; };
+type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; }; // ADDED phone_number
 type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
 type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; };
+type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; }; // ADDED
+type ExistingImage = { id: number; tag: string; }; // ADDED
 type NewImageDbEntry = { media_url: string; tag: string; media_type: string; display_order: number; };
 
 // --- HELPER FUNCTIONS ---
@@ -31,17 +33,25 @@ export async function updatePropertyAndManageImages(
   commonData: CommonFormData,
   residentialData: ResidentialFormData,
   commercialData: CommercialFormData,
+  landData: LandFormData, // ADDED
   imagesToDelete: { id: number; file_path: string }[],
+  existingImagesToUpdate: ExistingImage[], // ADDED
   newImageDbEntries: NewImageDbEntry[],
 ) {
   const supabase = createSupabaseServerClient();
 
   try {
-    // TRANSACTION: In a real-world scenario, you would wrap these operations in a transaction
-    // using a database function (RPC) to ensure that if one step fails, all steps are rolled back.
-    // For simplicity with server actions, we perform them sequentially and handle errors at each step.
+    // --- TRANSACTION-LIKE OPERATIONS ---
+    
+    // 1. Update the user's phone number in the 'profiles' table
+    const { error: profileUpdateError } = await supabase
+        .from('profiles')
+        .update({ phone_number: commonData.phone_number })
+        .eq('id', userId);
 
-    // 1. Update the main 'properties' table
+    if (profileUpdateError) throw profileUpdateError;
+
+    // 2. Update the main 'properties' table
     const { error: propertyUpdateError } = await supabase
       .from('properties')
       .update({
@@ -58,8 +68,8 @@ export async function updatePropertyAndManageImages(
 
     if (propertyUpdateError) throw propertyUpdateError;
 
-    // 2. Conditionally update the 'details' tables based on property type
-    if (propertyTypeId === '1') { // Residential
+    // 3. Conditionally update the 'details' tables based on property type
+    if (propertyTypeId === '1') {
         const { error: resError } = await supabase.from('details_residential').update({
             bhk_type_id: safeParseInt(residentialData.bhk_type_id),
             bathrooms: safeParseInt(residentialData.bathrooms),
@@ -72,7 +82,7 @@ export async function updatePropertyAndManageImages(
             super_built_up_area: safeParseFloat(residentialData.super_built_up_area),
         }).eq('property_id', propertyId);
         if (resError) console.warn("Warning: Could not update residential details:", resError.message);
-    } else if (propertyTypeId === '2') { // Commercial
+    } else if (propertyTypeId === '2') {
         const { error: commError } = await supabase.from('details_commercial').update({
             commercial_sub_type_id: safeParseInt(commercialData.commercial_sub_type_id),
             office_type_id: safeParseInt(commercialData.office_type_id),
@@ -90,10 +100,16 @@ export async function updatePropertyAndManageImages(
             carpet_area: safeParseFloat(commercialData.carpet_area),
         }).eq('property_id', propertyId);
         if (commError) console.warn("Warning: Could not update commercial details:", commError.message);
+    } else if (propertyTypeId === '3') { // ADDED: Land details update
+        const { error: landError } = await supabase.from('details_land').update({
+            plot_area: safeParseFloat(landData.plot_area),
+            area_unit: landData.area_unit,
+            is_boundary_wall_made: landData.is_boundary_wall_made,
+        }).eq('property_id', propertyId);
+        if (landError) console.warn("Warning: Could not update land details:", landError.message);
     }
-    // No action needed for Land/Plot (type '3') as it has no details table yet.
 
-    // 3. Handle image deletions from Storage and DB
+    // 4. Handle image deletions from Storage and DB
     if (imagesToDelete.length > 0) {
       const imagePathsToDelete = imagesToDelete.map(img => img.file_path).filter(Boolean);
       const imageIdsToDelete = imagesToDelete.map(img => img.id);
@@ -104,8 +120,16 @@ export async function updatePropertyAndManageImages(
         await supabase.from('property_media').delete().in('id', imageIdsToDelete);
       }
     }
+    
+    // 5. Handle updates to existing image tags
+    if (existingImagesToUpdate.length > 0) {
+        const updates = existingImagesToUpdate.map(img => 
+            supabase.from('property_media').update({ tag: img.tag }).eq('id', img.id)
+        );
+        await Promise.all(updates);
+    }
 
-    // 4. Insert new image metadata into the DB
+    // 6. Insert new image metadata into the DB
     if (newImageDbEntries.length > 0) {
       const entriesToInsert = newImageDbEntries.map(entry => ({
         ...entry,
@@ -115,7 +139,7 @@ export async function updatePropertyAndManageImages(
       if (imageInsertError) throw imageInsertError;
     }
 
-    // 5. Revalidate Next.js cache to show updated data immediately
+    // 7. Revalidate Next.js cache to show updated data immediately
     revalidatePath(`/property/${propertyId}`);
     revalidatePath('/my-listings');
     revalidatePath(`/edit-property/${propertyId}`);

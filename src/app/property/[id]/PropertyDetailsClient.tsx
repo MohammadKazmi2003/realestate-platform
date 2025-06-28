@@ -1,4 +1,3 @@
-// src/app/property/[id]/PropertyDetailsClient.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -9,14 +8,14 @@ import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { WhatsAppButton } from '@/app/components/WhatsAppButton';
 import { FullScreenImageViewer } from '@/app/components/FullScreenImageViewer';
-import { FaBed, FaBath, FaBuilding, FaTags, FaRulerCombined, FaRegClock, FaRegHandshake, FaRegFileAlt, FaChair, FaAward } from 'react-icons/fa';
+import { FaBed, FaBath, FaBuilding, FaTags, FaRulerCombined, FaRegClock, FaRegHandshake, FaRegFileAlt, FaChair, FaAward, FaTree } from 'react-icons/fa';
 import { Heart, MapPin, Loader2, Briefcase, CheckCircle, Building2, User, DoorOpen } from 'lucide-react';
 
 type Props = {
   property: PropertyDataType;
 };
 
-// FIX #1: The check for `value === 0` has been removed.
+// This component is unchanged and preserved
 const DetailItem = ({ icon: Icon, label, value }: { icon: React.ElementType, label: string, value?: string | number | boolean | null }) => {
     if (value === null || value === undefined || value === '') return null;
     const displayValue = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
@@ -31,6 +30,7 @@ const DetailItem = ({ icon: Icon, label, value }: { icon: React.ElementType, lab
     );
 };
 
+// This component is unchanged and preserved
 const FeatureList = ({ title, items }: { title: string, items: LookupItem[] | undefined }) => {
     if (!items || items.length === 0) return null;
     return (
@@ -110,6 +110,7 @@ export default function PropertyDetailClient({ property }: Props) {
   
   const residentialDetails = property.details_residential?.[0];
   const commercialDetails = property.details_commercial?.[0];
+  const landDetails = property.details_land?.[0]; // ADDED
 
   return (
     <>
@@ -119,8 +120,14 @@ export default function PropertyDetailClient({ property }: Props) {
                 <div className="flex flex-col md:flex-row justify-between items-start mb-4">
                     <h1 className="text-3xl font-bold text-text-color-dark mb-2 md:mb-0">{property.title}</h1>
                     <div className="flex items-center gap-2 self-start md:self-center flex-shrink-0">
+                        {/* FIXED: Correctly use the WhatsAppButton component */}
                         {property.profiles?.phone_number && (
-                            <WhatsAppButton phoneNumber={property.profiles.phone_number} propertyTitle={property.title} propertyId={property.id} ownerId={property.user_id} />
+                            <WhatsAppButton
+                                phoneNumber={property.profiles.phone_number}
+                                propertyTitle={property.title}
+                                propertyId={property.id}
+                                ownerId={property.user_id}
+                            />
                         )}
                         {user && (
                             <button onClick={handleToggleFavorite} disabled={isFavoriteLoading} className={`neumorphic-button p-3 rounded-full ${isFavorited ? 'shadow-neumorphic-inset bg-danger-color/80 text-white' : ''}`}>
@@ -143,6 +150,7 @@ export default function PropertyDetailClient({ property }: Props) {
             <section>
                 <h2 className="text-2xl font-semibold mb-4 text-text-color-dark">Overview</h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {/* Preserved original display logic and added land details */}
                     {residentialDetails && (
                         <>
                             <DetailItem icon={FaBed} label="Configuration" value={residentialDetails.bhk_types?.label} />
@@ -156,7 +164,6 @@ export default function PropertyDetailClient({ property }: Props) {
                     {commercialDetails && (
                         <>
                             <DetailItem icon={Briefcase} label="Commercial Type" value={commercialDetails.lookup_commercial_sub_types?.name} />
-                            {/* FIX #2: Accessing commercialDetails.carpet_area instead of residentialDetails */}
                             <DetailItem icon={FaRulerCombined} label="Carpet Area" value={commercialDetails.carpet_area ? `${commercialDetails.carpet_area} sqft` : null} />
                             <DetailItem icon={FaChair} label="Workstations" value={commercialDetails.workstations} />
                             <DetailItem icon={FaChair} label="Cabins" value={commercialDetails.cabins} />
@@ -166,6 +173,12 @@ export default function PropertyDetailClient({ property }: Props) {
                             <DetailItem icon={FaAward} label="Occupancy Certificate" value={commercialDetails.has_occupancy_cert} />
                         </>
                     )}
+                    {landDetails && ( // ADDED: Display logic for land properties
+                         <>
+                             <DetailItem icon={FaRulerCombined} label="Plot Area" value={landDetails.plot_area ? `${landDetails.plot_area} ${landDetails.area_unit || 'sqft'}`: null} />
+                             <DetailItem icon={FaTree} label="Boundary Wall" value={landDetails.is_boundary_wall_made ? 'Yes' : 'No'} />
+                         </>
+                     )}
                     <DetailItem icon={FaBuilding} label="Property Type" value={property.property_types?.name} />
                     <DetailItem icon={FaTags} label="For" value={property.lookup_listing_purposes?.name} />
                     <DetailItem icon={FaRegClock} label="Availability" value={property.lookup_availability_statuses?.name} />

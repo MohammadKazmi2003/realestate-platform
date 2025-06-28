@@ -22,7 +22,7 @@ type Amenity = { id: number; name: string; category: string; property_type_scope
 type FurnishingItem = { id: number; name: string; category: string; };
 type ImageUpload = { id: string; file: File; preview: string; tag: string; };
 
-const residentialImageTags = ['Living Room', 'Bedroom', 'Bathroom', 'Kitchen', 'Balcony', 'Pooja Room', 'Study Room', 'Servant Room'];
+const residentialImageTags = ['Living Room', 'Bedroom', 'Bathroom', 'Kitchen', 'Balcony', 'Pooja Room', 'Study Room', 'Servant Room', 'Store Room'];
 const commercialImageTags = ['Reception Area', 'Conference Room', 'Workstation Area', 'Director Cabin', 'Pantry', 'Facade'];
 const commonImageTags = ['Exterior', 'Entrance', 'Floor Plan', 'Master Plan', 'Location Map', 'Other'];
 
@@ -35,7 +35,7 @@ function AddPropertyPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-    const [commonData, setCommonData] = useState({ title: '', description: '', price: '', location_text: '', listing_purpose_id: '', ownership_type_id: '', availability_status_id: '' });
+    const [commonData, setCommonData] = useState({ title: '', description: '', price: '', location_text: '', listing_purpose_id: '', ownership_type_id: '', availability_status_id: '', phone_number: '' });
     const [residentialData, setResidentialData] = useState({ bhk_type_id: '', bathrooms: '', balconies: '', total_floors: '', property_on_floor: '', furnishing_status_id: '', carpet_area: '', built_up_area: '', super_built_up_area: '' });
     const [commercialData, setCommercialData] = useState({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '' });
     const [landData, setLandData] = useState({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
@@ -44,6 +44,7 @@ function AddPropertyPage() {
     const [selectedFurnishings, setSelectedFurnishings] = useState<Set<number>>(new Set());
     const [selectedOtherRooms, setSelectedOtherRooms] = useState<Set<number>>(new Set());
     const [selectedLocationAdvantages, setSelectedLocationAdvantages] = useState<Set<number>>(new Set());
+    const [selectedLandFeatures, setSelectedLandFeatures] = useState<Set<number>>(new Set());
     
     const [coordinates, setCoordinates] = useState<{ lat: number; lng: number } | null>(null);
     const [imageUploads, setImageUploads] = useState<ImageUpload[]>([]);
@@ -52,11 +53,13 @@ function AddPropertyPage() {
         propertyTypes: LookupType[], bhkTypes: BhkType[], listingPurposes: LookupType[],
         ownershipTypes: LookupType[], availabilityStatuses: LookupType[], furnishingStatuses: LookupType[],
         otherRooms: LookupType[], amenities: Amenity[], furnishingItems: FurnishingItem[],
-        commercialSubTypes: LookupType[], commercialOfficeTypes: LookupType[], locationAdvantages: LookupType[]
+        commercialSubTypes: LookupType[], commercialOfficeTypes: LookupType[], locationAdvantages: LookupType[],
+        landFeatures: LookupType[]
     }>({
         propertyTypes: [], bhkTypes: [], listingPurposes: [], ownershipTypes: [],
         availabilityStatuses: [], furnishingStatuses: [], otherRooms: [], amenities: [],
-        furnishingItems: [], commercialSubTypes: [], commercialOfficeTypes: [], locationAdvantages: []
+        furnishingItems: [], commercialSubTypes: [], commercialOfficeTypes: [], locationAdvantages: [],
+        landFeatures: []
     });
 
     // --- DATA FETCHING ---
@@ -76,9 +79,10 @@ function AddPropertyPage() {
                     supabase.from('lookup_other_rooms').select('id, name'),
                     supabase.from('lookup_commercial_sub_types').select('id, name'),
                     supabase.from('lookup_commercial_office_types').select('id, name'),
-                    supabase.from('lookup_location_advantages').select('id, name')
+                    supabase.from('lookup_location_advantages').select('id, name'),
+                    supabase.from('lookup_land_features').select('id, name')
                 ]);
-                const [propTypeRes, bhkTypeRes, purposeRes, ownerRes, availRes, furnishStatusRes, amenityRes, furnishItemRes, otherRoomRes, commSubTypeRes, commOfficeTypeRes, locAdvRes] = results;
+                const [propTypeRes, bhkTypeRes, purposeRes, ownerRes, availRes, furnishStatusRes, amenityRes, furnishItemRes, otherRoomRes, commSubTypeRes, commOfficeTypeRes, locAdvRes, landFeatureRes] = results;
 
                 setLookupData({
                     propertyTypes: propTypeRes.data || [],
@@ -92,7 +96,8 @@ function AddPropertyPage() {
                     otherRooms: otherRoomRes.data || [],
                     commercialSubTypes: commSubTypeRes.data || [],
                     commercialOfficeTypes: commOfficeTypeRes.data || [],
-                    locationAdvantages: locAdvRes.data || []
+                    locationAdvantages: locAdvRes.data || [],
+                    landFeatures: landFeatureRes.data || []
                 });
             } catch (error: any) {
                 setMessage({ type: 'error', text: `Failed to load form options: ${error.message}` });
@@ -103,34 +108,47 @@ function AddPropertyPage() {
         fetchLookups();
     }, []);
 
-    // --- SMART CONDITIONAL LOGIC using useMemo ---
-    const availableListingPurposes = useMemo(() => {
-        const selectedType = lookupData.propertyTypes.find(p => p.id === Number(propertyTypeId));
-        if (selectedType?.name === 'Commercial') return lookupData.listingPurposes.filter(p => p.name === 'Sell' || p.name === 'Lease');
-        if (selectedType?.name === 'Residential') return lookupData.listingPurposes.filter(p => p.name !== 'Lease');
-        return lookupData.listingPurposes;
-    }, [propertyTypeId, lookupData.propertyTypes, lookupData.listingPurposes]);
+    // --- SMART CONDITIONAL LOGIC ---
+    const selectedPropertyTypeName = useMemo(() => {
+        return lookupData.propertyTypes.find(p => String(p.id) === propertyTypeId)?.name;
+    }, [propertyTypeId, lookupData.propertyTypes]);
     
-    const availableAmenities = useMemo(() => {
-        const selectedType = lookupData.propertyTypes.find(p => p.id === Number(propertyTypeId));
-        if (selectedType?.name === 'Residential') return lookupData.amenities.filter(a => a.property_type_scope === 'Residential' || a.property_type_scope === 'Both');
-        if (selectedType?.name === 'Commercial') return lookupData.amenities.filter(a => a.property_type_scope === 'Commercial' || a.property_type_scope === 'Both');
+    const availableListingPurposes = useMemo(() => {
+        if (selectedPropertyTypeName === 'Land / Plot') {
+            return lookupData.listingPurposes.filter(p => p.name !== 'PG');
+        }
+        if (selectedPropertyTypeName === 'Commercial') return lookupData.listingPurposes.filter(p => p.name === 'Sell' || p.name === 'Lease');
+        if (selectedPropertyTypeName === 'Residential') return lookupData.listingPurposes.filter(p => p.name !== 'Lease');
+        return lookupData.listingPurposes;
+    }, [selectedPropertyTypeName, lookupData.listingPurposes]);
+    
+    const availableAmenitiesForType = useMemo(() => {
+        if (!selectedPropertyTypeName) return [];
+        if (selectedPropertyTypeName === 'Residential') return lookupData.amenities;
+        if (selectedPropertyTypeName === 'Commercial') return lookupData.amenities;
+        // Correctly filter to only show relevant amenities for Land
+        const landRelevantAmenities = ['Water Storage', 'Security / Fire Alarm', 'Security Personnel', 'Visitor Parking'];
+        if (selectedPropertyTypeName === 'Land / Plot') {
+            return lookupData.amenities.filter(a => landRelevantAmenities.includes(a.name));
+        }
         return [];
-    }, [propertyTypeId, lookupData.propertyTypes, lookupData.amenities]);
+    }, [selectedPropertyTypeName, lookupData.amenities]);
 
     const availableImageTags = useMemo(() => {
-        const selectedType = lookupData.propertyTypes.find(p => p.id === Number(propertyTypeId));
-        if (selectedType?.name === 'Residential') return [...residentialImageTags, ...commonImageTags];
-        if (selectedType?.name === 'Commercial') return [...commercialImageTags, ...commonImageTags];
+        if (selectedPropertyTypeName === 'Residential') return [...residentialImageTags, ...commonImageTags];
+        if (selectedPropertyTypeName === 'Commercial') return [...commercialImageTags, ...commonImageTags];
+        if (selectedPropertyTypeName === 'Land / Plot') return commonImageTags.filter(tag => !['Floor Plan', 'Pooja Room', 'Study Room', 'Servant Room'].includes(tag));
         return commonImageTags;
-    }, [propertyTypeId, lookupData.propertyTypes]);
-
+    }, [selectedPropertyTypeName]);
 
     // --- EVENT HANDLERS ---
     const handleCommonChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setCommonData(prev => ({ ...prev, [e.target.name]: e.target.value }));
     const handleResidentialChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setResidentialData(prev => ({ ...prev, [e.target.name]: e.target.value }));
     const handleCommercialChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setCommercialData(prev => ({ ...prev, [e.target.name]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
-    const handleLandChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setLandData(prev => ({ ...prev, [e.target.name]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
+    const handleLandChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+        const { name, value, type } = e.target;
+        setLandData(prev => ({ ...prev, [name]: type === 'checkbox' ? (e.target as HTMLInputElement).checked : value }));
+    };
     const handleCheckboxChange = (setter: React.Dispatch<React.SetStateAction<Set<number>>>, id: number) => { setter(prev => { const newSet = new Set(prev); if (newSet.has(id)) newSet.delete(id); else newSet.add(id); return newSet; }); };
     
     const handleMediaChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -149,8 +167,7 @@ function AddPropertyPage() {
         setIsSubmitting(true);
         setMessage(null);
 
-        const hasEmptyTag = imageUploads.some(upload => upload.tag.trim() === '');
-        if (hasEmptyTag) {
+        if (imageUploads.some(upload => upload.tag.trim() === '')) {
             setMessage({ type: 'error', text: 'Please select a tag for every uploaded image.' });
             setIsSubmitting(false);
             return;
@@ -175,14 +192,14 @@ function AddPropertyPage() {
                     furnishings: Array.from(selectedFurnishings),
                     otherRooms: Array.from(selectedOtherRooms),
                     locationAdvantages: Array.from(selectedLocationAdvantages),
+                    landFeatures: Array.from(selectedLandFeatures),
                     coordinates 
                 }
             });
 
             if (error) throw error;
-            if (!data?.propertyId) throw new Error("Edge function did not return a property ID.");
-
-            const { propertyId } = data;
+            const propertyId = data?.propertyId;
+            if (!propertyId) throw new Error("Edge function did not return a property ID.");
 
             if (imageUploads.length > 0) {
                 await Promise.all(imageUploads.map(async (upload, index) => {
@@ -191,9 +208,7 @@ function AddPropertyPage() {
                     const filePath = `${session.user.id}/${propertyId}/${Date.now()}-${sanitizedFileName}`;
                     
                     const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, compressedFile);
-                    if (uploadError) {
-                        throw new Error(`Failed to upload ${sanitizedFileName}: ${uploadError.message}`);
-                    }
+                    if (uploadError) throw new Error(`Failed to upload ${sanitizedFileName}: ${uploadError.message}`);
                     
                     const { data: urlData } = supabase.storage.from('property-images').getPublicUrl(filePath);
                     
@@ -205,7 +220,9 @@ function AddPropertyPage() {
             setTimeout(() => router.push(`/property/${propertyId}`), 2000);
 
         } catch (err: any) {
-            setMessage({ type: 'error', text: `Update failed: ${err.message}` });
+            console.error("Submit Error:", err);
+            const errorMessage = err.body?.error?.message || err.message || 'An unknown error occurred.';
+            setMessage({ type: 'error', text: `Update failed: ${errorMessage}` });
         } finally {
             setIsSubmitting(false);
         }
@@ -217,18 +234,24 @@ function AddPropertyPage() {
     
     const renderChecklist = (title: string, items: (Amenity | FurnishingItem | LookupType)[], selected: Set<number>, handler: (id: number) => void) => {
         if (!items || items.length === 0) return null;
-        const categories = [...new Set(items.map(i => (i as any).category || 'General'))].sort();
+        const categories: { [key: string]: typeof items } = items.reduce((acc, item) => {
+            const category = (item as any).category || 'General';
+            if (!acc[category]) acc[category] = [];
+            acc[category].push(item);
+            return acc;
+        }, {} as { [key: string]: typeof items });
+
         return (
-          <div>
+          <div className="mt-6">
             <h3 className="font-semibold mb-4 text-text-color-dark">{title}</h3>
-            {categories.map(category => (
+            {Object.keys(categories).sort().map(category => (
               <div key={category} className="mb-4">
                 <p className="text-sm font-medium text-text-color-light mb-2">{category}</p>
                 <div className="flex flex-wrap gap-3">
-                  {items.filter(i => ((i as any).category || 'General') === category).map(item => (
+                  {categories[category].map(item => (
                     <label key={item.id} className={`flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-2 cursor-pointer ${selected.has(item.id) ? 'shadow-neumorphic-inset' : ''}`}>
                       <input type="checkbox" checked={selected.has(item.id)} onChange={() => handler(item.id)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>
-                      {item.name || (item as any).label}
+                      {(item as any).label || item.name}
                     </label>
                   ))}
                 </div>
@@ -247,7 +270,7 @@ function AddPropertyPage() {
                 
                 <form onSubmit={handleSubmit} className="space-y-12">
                     <section>
-                        <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">1. Basic Details</h2>
+                        <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">1. Select Property Type</h2>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             {lookupData.propertyTypes.map(pt => (
                                 <button type="button" key={pt.id} onClick={() => setPropertyTypeId(String(pt.id))} className={`neumorphic-button flex flex-col items-center justify-center p-6 gap-2 text-lg ${propertyTypeId === String(pt.id) ? 'shadow-neumorphic-inset bg-cta-gradient' : ''}`}>
@@ -263,9 +286,10 @@ function AddPropertyPage() {
                             <section>
                                 <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">2. Core Listing Details</h2>
                                 <div className="space-y-6">
-                                    <div><label className="block text-sm font-medium text-text-color-light mb-1">Listing Title</label><input name="title" value={commonData.title} onChange={handleCommonChange} placeholder="e.g., Luxurious 3BHK with Sea View" required className="neumorphic-input"/></div>
+                                    <div><label className="block text-sm font-medium text-text-color-light mb-1">Listing Title</label><input name="title" value={commonData.title} onChange={handleCommonChange} placeholder="e.g., 5 Acre Plot on Main Highway" required className="neumorphic-input"/></div>
                                     <div><label className="block text-sm font-medium text-text-color-light mb-1">Description</label><textarea name="description" value={commonData.description} onChange={handleCommonChange} rows={4} required className="neumorphic-input"/></div>
-                                    <div className="grid md:grid-cols-2 gap-6">
+                                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                        <div><label className="block text-sm font-medium text-text-color-light mb-1">WhatsApp Phone Number</label><input name="phone_number" type="tel" pattern="[0-9]{10}" title="Enter a 10-digit phone number" value={commonData.phone_number} onChange={handleCommonChange} required className="neumorphic-input"/></div>
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">This property is for</label>
                                             <select name="listing_purpose_id" value={commonData.listing_purpose_id} onChange={handleCommonChange} required className="neumorphic-input w-full">
                                                 <option value="">Select Purpose...</option>
@@ -279,7 +303,7 @@ function AddPropertyPage() {
                             
                             <section>
                                 <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">3. Property Profile</h2>
-                                {propertyTypeId === '1' && (
+                                {selectedPropertyTypeName === 'Residential' && (
                                     <div className="space-y-6">
                                         <div className="grid md:grid-cols-3 gap-6">
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Carpet Area (sq. ft.)</label><input name="carpet_area" type="number" min="0" value={residentialData.carpet_area} onChange={handleResidentialChange} required className="neumorphic-input"/></div>
@@ -288,13 +312,15 @@ function AddPropertyPage() {
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">BHK Type</label><select name="bhk_type_id" value={residentialData.bhk_type_id} onChange={handleResidentialChange} required className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.bhkTypes.map(bt => <option key={bt.id} value={bt.id}>{bt.label}</option>)}</select></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Bathrooms</label><input name="bathrooms" type="number" min="0" value={residentialData.bathrooms} onChange={handleResidentialChange} className="neumorphic-input"/></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Balconies</label><input name="balconies" type="number" min="0" value={residentialData.balconies} onChange={handleResidentialChange} className="neumorphic-input"/></div>
+                                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Total Floors</label><input name="total_floors" type="number" min="0" value={residentialData.total_floors} onChange={handleResidentialChange} className="neumorphic-input"/></div>
+                                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Property on Floor</label><input name="property_on_floor" type="number" min="0" value={residentialData.property_on_floor} onChange={handleResidentialChange} className="neumorphic-input"/></div>
                                         </div>
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Furnishing Status</label><select name="furnishing_status_id" value={residentialData.furnishing_status_id} onChange={handleResidentialChange} className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.furnishingStatuses.map(fs => <option key={fs.id} value={fs.id}>{fs.name}</option>)}</select></div>
                                     </div>
                                 )}
-                                {propertyTypeId === '2' && (
+                                {selectedPropertyTypeName === 'Commercial' && (
                                      <div className="space-y-6">
-                                        <div className="grid md:grid-cols-2 gap-6">
+                                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Carpet Area (sq. ft.)</label><input name="carpet_area" type="number" min="0" value={commercialData.carpet_area} onChange={handleCommercialChange} required className="neumorphic-input" /></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Commercial Property Type</label><select name="commercial_sub_type_id" value={commercialData.commercial_sub_type_id} onChange={handleCommercialChange} className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.commercialSubTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Kind of Office</label><select name="office_type_id" value={commercialData.office_type_id} onChange={handleCommercialChange} className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.commercialOfficeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
@@ -314,20 +340,27 @@ function AddPropertyPage() {
                                         </div>
                                     </div>
                                 )}
-                                {propertyTypeId === '3' && (
-                                    <div className="grid md:grid-cols-2 gap-6">
+                                {selectedPropertyTypeName === 'Land / Plot' && (
+                                    <div className="grid md:grid-cols-2 gap-6 items-center">
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Plot Area</label><input name="plot_area" type="number" min="0" value={landData.plot_area} onChange={handleLandChange} required className="neumorphic-input"/></div>
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Area Unit</label><select name="area_unit" value={landData.area_unit} onChange={handleLandChange} className="neumorphic-input w-full"><option value="sqft">Square Feet</option><option value="sqyd">Square Yards</option><option value="acre">Acres</option></select></div>
+                                        <div className="md:col-span-2">
+                                            <label className="flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-3 cursor-pointer">
+                                                <input type="checkbox" name="is_boundary_wall_made" checked={landData.is_boundary_wall_made} onChange={handleLandChange} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>
+                                                Is a boundary wall made?
+                                            </label>
+                                        </div>
                                     </div>
                                 )}
                             </section>
                             
                             <section>
                                 <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">4. Features & Amenities</h2>
-                                {renderChecklist("Other Rooms", lookupData.otherRooms, selectedOtherRooms, (id) => handleCheckboxChange(setSelectedOtherRooms, id))}
-                                {availableAmenities.length > 0 && <div className="mt-6">{renderChecklist("Amenities", availableAmenities, selectedAmenities, (id) => handleCheckboxChange(setSelectedAmenities, id))}</div>}
-                                {propertyTypeId === '1' && <div className="mt-6">{renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, (id) => handleCheckboxChange(setSelectedFurnishings, id))}</div>}
-                                <div className="mt-6">{renderChecklist("Location Advantages", lookupData.locationAdvantages, selectedLocationAdvantages, (id) => handleCheckboxChange(setSelectedLocationAdvantages, id))}</div>
+                                {selectedPropertyTypeName === 'Residential' && renderChecklist("Other Rooms", lookupData.otherRooms, selectedOtherRooms, (id) => handleCheckboxChange(setSelectedOtherRooms, id))}
+                                {selectedPropertyTypeName === 'Land / Plot' && renderChecklist("Land Features", lookupData.landFeatures, selectedLandFeatures, (id) => handleCheckboxChange(setSelectedLandFeatures, id))}
+                                {availableAmenitiesForType.length > 0 && renderChecklist("Amenities", availableAmenitiesForType, selectedAmenities, (id) => handleCheckboxChange(setSelectedAmenities, id))}
+                                {selectedPropertyTypeName === 'Residential' && renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, (id) => handleCheckboxChange(setSelectedFurnishings, id))}
+                                {renderChecklist("Location Advantages", lookupData.locationAdvantages, selectedLocationAdvantages, (id) => handleCheckboxChange(setSelectedLocationAdvantages, id))}
                             </section>
                             
                             <section>
