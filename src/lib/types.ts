@@ -1,6 +1,4 @@
 // src/lib/types.ts
-// This file defines the shape of our data for type safety and code completion across the app.
-
 export type MediaItem = {
   id: number;
   media_url: string;
@@ -18,8 +16,6 @@ export type BhkType = {
   label: string;
 };
 
-// This is the main, comprehensive data type for a single property,
-// reflecting the nested structure of our database query.
 export type PropertyDataType = {
   id: string;
   user_id: string;
@@ -28,10 +24,12 @@ export type PropertyDataType = {
   price: number;
   is_price_negotiable: boolean;
   location_text: string;
+  latitude: number | null;   // ADDED
+  longitude: number | null;  // ADDED
   created_at: string;
   profiles: {
     name: string | null;
-    phone_number: string | null; // ADDED
+    phone_number: string | null;
   } | null;
   property_types: { id: number; name: string } | null;
   lookup_listing_purposes: { id: number; name: string } | null;
@@ -44,7 +42,7 @@ export type PropertyDataType = {
     total_floors: number | null;
     property_on_floor: number | null;
     carpet_area: number | null;
-    built_up_area: number | null; // PRESERVED
+    built_up_area: number | null;
     super_built_up_area: number | null;
     bhk_types: BhkType | null;
     lookup_furnishing_statuses: { id: number; name: string } | null;
@@ -52,21 +50,21 @@ export type PropertyDataType = {
 
   details_commercial: {
     cabins: number | null;
-    workstations: number | null; // PRESERVED
+    workstations: number | null;
     meeting_rooms: number | null;
     private_washrooms: number | null;
-    shared_washrooms: number | null; // PRESERVED
-    passenger_lifts: number | null; // PRESERVED
-    service_lifts: number | null; // PRESERVED
+    shared_washrooms: number | null;
+    passenger_lifts: number | null;
+    service_lifts: number | null;
     is_pre_leased: boolean | null;
     has_noc: boolean | null;
     has_occupancy_cert: boolean | null;
-    carpet_area: number | null; // PRESERVED
+    carpet_area: number | null;
     lookup_commercial_sub_types: { id: number; name: string } | null;
-    office_type: { id: number; name: string } | null; // PRESERVED
+    office_type: { id: number; name: string } | null;
   }[] | null;
   
-  details_land: { // ADDED
+  details_land: {
     plot_area: number | null;
     area_unit: string | null;
     is_boundary_wall_made: boolean | null;
