@@ -9,9 +9,9 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from '@/components/ui/carousel'
-import { MapPin, Dot } from 'lucide-react' // Using Dot for a cleaner separator
+import { MapPin } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { FaWhatsapp } from 'react-icons/fa'; // FIXED: Import the icon
+import { FaWhatsapp } from 'react-icons/fa';
 
 export type PropertyCardProps = {
   property: {
@@ -19,9 +19,9 @@ export type PropertyCardProps = {
     title: string | null;
     location_text: string | null;
     price: number | null;
-    area_sqft?: number | null;
-    plot_area?: number | null; // ADDED
-    area_unit?: string | null; // ADDED
+    // UPDATED: The component now expects a single 'area' and 'area_unit'
+    area?: number | null;
+    area_unit?: string | null;
     owner_phone?: string | null;
     user_id?: string;
     images: { image_url: string }[];
@@ -34,10 +34,10 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
     ? property.images
     : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }];
 
-  // FIXED: Displays plot area for land, otherwise falls back to area_sqft
-  const displayArea = property.plot_area 
-    ? `${property.plot_area} ${property.area_unit || 'sqft'}` 
-    : (property.area_sqft ? `${property.area_sqft} sqft` : 'Area N/A');
+  // FIXED: Simplified display logic using the new unified fields from the database.
+  const displayArea = property.area
+    ? `${property.area} ${property.area_unit}`
+    : 'Area N/A';
 
   return (
     <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color">
@@ -97,7 +97,6 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
                 </Link>
             )}
 
-            {/* FIXED: Using a self-closing component and providing all necessary props */}
             {property.owner_phone && property.user_id && (
                 <WhatsAppButton
                     phoneNumber={property.owner_phone}

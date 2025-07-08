@@ -6,7 +6,7 @@ import Header from '@/app/components/Header'
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard'
 import { Loader2 } from 'lucide-react'
 
-// Use the same type definition as our PropertyCard for consistency
+// The data from the updated RPC function will now match this type perfectly.
 type PropertyWithImages = PropertyCardProps['property'];
 
 export default function Home() {
@@ -19,15 +19,15 @@ export default function Home() {
       setLoading(true);
       setError(null);
       
-      // We now call our new, reliable database function
+      // We are calling our newly updated database function.
       const { data, error: rpcError } = await supabase.rpc('get_properties_with_all_images');
 
       if (rpcError) {
         console.error('Error fetching properties:', rpcError);
-        setError(`Failed to load properties. Make sure the database function 'get_properties_with_all_images' is created.`);
+        setError(`Failed to load properties. Please ensure the 'get_properties_with_all_images' database function is updated.`);
         setProperties([]);
       } else if (data) {
-        // The data from the RPC function should now match our type perfectly
+        // The data now includes 'area' and 'area_unit' for all property types.
         setProperties(data as PropertyWithImages[]);
       }
       setLoading(false);
