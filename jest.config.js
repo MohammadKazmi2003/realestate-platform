@@ -21,13 +21,7 @@ const customJestConfig = {
     '!src/lib/supabase/serverClient.ts',
     '!src/utils/withAuth.tsx',
   ],
-  testPathIgnorePatterns: [
-    '<rootDir>/node_modules/',
-    '<rootDir>/.next/',
-  ],
-  transform: {
-    '^.+\\.(js|jsx|ts|tsx)$': ['babel-jest', { configFile: './babel.config.js' }],
-  },
+  // ✅ remove the 'babel-jest' config and let next/jest + ts-jest handle transform
 };
 
 module.exports = createJestConfig(customJestConfig);
