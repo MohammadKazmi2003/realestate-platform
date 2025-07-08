@@ -9,9 +9,24 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from '@/components/ui/carousel'
-import { MapPin } from 'lucide-react'
+// UPDATED: Removed GalleryVerticalEnd
+import { MapPin, Bed, Bath, Briefcase, Users, Ruler, Dot } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FaWhatsapp } from 'react-icons/fa';
+// ADDED: Imported a more suitable icon for balconies
+import { MdBalcony } from "react-icons/md";
+
+// Helper component for displaying an icon with a value
+const DetailIcon = ({ icon: Icon, value, label }: { icon: React.ElementType, value: any, label: string }) => {
+    // Return null if the value is null, undefined, or an empty string to avoid rendering empty items.
+    if (value === null || value === undefined || value === '') return null;
+    return (
+        <div className="flex items-center gap-1.5" title={label}>
+            <Icon className="h-4 w-4 text-text-color-light flex-shrink-0" />
+            <span className="text-sm font-medium text-text-color-dark">{value}</span>
+        </div>
+    )
+}
 
 export type PropertyCardProps = {
   property: {
@@ -19,12 +34,17 @@ export type PropertyCardProps = {
     title: string | null;
     location_text: string | null;
     price: number | null;
-    // UPDATED: The component now expects a single 'area' and 'area_unit'
     area?: number | null;
     area_unit?: string | null;
     owner_phone?: string | null;
     user_id?: string;
     images: { image_url: string }[];
+    property_type_name?: string | null;
+    bhk_type_label?: string | null;
+    bathrooms?: number | null;
+    balconies?: number | null;
+    cabins?: number | null;
+    workstations?: number | null;
   };
   actions?: React.ReactNode;
 }
@@ -34,13 +54,10 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
     ? property.images
     : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }];
 
-  // FIXED: Simplified display logic using the new unified fields from the database.
-  const displayArea = property.area
-    ? `${property.area} ${property.area_unit}`
-    : 'Area N/A';
+  const areaValue = property.area ? `${property.area} ${property.area_unit || 'sqft'}` : null;
 
   return (
-    <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color">
+    <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color h-full">
       <div className="relative">
         <Carousel className="w-full rounded-2xl overflow-hidden shadow-neumorphic-inset">
           <CarouselContent>
@@ -81,14 +98,36 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
           </p>
           <div className="mt-2">
             <p className="text-xl font-bold text-success-color">
-              {property.price ? `₹${property.price.toLocaleString()}` : 'Price N/A'}
-            </p>
-            <p className="text-sm text-text-color-light">
-              {displayArea}
+              {property.price ? `₹${property.price.toLocaleString()}` : 'Price on request'}
             </p>
           </div>
         </Link>
-        <div className="mt-4 flex justify-between items-center">
+        
+        <div className="mt-3 pt-3 border-t border-shadow-dark/10 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <DetailIcon icon={Ruler} value={areaValue} label="Area" />
+            
+            {property.property_type_name === 'Residential' && (
+                <>
+                    {areaValue && <Dot className="text-text-color-light/50" />}
+                    <DetailIcon icon={Bed} value={property.bhk_type_label} label="Bedrooms" />
+                    {property.bathrooms && <Dot className="text-text-color-light/50" />}
+                    <DetailIcon icon={Bath} value={property.bathrooms} label="Bathrooms" />
+                    {property.balconies && <Dot className="text-text-color-light/50" />}
+                    {/* FIXED: Using the new MdBalcony icon */}
+                    <DetailIcon icon={MdBalcony} value={property.balconies} label="Balconies" />
+                </>
+            )}
+            {property.property_type_name === 'Commercial' && (
+                <>
+                    {areaValue && <Dot className="text-text-color-light/50" />}
+                    <DetailIcon icon={Briefcase} value={property.cabins} label="Cabins" />
+                    {property.workstations && <Dot className="text-text-color-light/50" />}
+                    <DetailIcon icon={Users} value={property.workstations} label="Workstations" />
+                </>
+            )}
+        </div>
+
+        <div className="mt-auto pt-4 flex justify-between items-center">
             {actions ? (
                 <div className="flex-1 flex gap-2">{actions}</div>
             ) : (
