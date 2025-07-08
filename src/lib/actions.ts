@@ -5,11 +5,11 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
 
 // --- TYPE DEFINITIONS TO MATCH THE FORM STATE ---
-type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; }; // ADDED phone_number
+type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
 type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
 type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; };
-type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; }; // ADDED
-type ExistingImage = { id: number; tag: string; }; // ADDED
+type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; };
+type ExistingImage = { id: number; tag: string; };
 type NewImageDbEntry = { media_url: string; tag: string; media_type: string; display_order: number; };
 
 // --- HELPER FUNCTIONS ---
@@ -33,10 +33,16 @@ export async function updatePropertyAndManageImages(
   commonData: CommonFormData,
   residentialData: ResidentialFormData,
   commercialData: CommercialFormData,
-  landData: LandFormData, // ADDED
+  landData: LandFormData,
   imagesToDelete: { id: number; file_path: string }[],
-  existingImagesToUpdate: ExistingImage[], // ADDED
+  existingImagesToUpdate: ExistingImage[],
   newImageDbEntries: NewImageDbEntry[],
+  // ADDED: All the sets for junction tables
+  selectedAmenities: number[],
+  selectedFurnishings: number[],
+  selectedOtherRooms: number[],
+  selectedLocationAdvantages: number[],
+  selectedLandFeatures: number[]
 ) {
   const supabase = createSupabaseServerClient();
 
@@ -100,7 +106,7 @@ export async function updatePropertyAndManageImages(
             carpet_area: safeParseFloat(commercialData.carpet_area),
         }).eq('property_id', propertyId);
         if (commError) console.warn("Warning: Could not update commercial details:", commError.message);
-    } else if (propertyTypeId === '3') { // ADDED: Land details update
+    } else if (propertyTypeId === '3') {
         const { error: landError } = await supabase.from('details_land').update({
             plot_area: safeParseFloat(landData.plot_area),
             area_unit: landData.area_unit,
@@ -109,7 +115,25 @@ export async function updatePropertyAndManageImages(
         if (landError) console.warn("Warning: Could not update land details:", landError.message);
     }
 
-    // 4. Handle image deletions from Storage and DB
+    // 4. Update all junction tables using a "delete-then-insert" strategy
+    const junctionTables = [
+        'junction_property_amenities',
+        'junction_property_furnishings',
+        'junction_property_other_rooms',
+        'junction_property_location_advantages',
+        'junction_property_land_features'
+    ];
+    for (const table of junctionTables) {
+        await supabase.from(table).delete().eq('property_id', propertyId);
+    }
+
+    if (selectedAmenities.length > 0) await supabase.from('junction_property_amenities').insert(selectedAmenities.map(id => ({ property_id: propertyId, amenity_id: id })));
+    if (selectedFurnishings.length > 0) await supabase.from('junction_property_furnishings').insert(selectedFurnishings.map(id => ({ property_id: propertyId, furnishing_item_id: id })));
+    if (selectedOtherRooms.length > 0) await supabase.from('junction_property_other_rooms').insert(selectedOtherRooms.map(id => ({ property_id: propertyId, room_id: id })));
+    if (selectedLocationAdvantages.length > 0) await supabase.from('junction_property_location_advantages').insert(selectedLocationAdvantages.map(id => ({ property_id: propertyId, advantage_id: id })));
+    if (selectedLandFeatures.length > 0) await supabase.from('junction_property_land_features').insert(selectedLandFeatures.map(id => ({ property_id: propertyId, feature_id: id })));
+
+    // 5. Handle image deletions, updates, and additions
     if (imagesToDelete.length > 0) {
       const imagePathsToDelete = imagesToDelete.map(img => img.file_path).filter(Boolean);
       const imageIdsToDelete = imagesToDelete.map(img => img.id);
@@ -121,7 +145,6 @@ export async function updatePropertyAndManageImages(
       }
     }
     
-    // 5. Handle updates to existing image tags
     if (existingImagesToUpdate.length > 0) {
         const updates = existingImagesToUpdate.map(img => 
             supabase.from('property_media').update({ tag: img.tag }).eq('id', img.id)
@@ -129,7 +152,6 @@ export async function updatePropertyAndManageImages(
         await Promise.all(updates);
     }
 
-    // 6. Insert new image metadata into the DB
     if (newImageDbEntries.length > 0) {
       const entriesToInsert = newImageDbEntries.map(entry => ({
         ...entry,
@@ -139,13 +161,12 @@ export async function updatePropertyAndManageImages(
       if (imageInsertError) throw imageInsertError;
     }
 
-    // 7. Revalidate Next.js cache to show updated data immediately
+    // 6. Revalidate Next.js cache to show updated data immediately
     revalidatePath(`/property/${propertyId}`);
     revalidatePath('/my-listings');
     revalidatePath(`/edit-property/${propertyId}`);
 
     return { success: true, message: 'Property updated successfully!' };
-
   } catch (error: any) {
     console.error('Server Action Critical Error:', error);
     return { success: false, message: `An unexpected error occurred: ${error.message}` };
