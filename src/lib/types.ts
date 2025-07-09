@@ -16,6 +16,12 @@ export type BhkType = {
   label: string;
 };
 
+export type User = {
+  id: string;
+  email?: string;
+  role?: string;
+};
+
 export type PropertyDataType = {
   id: string;
   user_id: string;
@@ -24,12 +30,13 @@ export type PropertyDataType = {
   price: number;
   is_price_negotiable: boolean;
   location_text: string;
-  latitude: number | null;   // ADDED
-  longitude: number | null;  // ADDED
+  latitude: number | null;
+  longitude: number | null;
   created_at: string;
   profiles: {
     name: string | null;
     phone_number: string | null;
+    role_id: number;
   } | null;
   property_types: { id: number; name: string } | null;
   lookup_listing_purposes: { id: number; name: string } | null;

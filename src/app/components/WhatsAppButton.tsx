@@ -1,8 +1,11 @@
+// src/app/components/WhatsAppButton.tsx
 'use client';
 
 import React from 'react';
 import { cn } from '@/lib/utils';
 import { FaWhatsapp } from 'react-icons/fa';
+import { supabase } from '@/lib/supabaseClient'; // Import the Supabase client
+import { useAuth } from '@/context/AuthContext';   // Import the useAuth hook
 
 type WhatsAppButtonProps = {
   phoneNumber: string | null;
@@ -18,15 +21,36 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
   propertyTitle,
   className,
   children,
+  propertyId,
+  ownerId,
 }) => {
-  const handleWhatsAppClick = (e: React.MouseEvent) => {
+  const { user } = useAuth(); // Get the currently logged-in user
+
+  const handleWhatsAppClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
 
     if (!phoneNumber) return;
 
+    // --- Start of Logging Logic ---
+    // This block sends the event to your Supabase table.
+    try {
+      const { error } = await supabase.from('event_logs').insert({
+        user_id: user?.id, // The user who clicked the button
+        property_id: propertyId,
+        event_type: 'whatsapp_click',
+      });
+
+      if (error) {
+        // Log the error to the console for debugging, but don't block the user
+        console.error('Error logging WhatsApp click:', error);
+      }
+    } catch (error) {
+      console.error('An unexpected error occurred while logging:', error);
+    }
+    // --- End of Logging Logic ---
+
     const message = encodeURIComponent(`Hello, I'm interested in your property "${propertyTitle}". Kindly share more details regarding it.`);
-    // Remove all non-digit characters to ensure a valid wa.me link
     const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     const whatsappUrl = `https://wa.me/${cleanPhoneNumber}?text=${message}`;
     
@@ -47,7 +71,6 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
         className
       )}
     >
-      {/* If children are provided, render them. Otherwise, render the default icon and text. */}
       {children || (
         <>
           <FaWhatsapp size={18} />
