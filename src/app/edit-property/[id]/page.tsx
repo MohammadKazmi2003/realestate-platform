@@ -18,7 +18,7 @@ const LocationPicker = dynamic(() => import('@/app/components/LocationPicker'), 
 });
 
 // --- TYPE DEFINITIONS ---
-type LookupType = BaseLookupType; // Use the base type from lib
+type LookupType = BaseLookupType;
 type BhkType = { id: number; label: string; };
 type Amenity = { id: number; name: string; category: string; property_type_scope: string; };
 type FurnishingItem = { id: number; name: string; category: string; };
@@ -153,8 +153,8 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
             setSelectedFurnishings(new Set(property.lookup_furnishing_items.map(item => item.id)));
             setSelectedOtherRooms(new Set(property.lookup_other_rooms.map(item => item.id)));
             setSelectedLocationAdvantages(new Set(property.lookup_location_advantages.map(item => item.id)));
-            // This requires adding lookup_land_features to the get_property_details function
-            // Assuming this is done in a future step. For now, this will be empty.
+            // Note: lookup_land_features needs to be added to the get_property_details RPC to pre-populate
+            // Assuming this is done in a future step. For now, it will be empty on load.
             // setSelectedLandFeatures(new Set(property.lookup_land_features.map(item => item.id)));
 
             const validatedImages = property.property_media.map(img => ({ ...img, tag: img.tag || '', file_path: img.media_url.split('/property-images/')[1] })).filter(img => img.file_path);
@@ -174,7 +174,14 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
     const isCheckbox = type === 'checkbox';
     setter((prev: any) => ({ ...prev, [name]: isCheckbox ? (e.target as HTMLInputElement).checked : value }));
   };
-  const handleCheckboxChange = (setter: React.Dispatch<React.SetStateAction<Set<number>>>, id: number) => { setter(prev => { const newSet = new Set(prev); if (newSet.has(id)) newSet.delete(id); else newSet.add(id); return newSet; }); };
+
+  // FIXED: Replaced generic handler with specific, dedicated state update functions.
+  const handleAmenityChange = (id: number) => setSelectedAmenities(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const handleFurnishingChange = (id: number) => setSelectedFurnishings(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const handleOtherRoomChange = (id: number) => setSelectedOtherRooms(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const handleLocationAdvantageChange = (id: number) => setSelectedLocationAdvantages(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const handleLandFeatureChange = (id: number) => setSelectedLandFeatures(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+
   const handleNewImageChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
@@ -353,11 +360,11 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
             
             <section>
               <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">4. Features & Amenities</h2>
-              {propertyTypeName === 'Residential' && renderChecklist("Other Rooms", lookupData.otherRooms, selectedOtherRooms, (id) => handleCheckboxChange(setSelectedOtherRooms))}
-              {propertyTypeName === 'Land / Plot' && renderChecklist("Land Features", lookupData.landFeatures, selectedLandFeatures, (id) => handleCheckboxChange(setSelectedLandFeatures))}
-              {renderChecklist("Amenities", lookupData.amenities, selectedAmenities, (id) => handleCheckboxChange(setSelectedAmenities))}
-              {propertyTypeName === 'Residential' && renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, (id) => handleCheckboxChange(setSelectedFurnishings))}
-              {renderChecklist("Location Advantages", lookupData.locationAdvantages, selectedLocationAdvantages, (id) => handleCheckboxChange(setSelectedLocationAdvantages))}
+              {propertyTypeName === 'Residential' && renderChecklist("Other Rooms", lookupData.otherRooms, selectedOtherRooms, handleOtherRoomChange)}
+              {propertyTypeName === 'Land / Plot' && renderChecklist("Land Features", lookupData.landFeatures, selectedLandFeatures, handleLandFeatureChange)}
+              {renderChecklist("Amenities", lookupData.amenities, selectedAmenities, handleAmenityChange)}
+              {propertyTypeName === 'Residential' && renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, handleFurnishingChange)}
+              {renderChecklist("Location Advantages", lookupData.locationAdvantages, selectedLocationAdvantages, handleLocationAdvantageChange)}
             </section>
 
             <section>
