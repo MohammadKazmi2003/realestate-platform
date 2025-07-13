@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { WhatsAppButton } from '@/app/components/WhatsAppButton';
 import { FullScreenImageViewer } from '@/app/components/FullScreenImageViewer';
-import { LocationMap } from '@/app/components/LocationMap'; // IMPORT a new map component
+import { LocationMap } from '@/app/components/LocationMap';
 import { FaBed, FaBath, FaBuilding, FaTags, FaRulerCombined, FaRegClock, FaRegHandshake, FaRegFileAlt, FaChair, FaAward, FaTree } from 'react-icons/fa';
 import { Heart, MapPin, Loader2, Briefcase, CheckCircle, Building2, User, DoorOpen } from 'lucide-react';
 
@@ -217,6 +217,8 @@ export default function PropertyDetailClient({ property }: Props) {
                 <FeatureList title="Furnishing Details" items={property.lookup_furnishing_items} />
                 <FeatureList title="Other Rooms" items={property.lookup_other_rooms} />
                 <FeatureList title="Location Advantages" items={property.lookup_location_advantages} />
+                {/* *** FIX: Added the new FeatureList for Land Features *** */}
+                <FeatureList title="Land & Plot Features" items={property.lookup_land_features} />
             </section>
         </div>
       </div>

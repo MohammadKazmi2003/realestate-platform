@@ -4,16 +4,46 @@
 import { withAuth } from '@/utils/withAuth';
 import Header from '@/app/components/Header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sun, Moon } from 'lucide-react';
-import { useState } from 'react';
+import { Sun, Moon, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabaseClient';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+type AdminStats = {
+  total_listings: number;
+  active_agents: number;
+  new_user_signups_24h: number;
+  total_leads: number;
+};
 
 function AdminDashboard() {
   const [darkMode, setDarkMode] = useState(false);
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      setLoading(true);
+      const { data, error } = await supabase.rpc('get_admin_dashboard_stats').single();
+      if (error) {
+        console.error("Error fetching admin stats:", error);
+      } else {
+        setStats(data);
+      }
+      setLoading(false);
+    };
+    fetchStats();
+  }, []);
 
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
-    // In a real app, you would also save this preference and apply a class to the body
   };
+  
+  const chartData = [
+      { name: 'Listings', value: stats?.total_listings || 0 },
+      { name: 'Agents', value: stats?.active_agents || 0 },
+      { name: 'Leads', value: stats?.total_leads || 0 },
+  ];
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -27,46 +57,47 @@ function AdminDashboard() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Total Listings</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">1,234</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Active Agents</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">56</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>User Signups (24h)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">12</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Total Leads</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">4,567</p>
-              </CardContent>
-            </Card>
-          </div>
+          {loading ? (
+            <div className="flex justify-center items-center h-32">
+                <Loader2 className="animate-spin text-4xl" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <Card>
+                <CardHeader><CardTitle>Total Listings</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold">{stats?.total_listings}</p></CardContent>
+              </Card>
+              <Card>
+                <CardHeader><CardTitle>Active Agents</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold">{stats?.active_agents}</p></CardContent>
+              </Card>
+              <Card>
+                <CardHeader><CardTitle>User Signups (24h)</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold">{stats?.new_user_signups_24h}</p></CardContent>
+              </Card>
+              <Card>
+                <CardHeader><CardTitle>Total Leads</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold">{stats?.total_leads}</p></CardContent>
+              </Card>
+            </div>
+          )}
 
           <div className="mt-8">
-            <h2 className="text-2xl font-bold mb-4">Usage Logs</h2>
-            <div className="bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4">
-              <p>Usage logs will be displayed here.</p>
-            </div>
+            <Card>
+              <CardHeader><CardTitle>Platform Overview</CardTitle></CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="value" fill="#8884d8" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
           </div>
         </main>
       </div>

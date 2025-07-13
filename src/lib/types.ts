@@ -82,4 +82,6 @@ export type PropertyDataType = {
   lookup_furnishing_items: LookupItem[];
   lookup_other_rooms: LookupItem[];
   lookup_location_advantages: LookupItem[];
+  // *** FIX: Added the missing lookup_land_features property ***
+  lookup_land_features: LookupItem[];
 };

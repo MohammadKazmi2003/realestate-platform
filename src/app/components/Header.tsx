@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield } from 'lucide-react'
+import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield, Briefcase, Calendar as CalendarIcon } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 
 export default function Header() {
@@ -24,6 +24,8 @@ export default function Header() {
         if (profile) {
           setUserRole(profile.role_id);
         }
+      } else {
+        setUserRole(null);
       }
     };
     getProfile();
@@ -33,6 +35,7 @@ export default function Header() {
     await supabase.auth.signOut()
     setUserRole(null);
     router.push('/sign-in')
+    router.refresh(); 
   }
 
   const NavLink = ({ href, icon: Icon, children }: { href: string, icon: React.ElementType, children: React.ReactNode }) => (
@@ -57,9 +60,16 @@ export default function Header() {
           <NavLink href="/browse" icon={Building2}>Browse</NavLink>
           <NavLink href="/list" icon={List}>List</NavLink>
           {userRole === 1 && <NavLink href="/admin" icon={Shield}>Admin</NavLink>}
-          {(userRole === 2 || userRole === 3) && <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>}
-          <NavLink href="/my-listings" icon={List}>My Listings</NavLink>
-          <NavLink href="/favorites" icon={Heart}>Favorites</NavLink>
+          {userRole === 2 && <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>}
+          {userRole === 3 && (
+            <>
+              <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>
+              <NavLink href="/agent/leads" icon={Briefcase}>Leads</NavLink>
+              <NavLink href="/agent/calendar" icon={CalendarIcon}>Calendar</NavLink>
+            </>
+          )}
+          {user && <NavLink href="/my-listings" icon={List}>My Listings</NavLink>}
+          {user && <NavLink href="/favorites" icon={Heart}>Favorites</NavLink>}
         </nav>
       </div>
 

@@ -39,7 +39,8 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL('/', req.url))
   }
 
-  if (!user && (req.nextUrl.pathname.startsWith('/admin') || req.nextUrl.pathname.startsWith('/propertyowner'))) {
+  const protectedPaths = ['/admin', '/propertyowner', '/agent'];
+  if (!user && protectedPaths.some(path => req.nextUrl.pathname.startsWith(path))) {
     return NextResponse.redirect(new URL('/sign-in', req.url))
   }
 
@@ -56,7 +57,13 @@ export async function middleware(req: NextRequest) {
       return NextResponse.redirect(new URL('/', req.url))
     }
 
-    if (req.nextUrl.pathname.startsWith('/propertyowner') && role !== 2 && role !== 3) {
+    // FIX: Allow both property_owner (2) and agent (3) to access this dashboard
+    if (req.nextUrl.pathname.startsWith('/propertyowner') && ![2, 3].includes(role as number)) {
+      return NextResponse.redirect(new URL('/', req.url))
+    }
+    
+    // Only agents (3) can access agent-specific routes
+    if (req.nextUrl.pathname.startsWith('/agent') && role !== 3) {
       return NextResponse.redirect(new URL('/', req.url))
     }
   }
@@ -65,5 +72,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/sign-in', '/sign-up', '/admin/:path*', '/propertyowner/:path*'],
+  matcher: ['/sign-in', '/sign-up', '/admin/:path*', '/propertyowner/:path*', '/agent/:path*'],
 }
