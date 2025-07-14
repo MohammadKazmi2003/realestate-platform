@@ -9,13 +9,15 @@ import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Eye } from 'lucide-react'; // Import Eye icon
 import { formatDistanceToNow } from 'date-fns';
 
+// NEW: Updated OwnerStats type
 type OwnerStats = {
   total_my_listings: number;
   total_leads_on_my_properties: number;
   total_whatsapp_interactions: number;
+  total_property_views: number; // New metric
 };
 
 // NEW: Type for a single activity log item
@@ -76,7 +78,8 @@ function PropertyOwnerDashboard() {
               <Loader2 className="animate-spin text-4xl text-text-color-light" />
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          // UPDATED: Changed grid to 4 columns to accommodate the new card
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <Card>
               <CardHeader><CardTitle>My Properties</CardTitle></CardHeader>
               <CardContent>
@@ -84,6 +87,15 @@ function PropertyOwnerDashboard() {
                 <Link href="/my-listings">
                   <Button variant="link" className="p-0">View My Listings</Button>
                 </Link>
+              </CardContent>
+            </Card>
+            {/* FIX: Updated card structure to match the others for consistency */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Total Views</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats?.total_property_views}</p>
               </CardContent>
             </Card>
             <Card>
@@ -97,7 +109,9 @@ function PropertyOwnerDashboard() {
           </div>
         )}
 
-        {/* UPDATED: Recent Activity Section */}
+        {/* Recent Activity Section */}
+
+
         <div className="mt-8">
           <h2 className="text-2xl font-bold mb-4">Recent Activity</h2>
           <div className="bg-bg-color shadow-neumorphic-outset rounded-3xl p-6 space-y-4">

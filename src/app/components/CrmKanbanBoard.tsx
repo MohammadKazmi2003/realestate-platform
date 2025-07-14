@@ -8,6 +8,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { createPortal } from 'react-dom';
 import { supabase } from '@/lib/supabaseClient';
 import { Loader2, GripVertical } from 'lucide-react';
+import { logLeadStatusChange } from '@/lib/actions';
+import { LeadDetailModal } from './LeadDetailModal'; // *** NEW: Import the modal ***
 
 type Lead = {
   id: string;
@@ -28,13 +30,13 @@ const columns: Column[] = [
   { id: 'closed', title: 'Closed' },
 ];
 
-const LeadCard = ({ lead, isOverlay = false }: { lead: Lead, isOverlay?: boolean }) => {
+// *** NEW: Added onClick prop ***
+const LeadCard = ({ lead, isOverlay = false, onClick }: { lead: Lead, isOverlay?: boolean, onClick: () => void }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: lead.id, data: { type: 'Lead', lead } });
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    // If the item is being dragged, make the original item semi-transparent
     opacity: isDragging ? 0.3 : 1,
   };
 
@@ -46,7 +48,7 @@ const LeadCard = ({ lead, isOverlay = false }: { lead: Lead, isOverlay?: boolean
   return (
     <div ref={setNodeRef} style={isOverlay ? overlayStyle : style} {...attributes} className="p-4 mb-3 rounded-2xl shadow-neumorphic-outset bg-bg-color touch-none">
       <div className="flex items-start justify-between">
-        <div>
+        <div onClick={onClick} className="cursor-pointer flex-1 pr-2">
           <p className="font-bold text-text-color-dark">{lead.name}</p>
           <p className="text-sm text-text-color-light">{lead.property_title}</p>
         </div>
@@ -58,7 +60,7 @@ const LeadCard = ({ lead, isOverlay = false }: { lead: Lead, isOverlay?: boolean
   );
 };
 
-const KanbanColumn = ({ column, leads }: { column: Column; leads: Lead[] }) => {
+const KanbanColumn = ({ column, leads, onCardClick }: { column: Column; leads: Lead[], onCardClick: (lead: Lead) => void }) => {
   const { setNodeRef } = useSortable({ id: column.id, data: { type: 'Column' } });
 
   return (
@@ -66,7 +68,7 @@ const KanbanColumn = ({ column, leads }: { column: Column; leads: Lead[] }) => {
       <h2 className="text-lg font-semibold mb-4 text-center text-text-color-dark">{column.title}</h2>
       <div ref={setNodeRef} className="flex-1 overflow-y-auto min-h-[200px] p-1">
         <SortableContext items={leads.map(l => l.id)} strategy={rectSortingStrategy}>
-          {leads.map(lead => <LeadCard key={lead.id} lead={lead} />)}
+          {leads.map(lead => <LeadCard key={lead.id} lead={lead} onClick={() => onCardClick(lead)} />)}
         </SortableContext>
       </div>
     </div>
@@ -76,12 +78,13 @@ const KanbanColumn = ({ column, leads }: { column: Column; leads: Lead[] }) => {
 export const CrmKanbanBoard = () => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  // *** NEW: State to hold the currently dragged lead item ***
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
+  // *** NEW: State to manage the modal visibility and selected lead ***
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, {
     activationConstraint: {
-      distance: 8, // Require the mouse to move 8px before a drag starts
+      distance: 8,
     },
   }));
 
@@ -113,7 +116,6 @@ export const CrmKanbanBoard = () => {
     return leads.find((l) => l.id === id)?.status;
   };
 
-  // *** NEW: Function to handle when a drag starts ***
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
     const lead = leads.find(l => l.id === active.id);
@@ -123,35 +125,28 @@ export const CrmKanbanBoard = () => {
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
-    // Reset the active lead state
     setActiveLead(null);
-
     const { active, over } = event;
-    if (!over) return;
+    if (!over || active.id === over.id) return;
 
     const activeId = active.id as string;
-    const overId = over.id as string;
+    const originalColumn = findColumn(activeId);
+    const newColumn = findColumn(over.id as string);
 
-    const activeColumn = findColumn(activeId);
-    const overColumn = findColumn(overId);
+    if (!originalColumn || !newColumn || originalColumn === newColumn) return;
 
-    if (!activeColumn || !overColumn || activeColumn === overColumn) {
-      return;
-    }
+    setLeads((prev) => prev.map(lead => lead.id === activeId ? { ...lead, status: newColumn } : lead));
 
-    // Optimistic UI Update
-    setLeads((prev) => prev.map(lead => lead.id === activeId ? { ...lead, status: overColumn } : lead));
-
-    // Update the database
     const { error } = await supabase
       .from('leads')
-      .update({ status: overColumn })
+      .update({ status: newColumn })
       .eq('id', active.id);
 
     if (error) {
       console.error('Error updating lead status:', error);
-      // Revert UI on error
       setLeads(leads);
+    } else {
+      await logLeadStatusChange(activeId, originalColumn, newColumn);
     }
   };
 
@@ -160,30 +155,35 @@ export const CrmKanbanBoard = () => {
   }
 
   return (
-    <DndContext 
-      sensors={sensors} 
-      collisionDetection={closestCenter} 
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveLead(null)}
-    >
-      <div className="flex flex-col md:flex-row gap-6 h-full">
-        {columns.map((column) => (
-          <KanbanColumn
-            key={column.id}
-            column={column}
-            leads={leadsByColumn[column.id] || []}
-          />
-        ))}
-      </div>
+    <>
+      <DndContext 
+        sensors={sensors} 
+        collisionDetection={closestCenter} 
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveLead(null)}
+      >
+        <div className="flex flex-col md:flex-row gap-6 h-full">
+          {columns.map((column) => (
+            <KanbanColumn
+              key={column.id}
+              column={column}
+              leads={leadsByColumn[column.id] || []}
+              onCardClick={setSelectedLead}
+            />
+          ))}
+        </div>
 
-      {/* *** NEW: Drag Overlay Implementation *** */}
-      {createPortal(
-        <DragOverlay>
-          {activeLead ? <LeadCard lead={activeLead} isOverlay /> : null}
-        </DragOverlay>,
-        document.body
-      )}
-    </DndContext>
+        {createPortal(
+          <DragOverlay>
+            {activeLead ? <LeadCard lead={activeLead} isOverlay onClick={() => {}} /> : null}
+          </DragOverlay>,
+          document.body
+        )}
+      </DndContext>
+      
+      {/* *** NEW: Render the modal when a lead is selected *** */}
+      <LeadDetailModal lead={selectedLead} onClose={() => setSelectedLead(null)} />
+    </>
   );
 };

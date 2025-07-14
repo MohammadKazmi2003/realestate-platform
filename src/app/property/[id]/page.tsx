@@ -6,6 +6,7 @@ import PropertyDetailsClient from "./PropertyDetailsClient";
 import Header from "@/app/components/Header";
 import { unstable_noStore as noStore } from 'next/cache';
 import type { PropertyDataType } from '@/lib/types';
+import { logPropertyView } from '@/lib/actions'; // Import the new action
 
 export default async function PropertyPage({ params }: { params: { id: string } }) {
   noStore();
@@ -29,6 +30,16 @@ export default async function PropertyPage({ params }: { params: { id: string } 
       </div>
     );
   }
+
+  // --- FIX: Moved the logging logic to the success path ---
+  const { data: { user } } = await supabase.auth.getUser();
+
+  // We only log the view if a user is logged in AND they are not the owner of the property.
+  // This prevents owners from inflating their own view counts.
+  if (user && user.id !== property.user_id) {
+    await logPropertyView(property.id);
+  }
+  // --- End of fix ---
 
   return (
     <div className="bg-bg-color min-h-screen">
