@@ -11,7 +11,7 @@ type CommercialFormData = { commercial_sub_type_id: string; office_type_id: stri
 type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; };
 type ExistingImage = { id: number; tag: string; };
 type NewImageDbEntry = { media_url: string; tag: string; media_type: string; display_order: number; };
-
+type LeadFormData = {  name: string;  email: string;  phone: string;  message: string;  property_id: string;};
 // --- HELPER FUNCTIONS ---
 const safeParseInt = (val: string | null | undefined): number | null => {
   if (!val || val.trim() === '') return null;
@@ -40,6 +40,8 @@ export async function logPropertyView(propertyId: string) {
     console.error('Error logging property view:', error);
   }
 }
+
+
 
 export async function logLeadStatusChange(
     leadId: string,
@@ -78,6 +80,44 @@ export async function logAction(
     }).throwOnError();
   } catch (error) {
     console.error('Unexpected error in logAction server action:', error);
+  }
+}
+
+export async function createLead(formData: LeadFormData) {
+  const supabase = createSupabaseServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { success: false, message: 'User not authenticated.' };
+  }
+
+  try {
+    // 1. Insert the new lead into the 'leads' table
+    const { data: newLead, error: insertError } = await supabase
+      .from('leads')
+      .insert({
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        message: formData.message,
+        property_id: formData.property_id,
+        status: 'new', // All new leads start in the 'new' column
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    // 2. Log this action to the audit trail
+    await logAction('create_lead', 'lead', newLead.id);
+
+    // 3. Revalidate the path to update the Kanban board
+    revalidatePath('/agent/leads');
+
+    return { success: true, message: 'Lead created successfully!', data: newLead };
+  } catch (error: any) {
+    console.error('Error creating lead:', error);
+    return { success: false, message: `Failed to create lead: ${error.message}` };
   }
 }
 
