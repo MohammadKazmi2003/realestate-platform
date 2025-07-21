@@ -194,6 +194,8 @@ export async function updatePropertyAndManageImages(
             has_noc: commercialData.has_noc,
             has_occupancy_cert: commercialData.has_occupancy_cert,
             carpet_area: safeParseFloat(commercialData.carpet_area),
+            total_floors: safeParseInt(commercialData.total_floors), 
+            property_on_floor: safeParseInt(commercialData.property_on_floor), 
         }).eq('property_id', propertyId).throwOnError();
     } else if (propertyTypeId === '3') { // Land
         await supabase.from('details_land').update({

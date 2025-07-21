@@ -155,16 +155,22 @@ export default function PropertyDetailClient({ property }: Props) {
                         </>
                     )}
                     {commercialDetails && (
-                        <>
-                            <DetailItem icon={Briefcase} label="Commercial Type" value={commercialDetails.lookup_commercial_sub_types?.name} />
-                            <DetailItem icon={FaRulerCombined} label="Carpet Area" value={commercialDetails.carpet_area ? `${commercialDetails.carpet_area} sqft` : null} />
-                            <DetailItem icon={FaChair} label="Workstations" value={commercialDetails.workstations} />
-                            <DetailItem icon={FaChair} label="Cabins" value={commercialDetails.cabins} />
-                            <DetailItem icon={FaBath} label="Private Washrooms" value={commercialDetails.private_washrooms} />
-                            <DetailItem icon={CheckCircle} label="Pre-Leased" value={commercialDetails.is_pre_leased} />
-                            <DetailItem icon={FaAward} label="NOC Certified" value={commercialDetails.has_noc} />
-                            <DetailItem icon={FaAward} label="Occupancy Certificate" value={commercialDetails.has_occupancy_cert} />
-                        </>
+                         <>
+                         <DetailItem icon={Briefcase} label="Commercial Type" value={commercialDetails.lookup_commercial_sub_types?.name} />
+                         <DetailItem icon={FaBuilding} label="Office Type" value={commercialDetails.office_type?.name} />
+                         <DetailItem icon={FaRulerCombined} label="Carpet Area" value={commercialDetails.carpet_area ? `${commercialDetails.carpet_area} sqft` : null} />
+                         <DetailItem icon={Building2} label="Floor" value={commercialDetails.total_floors ? `Floor ${commercialDetails.property_on_floor} of ${commercialDetails.total_floors}` : null} />
+                         <DetailItem icon={FaChair} label="Minimum Seats" value={commercialDetails.min_seats} />
+                         <DetailItem icon={FaChair} label="Maximum Seats" value={commercialDetails.max_seats} />
+                         <DetailItem icon={FaChair} label="Cabins" value={commercialDetails.cabins} />
+                         <DetailItem icon={FaBath} label="Private Washrooms" value={commercialDetails.private_washrooms} />
+                         <DetailItem icon={FaBath} label="Shared Washrooms" value={commercialDetails.shared_washrooms} />
+                         <DetailItem icon={FaBuilding} label="Passenger Lifts" value={commercialDetails.passenger_lifts} />
+                         <DetailItem icon={FaBuilding} label="Service Lifts" value={commercialDetails.service_lifts} />
+                         <DetailItem icon={CheckCircle} label="Pre-Leased" value={commercialDetails.is_pre_leased} />
+                         <DetailItem icon={FaAward} label="NOC Certified" value={commercialDetails.has_noc} />
+                         <DetailItem icon={FaAward} label="Occupancy Certificate" value={commercialDetails.has_occupancy_cert} />
+                       </>
                     )}
                     {landDetails && (
                          <>

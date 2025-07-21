@@ -1,7 +1,7 @@
 // src/app/edit-property/[id]/page.tsx
 'use client';
 
-import React, { useState, useEffect, FormEvent, ChangeEvent, use } from 'react';
+import React, { useState, useEffect, FormEvent, ChangeEvent, use,useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import Header from '@/app/components/Header';
@@ -27,7 +27,7 @@ type ExistingImage = { id: number; media_url: string; tag: string; file_path: st
 type NewImageFile = { file: File; preview: string; id: string; tag: string; };
 type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
 type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
-type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; };
+type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; total_floors: string; property_on_floor: string; };
 type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; };
 
 interface EditPropertyPageProps {
@@ -45,8 +45,7 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
   const [propertyTypeName, setPropertyTypeName] = useState<string>('');
   const [commonData, setCommonData] = useState<CommonFormData>({ title: '', description: '', price: '', location_text: '', listing_purpose_id: '', ownership_type_id: '', availability_status_id: '', phone_number: '' });
   const [residentialData, setResidentialData] = useState<ResidentialFormData>({ bhk_type_id: '', bathrooms: '', balconies: '', total_floors: '', property_on_floor: '', furnishing_status_id: '', carpet_area: '', built_up_area: '', super_built_up_area: '' });
-  const [commercialData, setCommercialData] = useState<CommercialFormData>({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '' });
-  const [landData, setLandData] = useState<LandFormData>({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
+  const [commercialData, setCommercialData] = useState<CommercialFormData>({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '', total_floors: '', property_on_floor: '' });  const [landData, setLandData] = useState<LandFormData>({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
   
   const [existingImages, setExistingImages] = useState<ExistingImage[]>([]);
   const [newImages, setNewImages] = useState<NewImageFile[]>([]);
@@ -70,6 +69,18 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
       amenities: [] as Amenity[], furnishingItems: [] as FurnishingItem[],
       otherRooms: [] as LookupType[], landFeatures: [] as LookupType[],
   });
+
+  const availableAmenitiesForType = useMemo(() => {
+    if (!propertyTypeName) return [];
+    if (propertyTypeName === 'Residential' || propertyTypeName === 'Commercial') {
+        return lookupData.amenities;
+    }
+    const landRelevantAmenities = ['Water Storage', 'Security / Fire Alarm', 'Security Personnel', 'Visitor Parking'];
+    if (propertyTypeName === 'Land / Plot') {
+        return lookupData.amenities.filter(a => landRelevantAmenities.includes(a.name));
+    }
+    return [];
+  }, [propertyTypeName, lookupData.amenities]);
 
   // --- DATA FETCHING ---
   useEffect(() => {
@@ -137,7 +148,8 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
                   shared_washrooms: String(com.shared_washrooms || ''), passenger_lifts: String(com.passenger_lifts || ''),
                   service_lifts: String(com.service_lifts || ''), is_pre_leased: com.is_pre_leased || false,
                   has_noc: com.has_noc || false, has_occupancy_cert: com.has_occupancy_cert || false,
-                  carpet_area: String(com.carpet_area || ''),
+                  carpet_area: String(com.carpet_area || ''),total_floors: String(com.total_floors || ''),
+                  property_on_floor: String(com.property_on_floor || ''), 
               });
             }
 
@@ -335,6 +347,8 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Shared Washrooms</label><input name="shared_washrooms" type="number" min="0" value={commercialData.shared_washrooms} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Passenger Lifts</label><input name="passenger_lifts" type="number" min="0" value={commercialData.passenger_lifts} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Service Lifts</label><input name="service_lifts" type="number" min="0" value={commercialData.service_lifts} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
+                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Total Floors</label><input name="total_floors" type="number" min="0" value={commercialData.total_floors} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
+                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Property on Floor</label><input name="property_on_floor" type="number" min="0" value={commercialData.property_on_floor} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
                         </div>
                         <div className="pt-4 space-y-3">
                             <label className="flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-3 cursor-pointer"><input type="checkbox" name="is_pre_leased" checked={commercialData.is_pre_leased} onChange={createHandleChange(setCommercialData)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>Is this property currently pre-leased?</label>
@@ -356,8 +370,7 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
               <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">4. Features & Amenities</h2>
               {propertyTypeName === 'Residential' && renderChecklist("Other Rooms", lookupData.otherRooms, selectedOtherRooms, (id) => handleCheckboxChange(setSelectedOtherRooms, id))}
               {propertyTypeName === 'Land / Plot' && renderChecklist("Land Features", lookupData.landFeatures, selectedLandFeatures, (id) => handleCheckboxChange(setSelectedLandFeatures, id))}
-              {renderChecklist("Amenities", lookupData.amenities, selectedAmenities, (id) => handleCheckboxChange(setSelectedAmenities, id))}
-              {propertyTypeName === 'Residential' && renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, (id) => handleCheckboxChange(setSelectedFurnishings, id))}
+              {renderChecklist("Amenities", availableAmenitiesForType, selectedAmenities, (id) => handleCheckboxChange(setSelectedAmenities, id))}              {propertyTypeName === 'Residential' && renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, (id) => handleCheckboxChange(setSelectedFurnishings, id))}
               {renderChecklist("Location Advantages", lookupData.locationAdvantages, selectedLocationAdvantages, (id) => handleCheckboxChange(setSelectedLocationAdvantages, id))}
             </section>
 

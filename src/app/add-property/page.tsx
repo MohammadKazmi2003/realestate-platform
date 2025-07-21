@@ -37,7 +37,7 @@ function AddPropertyPage() {
 
     const [commonData, setCommonData] = useState({ title: '', description: '', price: '', location_text: '', listing_purpose_id: '', ownership_type_id: '', availability_status_id: '', phone_number: '' });
     const [residentialData, setResidentialData] = useState({ bhk_type_id: '', bathrooms: '', balconies: '', total_floors: '', property_on_floor: '', furnishing_status_id: '', carpet_area: '', built_up_area: '', super_built_up_area: '' });
-    const [commercialData, setCommercialData] = useState({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '' });
+    const [commercialData, setCommercialData] = useState({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '', total_floors: '', property_on_floor: '' });
     const [landData, setLandData] = useState({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
     
     const [selectedAmenities, setSelectedAmenities] = useState<Set<number>>(new Set());
@@ -115,9 +115,9 @@ function AddPropertyPage() {
     
     const availableListingPurposes = useMemo(() => {
         if (selectedPropertyTypeName === 'Land / Plot') {
-            return lookupData.listingPurposes.filter(p => p.name !== 'PG');
+            return lookupData.listingPurposes.filter(p => p.name !== 'PG' & p.name !== 'Rent');
         }
-        if (selectedPropertyTypeName === 'Commercial') return lookupData.listingPurposes.filter(p => p.name === 'Sell' || p.name === 'Lease');
+        if (selectedPropertyTypeName === 'Commercial') return lookupData.listingPurposes.filter(p => p.name !== 'PG');
         if (selectedPropertyTypeName === 'Residential') return lookupData.listingPurposes.filter(p => p.name !== 'Lease');
         return lookupData.listingPurposes;
     }, [selectedPropertyTypeName, lookupData.listingPurposes]);
@@ -332,6 +332,8 @@ function AddPropertyPage() {
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Shared Washrooms</label><input name="shared_washrooms" type="number" min="0" value={commercialData.shared_washrooms} onChange={handleCommercialChange} className="neumorphic-input"/></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Passenger Lifts</label><input name="passenger_lifts" type="number" min="0" value={commercialData.passenger_lifts} onChange={handleCommercialChange} className="neumorphic-input"/></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Service Lifts</label><input name="service_lifts" type="number" min="0" value={commercialData.service_lifts} onChange={handleCommercialChange} className="neumorphic-input"/></div>
+                                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Total Floors</label><input name="total_floors" type="number" min="0" value={commercialData.total_floors} onChange={handleCommercialChange} className="neumorphic-input"/></div>
+                                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Property on Floor</label><input name="property_on_floor" type="number" min="0" value={commercialData.property_on_floor} onChange={handleCommercialChange} className="neumorphic-input"/></div>
                                         </div>
                                         <div className="pt-4 space-y-3">
                                             <label className="flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-3 cursor-pointer"><input type="checkbox" name="is_pre_leased" checked={commercialData.is_pre_leased} onChange={handleCommercialChange} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>Is this property currently pre-leased?</label>
