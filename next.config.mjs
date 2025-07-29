@@ -11,6 +11,10 @@ const nextConfig = {
       },
       {
         protocol: 'https',
+        hostname: '**.propertyfinder.com', // This will match new-projects-media.propertyfinder.com
+      },
+      {
+        protocol: 'https',
         hostname: 'placehold.co',
         port: '',
         pathname: '/**',

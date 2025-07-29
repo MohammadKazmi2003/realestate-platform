@@ -85,3 +85,41 @@ export type PropertyDataType = {
   // *** FIX: Added the missing lookup_land_features property ***
   lookup_land_features: LookupItem[];
 };
+
+
+// ... (keep existing types)
+
+export type Project = {
+  id: string;
+  name: string;
+  slug: string;
+  low_price: number;
+  high_price: number;
+  construction_phase: string;
+  delivery_date: string;
+  developer_name: string;
+  developer_logo: string;
+  primary_image: string;
+  location_name: string;
+};
+
+export type ProjectDetails = {
+    id: string;
+    name: string;
+    slug: string;
+    low_price: number;
+    high_price: number;
+    description_html: string;
+    construction_phase: string;
+    delivery_date: string;
+    developer: {
+        name: string;
+        logo: string;
+    };
+    images: { url: string; is_primary: boolean }[];
+    amenities: string[];
+    faqs: { question: string; answer: string }[];
+    unit_configurations: any[]; // Define more strictly if needed
+    latitude: number;
+    longitude: number;
+};
