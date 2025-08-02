@@ -63,6 +63,7 @@ class ChatResponse(BaseModel):
 app = FastAPI()
 
 # --- FUNCTION CALLING SCHEMA ---
+# FIX: This now matches the single, unified function in the database.
 DATABASE_FUNCTION_SCHEMA = {
     "name": "search_all_properties",
     "description": "Searches for properties and new projects based on user criteria.",
