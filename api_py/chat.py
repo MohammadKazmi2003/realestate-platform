@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Optional, Dict, Any
@@ -66,17 +67,38 @@ DATABASE_FUNCTION_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "p_location": {"type": "string", "description": "The city or area to search in."},
-            "p_min_price": {"type": "number", "description": "The minimum price."},
-            "p_max_price": {"type": "number", "description": "The maximum price."},
-            "p_bedrooms": {"type": "integer", "description": "The number of bedrooms."},
+            "p_location": {
+                "type": "string",
+                "description": "The city, community, or area to search in. Example: 'Dubai Marina'",
+            },
+            "p_min_price": {
+                "type": "number",
+                "description": "The minimum price in AED. Example: 1000000",
+            },
+            "p_max_price": {
+                "type": "number",
+                "description": "The maximum price in AED. Example: 2500000",
+            },
+            "p_bedrooms": {
+                "type": "integer",
+                "description": "The exact number of bedrooms required. Example: 3",
+            },
         },
         "required": [],
     },
 }
 
 # --- SYSTEM PROMPT ---
-SYSTEM_PROMPT = "You are a friendly and expert UAE real estate assistant..." # Kept short for brevity
+SYSTEM_PROMPT = """
+You are a friendly and expert UAE real estate assistant. Your goal is to help users find properties by converting their natural language queries into structured database searches.
+
+1.  **Analyze the user's query** to understand their intent.
+2.  **Use the `search_all_properties` function** to find relevant listings. You must call this function to get data.
+3.  **Strictly adhere to the function's parameter schema.** Ensure all values are of the correct type (e.g., integer for bedrooms, number for price). For bedrooms, extract only the number (e.g., from "3 BHK", use `3`).
+4.  If the user's query is ambiguous, **ask clarifying questions**.
+5.  Once you have the search results, **present them clearly** to the user in a warm, conversational tone. Summarize the findings before showing the property cards.
+6.  Always use the context from the chat history to handle follow-up questions.
+"""
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def handle_chat(request: ChatRequest):
@@ -107,10 +129,22 @@ async def handle_chat(request: ChatRequest):
             logger.error(f"LLM returned invalid JSON arguments: {tool_call.function.arguments}")
             return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?")
 
-        logger.info(f"Executing Supabase RPC 'search_all_properties' with args: {function_args}")
+        # --- FIX: Data Sanitization Layer ---
+        if 'p_bedrooms' in function_args and isinstance(function_args['p_bedrooms'], str):
+            # Use regex to find the first number in a string like "3 BHK" or "Studio (0 beds)"
+            match = re.search(r'\d+', function_args['p_bedrooms'])
+            if match:
+                function_args['p_bedrooms'] = int(match.group(0))
+            else:
+                # Handle cases like "Studio" where there might not be a number
+                if 'studio' in function_args['p_bedrooms'].lower():
+                    function_args['p_bedrooms'] = 0
+                else:
+                    del function_args['p_bedrooms'] # Remove if we can't parse it
+
+        logger.info(f"Executing Supabase RPC 'search_all_properties' with sanitized args: {function_args}")
         db_response = supabase.rpc("search_all_properties", function_args).execute()
         
-        # --- FIX: ROBUST DATABASE ERROR CHECKING ---
         if hasattr(db_response, 'error') and db_response.error:
             logger.error(f"Supabase RPC Error: {db_response.error.message}")
             raise HTTPException(status_code=500, detail=f"Database query failed: {db_response.error.message}")
@@ -146,5 +180,4 @@ async def handle_chat(request: ChatRequest):
 
     except Exception as e:
         logger.error(f"An unexpected error occurred in /api/chat: {e}", exc_info=True)
-        # Raise HTTPException to send a specific error code back to the client
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
