@@ -70,7 +70,7 @@ DATABASE_FUNCTION_SCHEMA = {
             "p_location": {"type": "string", "description": "The city, community, or area to search in. Example: 'Dubai Marina'"},
             "p_min_price": {"type": "number", "description": "The minimum price in AED. Example: 1000000"},
             "p_max_price": {"type": "number", "description": "The maximum price in AED. Example: 2500000"},
-            "p_bedrooms": {"type": "integer", "description": "The exact number of bedrooms required. Example: 3"},
+            "p_bedrooms": {"type": "integer", "description": "The exact number of bedrooms required. Extract only the number. Example: 3"},
         },
         "required": [],
     },
@@ -83,7 +83,7 @@ You are a friendly and expert UAE real estate assistant. Your goal is to help us
 1.  **Analyze the user's query** to understand their intent.
 2.  **Use the `search_all_properties` function** to find relevant listings. You must call this function to get data.
 3.  **Strictly adhere to the function's parameter schema.** Ensure all values are of the correct type (e.g., integer for bedrooms, number for price). For bedrooms, extract only the number (e.g., from "3 BHK", use `3`).
-4.  If a parameter is not mentioned by the user, do not include it in the function call.
+4.  **Crucially, if a parameter is not mentioned by the user, do not include it in the function call.** Do not use `null` for missing values.
 5.  Once you have the search results, **present them clearly** to the user in a warm, conversational tone. Summarize the findings before showing the property cards.
 6.  Always use the context from the chat history to handle follow-up questions.
 """
@@ -117,12 +117,12 @@ async def handle_chat(request: ChatRequest):
             logger.error(f"LLM returned invalid JSON arguments: {tool_call.function.arguments}")
             return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?")
 
-        # --- FIX: Data Cleaning and Validation Layer ---
+        # --- Data Cleaning and Validation Layer ---
         
-        # 1. Remove any keys with null values
+        # 1. Remove any keys with null values, as requested by the Groq API.
         cleaned_args = {k: v for k, v in function_args.items() if v is not None}
 
-        # 2. Sanitize specific fields like bedrooms
+        # 2. Sanitize specific fields like bedrooms to ensure they are integers.
         if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
             match = re.search(r'\d+', cleaned_args['p_bedrooms'])
             if match:
