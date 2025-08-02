@@ -83,8 +83,8 @@ You are a friendly and expert UAE real estate assistant. Your goal is to help us
 1.  **Analyze the user's query** to understand their intent.
 2.  **Use the `search_all_properties` function** to find relevant listings. You must call this function to get data.
 3.  **Strictly adhere to the function's parameter schema.** Ensure all values are of the correct type (e.g., integer for bedrooms, number for price). For bedrooms, extract only the number (e.g., from "3 BHK", use `3`).
-4.  **Crucially, if a parameter is not mentioned by the user, do not include it in the function call.** Do not use `null` for missing values.
-5.  Once you have the search results, **present them clearly** to the user in a warm, conversational tone. Summarize the findings before showing the property cards.
+4.  **Crucially, if a parameter is not mentioned by the user, do not include it in the function call.** Do not use `null` or empty strings for missing values.
+5.  After receiving the database results, your final response to the user should be a **brief, conversational summary** of the findings (e.g., "I found 5 great apartments for you in Dubai Marina! Here are the top results:"). Do not list the properties in your text response.
 6.  Always use the context from the chat history to handle follow-up questions.
 """
 
@@ -118,11 +118,8 @@ async def handle_chat(request: ChatRequest):
             return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?")
 
         # --- Data Cleaning and Validation Layer ---
-        
-        # 1. Remove any keys with null values, as requested by the Groq API.
-        cleaned_args = {k: v for k, v in function_args.items() if v is not None}
+        cleaned_args = {k: v for k, v in function_args.items() if v is not None and v != ""}
 
-        # 2. Sanitize specific fields like bedrooms to ensure they are integers.
         if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
             match = re.search(r'\d+', cleaned_args['p_bedrooms'])
             if match:
@@ -130,7 +127,7 @@ async def handle_chat(request: ChatRequest):
             elif 'studio' in cleaned_args['p_bedrooms'].lower():
                 cleaned_args['p_bedrooms'] = 0
             else:
-                del cleaned_args['p_bedrooms'] # Remove if unparsable
+                del cleaned_args['p_bedrooms']
 
         logger.info(f"Executing Supabase RPC 'search_all_properties' with sanitized args: {cleaned_args}")
         db_response = supabase.rpc("search_all_properties", cleaned_args).execute()
