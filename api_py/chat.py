@@ -67,22 +67,10 @@ DATABASE_FUNCTION_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "p_location": {
-                "type": "string",
-                "description": "The city, community, or area to search in. Example: 'Dubai Marina'",
-            },
-            "p_min_price": {
-                "type": "number",
-                "description": "The minimum price in AED. Example: 1000000",
-            },
-            "p_max_price": {
-                "type": "number",
-                "description": "The maximum price in AED. Example: 2500000",
-            },
-            "p_bedrooms": {
-                "type": "integer",
-                "description": "The exact number of bedrooms required. Example: 3",
-            },
+            "p_location": {"type": "string", "description": "The city, community, or area to search in. Example: 'Dubai Marina'"},
+            "p_min_price": {"type": "number", "description": "The minimum price in AED. Example: 1000000"},
+            "p_max_price": {"type": "number", "description": "The maximum price in AED. Example: 2500000"},
+            "p_bedrooms": {"type": "integer", "description": "The exact number of bedrooms required. Example: 3"},
         },
         "required": [],
     },
@@ -95,7 +83,7 @@ You are a friendly and expert UAE real estate assistant. Your goal is to help us
 1.  **Analyze the user's query** to understand their intent.
 2.  **Use the `search_all_properties` function** to find relevant listings. You must call this function to get data.
 3.  **Strictly adhere to the function's parameter schema.** Ensure all values are of the correct type (e.g., integer for bedrooms, number for price). For bedrooms, extract only the number (e.g., from "3 BHK", use `3`).
-4.  If the user's query is ambiguous, **ask clarifying questions**.
+4.  If a parameter is not mentioned by the user, do not include it in the function call.
 5.  Once you have the search results, **present them clearly** to the user in a warm, conversational tone. Summarize the findings before showing the property cards.
 6.  Always use the context from the chat history to handle follow-up questions.
 """
@@ -121,29 +109,31 @@ async def handle_chat(request: ChatRequest):
             logger.info("LLM decided not to call a function. Returning direct response.")
             return ChatResponse(text_response=message.content or "How can I help you find a property?")
 
-        # --- Step 2: Parse Arguments and Call Database ---
-        logger.info("Step 2: Parsing arguments and calling database...")
+        # --- Step 2: Parse and Sanitize Arguments ---
+        logger.info("Step 2: Parsing and sanitizing arguments...")
         try:
             function_args = json.loads(tool_call.function.arguments)
         except json.JSONDecodeError:
             logger.error(f"LLM returned invalid JSON arguments: {tool_call.function.arguments}")
             return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?")
 
-        # --- FIX: Data Sanitization Layer ---
-        if 'p_bedrooms' in function_args and isinstance(function_args['p_bedrooms'], str):
-            # Use regex to find the first number in a string like "3 BHK" or "Studio (0 beds)"
-            match = re.search(r'\d+', function_args['p_bedrooms'])
-            if match:
-                function_args['p_bedrooms'] = int(match.group(0))
-            else:
-                # Handle cases like "Studio" where there might not be a number
-                if 'studio' in function_args['p_bedrooms'].lower():
-                    function_args['p_bedrooms'] = 0
-                else:
-                    del function_args['p_bedrooms'] # Remove if we can't parse it
+        # --- FIX: Data Cleaning and Validation Layer ---
+        
+        # 1. Remove any keys with null values
+        cleaned_args = {k: v for k, v in function_args.items() if v is not None}
 
-        logger.info(f"Executing Supabase RPC 'search_all_properties' with sanitized args: {function_args}")
-        db_response = supabase.rpc("search_all_properties", function_args).execute()
+        # 2. Sanitize specific fields like bedrooms
+        if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
+            match = re.search(r'\d+', cleaned_args['p_bedrooms'])
+            if match:
+                cleaned_args['p_bedrooms'] = int(match.group(0))
+            elif 'studio' in cleaned_args['p_bedrooms'].lower():
+                cleaned_args['p_bedrooms'] = 0
+            else:
+                del cleaned_args['p_bedrooms'] # Remove if unparsable
+
+        logger.info(f"Executing Supabase RPC 'search_all_properties' with sanitized args: {cleaned_args}")
+        db_response = supabase.rpc("search_all_properties", cleaned_args).execute()
         
         if hasattr(db_response, 'error') and db_response.error:
             logger.error(f"Supabase RPC Error: {db_response.error.message}")
