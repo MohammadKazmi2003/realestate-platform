@@ -42,6 +42,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[Message]
+    session_state: Optional[Dict[str, Any]] = {} # To hold conversational memory
 
 class PropertyCard(BaseModel):
     id: str
@@ -56,6 +57,7 @@ class PropertyCard(BaseModel):
 class ChatResponse(BaseModel):
     text_response: str
     properties: List[PropertyCard] = []
+    session_state: Dict[str, Any] # Return the updated state to the client
 
 # --- FASTAPI APP ---
 app = FastAPI()
@@ -78,19 +80,23 @@ DATABASE_FUNCTION_SCHEMA = {
 
 # --- SYSTEM PROMPT ---
 SYSTEM_PROMPT = """
-You are a friendly and expert UAE real estate assistant. Your goal is to help users find properties by converting their natural language queries into structured database searches.
+You are a friendly and expert UAE real estate assistant. Your goal is to help users find properties by understanding their needs over multiple messages.
 
-1.  **Analyze the user's query** to understand their intent.
-2.  **Use the `search_all_properties` function** to find relevant listings. You must call this function to get data.
-3.  **Strictly adhere to the function's parameter schema.** Ensure all values are of the correct type (e.g., integer for bedrooms, number for price). For bedrooms, extract only the number (e.g., from "3 BHK", use `3`).
-4.  **Crucially, if a parameter is not mentioned by the user, do not include it in the function call.** Do not use `null` or empty strings for missing values.
-5.  After receiving the database results, your final response to the user should be a **brief, conversational summary** of the findings (e.g., "I found 5 great apartments for you in Dubai Marina! Here are the top results:"). Do not list the properties in your text response.
-6.  Always use the context from the chat history to handle follow-up questions.
+1.  **Analyze the user's latest query** in the context of the **full chat history** and the **current_filters** provided.
+2.  **Synthesize the user's intent.** If the user provides a new filter (e.g., "beachfront"), you must merge it with the existing filters from the session. For example, if the user previously asked for "villas in Dubai" and now says "under 5M", your new search should be for "villas in Dubai under 5M".
+3.  **Use the `search_all_properties` function** with the combined and updated filters to find relevant listings.
+4.  **Strictly adhere to the function's parameter schema.** Ensure all values are of the correct type. For bedrooms, extract only the number (e.g., from "3 BHK", use `3`). Omit any parameter that is not specified.
+5.  After receiving the database results, generate a **brief, conversational summary** that includes a confirmation of the active search criteria (e.g., "Ok, searching for 3-bedroom villas in Dubai Marina. I found 5 matching properties for you:").
 """
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def handle_chat(request: ChatRequest):
-    logger.info("Received request for /api/chat")
+    logger.info(f"Received request for /api/chat with session state: {request.session_state}")
+    
+    # Prepend the current filters to the user's latest message for context
+    current_filters_text = f"current_filters: {json.dumps(request.session_state)}"
+    request.messages[-1].content = f"{current_filters_text}\n\nUser query: {request.messages[-1].content}"
+
     chat_history = [{"role": "system", "content": SYSTEM_PROMPT}] + [msg.dict() for msg in request.messages]
     
     try:
@@ -107,18 +113,21 @@ async def handle_chat(request: ChatRequest):
 
         if not tool_call:
             logger.info("LLM decided not to call a function. Returning direct response.")
-            return ChatResponse(text_response=message.content or "How can I help you find a property?")
+            return ChatResponse(text_response=message.content or "How can I help you find a property?", session_state=request.session_state)
 
-        # --- Step 2: Parse and Sanitize Arguments ---
+        # --- Step 2: Parse, Merge, and Sanitize Arguments ---
         logger.info("Step 2: Parsing and sanitizing arguments...")
         try:
-            function_args = json.loads(tool_call.function.arguments)
+            new_args = json.loads(tool_call.function.arguments)
         except json.JSONDecodeError:
             logger.error(f"LLM returned invalid JSON arguments: {tool_call.function.arguments}")
-            return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?")
+            return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?", session_state=request.session_state)
 
-        # --- Data Cleaning and Validation Layer ---
-        cleaned_args = {k: v for k, v in function_args.items() if v is not None and v != ""}
+        # Merge new args with existing session state
+        updated_args = {**request.session_state, **new_args}
+
+        # Data Cleaning and Validation Layer
+        cleaned_args = {k: v for k, v in updated_args.items() if v is not None and v != ""}
 
         if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
             match = re.search(r'\d+', cleaned_args['p_bedrooms'])
@@ -129,7 +138,7 @@ async def handle_chat(request: ChatRequest):
             else:
                 del cleaned_args['p_bedrooms']
 
-        logger.info(f"Executing Supabase RPC 'search_all_properties' with sanitized args: {cleaned_args}")
+        logger.info(f"Executing Supabase RPC 'search_all_properties' with merged args: {cleaned_args}")
         db_response = supabase.rpc("search_all_properties", cleaned_args).execute()
         
         if hasattr(db_response, 'error') and db_response.error:
@@ -163,7 +172,11 @@ async def handle_chat(request: ChatRequest):
             except ValidationError as e:
                 logger.warning(f"Skipping a property due to validation error: {e}")
 
-        return ChatResponse(text_response=text_content, properties=valid_properties)
+        return ChatResponse(
+            text_response=text_content, 
+            properties=valid_properties,
+            session_state=cleaned_args # Return the updated filters
+        )
 
     except Exception as e:
         logger.error(f"An unexpected error occurred in /api/chat: {e}", exc_info=True)
