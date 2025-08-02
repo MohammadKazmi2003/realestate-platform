@@ -3,6 +3,13 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(req: NextRequest) {
+  // --- FIX: Explicitly bypass API routes ---
+  // This check runs first. If the request is for an API route,
+  // it immediately passes it through without running any auth logic.
+  if (req.nextUrl.pathname.startsWith('/api')) {
+    return NextResponse.next();
+  }
+
   const res = NextResponse.next()
 
   const supabase = createServerClient(
@@ -57,12 +64,10 @@ export async function middleware(req: NextRequest) {
       return NextResponse.redirect(new URL('/', req.url))
     }
 
-    // FIX: Allow both property_owner (2) and agent (3) to access this dashboard
     if (req.nextUrl.pathname.startsWith('/propertyowner') && ![2, 3].includes(role as number)) {
       return NextResponse.redirect(new URL('/', req.url))
     }
     
-    // Only agents (3) can access agent-specific routes
     if (req.nextUrl.pathname.startsWith('/agent') && role !== 3) {
       return NextResponse.redirect(new URL('/', req.url))
     }
@@ -71,6 +76,15 @@ export async function middleware(req: NextRequest) {
   return res
 }
 
+// We can now simplify the matcher, as the function logic handles the API bypass.
 export const config = {
-  matcher: ['/sign-in', '/sign-up', '/admin/:path*', '/propertyowner/:path*', '/agent/:path*'],
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     */
+    '/((?!_next/static|_next/image|favicon.ico).*)',
+  ],
 }

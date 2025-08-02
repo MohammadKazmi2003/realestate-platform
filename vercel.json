@@ -1,0 +1,22 @@
+{
+  "builds": [
+    {
+      "src": "api_py/chat.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api_py/health.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/health",
+      "dest": "/api_py/health.py"
+    },
+    {
+      "src": "/api/chat",
+      "dest": "/api_py/chat.py"
+    }
+  ]
+}
