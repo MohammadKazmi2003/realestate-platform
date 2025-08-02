@@ -70,6 +70,7 @@ DATABASE_FUNCTION_SCHEMA = {
         "type": "object",
         "properties": {
             "p_location": {"type": "string", "description": "The city, community, or area to search in. Example: 'Dubai Marina'"},
+            "p_property_type": {"type": "string", "description": "The type of property. Examples: 'apartment', 'villa', 'townhouse'"},
             "p_min_price": {"type": "number", "description": "The minimum price in AED. Example: 1000000"},
             "p_max_price": {"type": "number", "description": "The maximum price in AED. Example: 2500000"},
             "p_bedrooms": {"type": "integer", "description": "The exact number of bedrooms required. Extract only the number. Example: 3"},
@@ -89,24 +90,23 @@ You are a friendly and expert UAE real estate assistant. Your goal is to help us
 
 **Core Instructions:**
 1.  **Analyze the user's latest query** in the context of the **full chat history** and the **current_filters** provided.
-2.  **Synthesize Intent:** Combine the user's new request with the filters from the `current_filters`. For example, if `current_filters` is `{"p_location": "Dubai"}` and the user says "show me villas", your new combined search should be for villas in Dubai. If they then say "under 5M", update the search to be for villas in Dubai under 5M.
+2.  **Synthesize Intent:** Combine the user's new request with the filters from the `current_filters`. For example, if `current_filters` is `{"p_location": "Dubai"}` and the user says "show me villas", your new combined search should use `p_location: "Dubai"` and `p_property_type: "villa"`.
 3.  **Use the `search_all_properties` function** with the combined and updated filters. You MUST use this tool to find properties.
 4.  **Handle Features:** Use the `p_amenities` parameter for descriptive requirements like "ocean view", "gym", "beachfront", etc.
 5.  **Strictly Adhere to Schema:**
-    - Ensure all values are the correct type (e.g., integer for bedrooms).
+    - Ensure all values are of the correct type (e.g., integer for bedrooms).
     - For bedrooms, extract ONLY the number (e.g., from "3 BHK", use `3`).
     - **CRITICAL: If a parameter is not specified by the user, OMIT it entirely. DO NOT use `null` or empty strings.**
 6.  **Response Generation:**
     - After getting database results, provide a **brief, single-sentence summary** confirming the search (e.g., "Certainly! Here are the 3-bedroom villas I found in Dubai Marina:").
     - **DO NOT** list the properties in your text response. The user interface will display them as cards.
-    - If no results are found, say so clearly and suggest removing the most recent or most specific filter to broaden the search. For example: "I couldn't find any beachfront villas in Abu Dhabi. Would you like me to search for all villas in Abu Dhabi instead?"
+    - If no results are found, say so clearly and suggest removing the most recent or most specific filter to broaden the search.
 """
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def handle_chat(request: ChatRequest):
     logger.info(f"Received request for /api/chat with session state: {request.session_state}")
     
-    # Prepend the current filters to the user's latest message for context
     current_filters_text = f"current_filters: {json.dumps(request.session_state)}"
     request.messages[-1].content = f"{current_filters_text}\n\nUser query: {request.messages[-1].content}"
 
@@ -136,10 +136,7 @@ async def handle_chat(request: ChatRequest):
             logger.error(f"LLM returned invalid JSON arguments: {tool_call.function.arguments}")
             return ChatResponse(text_response="I had a little trouble understanding that. Could you please rephrase?", session_state=request.session_state)
 
-        # Merge new args with existing session state
         updated_args = {**request.session_state, **new_args}
-
-        # Data Cleaning and Validation Layer
         cleaned_args = {k: v for k, v in updated_args.items() if v is not None and v != ""}
 
         if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
@@ -156,11 +153,10 @@ async def handle_chat(request: ChatRequest):
         
         if hasattr(db_response, 'error') and db_response.error:
             logger.error(f"Supabase RPC Error: {db_response.error.message}")
-            # Check for the specific "function not found" error
             if 'PGRST202' in str(db_response.error.message):
                  return ChatResponse(
                     text_response="I'm sorry, I tried to search for a feature that isn't supported yet. Please try a different search.",
-                    session_state=request.session_state # Return old state
+                    session_state=request.session_state
                 )
             raise HTTPException(status_code=500, detail=f"Database query failed: {db_response.error.message}")
 
@@ -194,7 +190,7 @@ async def handle_chat(request: ChatRequest):
         return ChatResponse(
             text_response=text_content, 
             properties=valid_properties,
-            session_state=cleaned_args # Return the updated filters
+            session_state=cleaned_args
         )
 
     except Exception as e:
