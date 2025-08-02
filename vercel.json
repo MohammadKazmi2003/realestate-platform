@@ -21,10 +21,6 @@
     {
       "src": "/api/chat",
       "dest": "/api_py/chat.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/"
     }
   ]
 }
