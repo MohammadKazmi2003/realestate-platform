@@ -63,7 +63,6 @@ class ChatResponse(BaseModel):
 app = FastAPI()
 
 # --- FUNCTION CALLING SCHEMA ---
-# FIX: This now matches the single, unified function in the database.
 DATABASE_FUNCTION_SCHEMA = {
     "name": "search_all_properties",
     "description": "Searches for properties and new projects based on user criteria.",
@@ -74,7 +73,7 @@ DATABASE_FUNCTION_SCHEMA = {
             "p_property_type": {"type": "string", "description": "The type of property. Examples: 'apartment', 'villa', 'townhouse'"},
             "p_min_price": {"type": "number", "description": "The minimum price in AED. Example: 1000000"},
             "p_max_price": {"type": "number", "description": "The maximum price in AED. Example: 2500000"},
-            "p_bedrooms": {"type": "integer", "description": "The exact number of bedrooms required. Extract only the number. Example: 3"},
+            "p_bedrooms": {"type": "integer", "description": "The exact number of bedrooms required. Extract only the number. Example: 3. For studios, use 0."},
             "p_amenities": {
                 "type": "array",
                 "description": "A list of required amenities or features. Examples: ['pool', 'sea view', 'beachfront']",
@@ -90,28 +89,32 @@ SYSTEM_PROMPT = """
 You are a friendly and expert UAE real estate assistant. Your goal is to help users find properties by understanding their needs over multiple messages.
 
 **Core Instructions:**
-1.  **Analyze the user's latest query** in the context of the **full chat history** and the **current_filters** provided.
-2.  **Synthesize Intent:** Combine the user's new request with the filters from the `current_filters`. For example, if `current_filters` is `{"p_location": "Dubai"}` and the user says "show me villas", your new combined search should use `p_location: "Dubai"` and `p_property_type: "villa"`.
+1.  **Analyze the user's latest query** in the context of the **full chat history** and the **current_filters** provided at the start of the user's message.
+2.  **Synthesize Intent:** Combine the user's new request with the existing filters from `current_filters`. For example, if `current_filters` is `{"p_location": "Dubai"}` and the user says "show me villas", your new combined search should use `p_location: "Dubai"` and `p_property_type: "villa"`. If the user asks for something that contradicts a filter (e.g., "now in Abu Dhabi"), *replace* the old value (`Dubai`) with the new one (`Abu Dhabi`).
 3.  **Use the `search_all_properties` function** with the combined and updated filters. You MUST use this tool to find properties.
-4.  **Handle Features:** Use the `p_amenities` parameter for descriptive requirements like "ocean view", "gym", "beachfront", etc.
+4.  **Handle Descriptive Features:** Use the `p_amenities` parameter for descriptive requirements like "ocean view", "gym", "beachfront", etc.
 5.  **Strictly Adhere to Schema:**
     - Ensure all values are of the correct type (e.g., integer for bedrooms).
-    - For bedrooms, extract ONLY the number (e.g., from "3 BHK", use `3`).
-    - **CRITICAL: If a parameter is not specified by the user, OMIT it entirely. DO NOT use `null` or empty strings.**
+    - For bedrooms, extract ONLY the number (e.g., from "3 BHK", use `3`; for "studio", use `0`).
+    - **CRITICAL: If a parameter is not specified by the user in the entire conversation, OMIT it entirely from the function call. DO NOT use `null` or empty strings.**
 6.  **Response Generation:**
-    - After getting database results, provide a **brief, single-sentence summary** confirming the search (e.g., "Certainly! Here are the 3-bedroom villas I found in Dubai Marina:").
+    - After getting database results, provide a **brief, single-sentence summary** confirming the search (e.g., "Certainly! Here are some 3-bedroom villas I found in Dubai Marina:").
     - **DO NOT** list the properties in your text response. The user interface will display them as cards.
-    - If no results are found, say so clearly and suggest removing the most recent or most specific filter to broaden the search.
+    - **If no properties are found**, clearly state that and suggest removing the most recent or most specific filter to broaden the search. For example: "I couldn't find any properties matching all your criteria. Would you like me to search again without the 'sea view' filter?"
 """
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def handle_chat(request: ChatRequest):
     logger.info(f"Received request for /api/chat with session state: {request.session_state}")
     
+    # Prepend current filters to the last user message for context
     current_filters_text = f"current_filters: {json.dumps(request.session_state)}"
-    request.messages[-1].content = f"{current_filters_text}\n\nUser query: {request.messages[-1].content}"
+    
+    # Create a mutable copy of messages
+    messages_for_api = [msg.dict() for msg in request.messages]
+    messages_for_api[-1]['content'] = f"{current_filters_text}\n\nUser query: {messages_for_api[-1]['content']}"
 
-    chat_history = [{"role": "system", "content": SYSTEM_PROMPT}] + [msg.dict() for msg in request.messages]
+    chat_history = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_for_api
     
     try:
         # --- Step 1: LLM Function Calling ---
@@ -154,12 +157,14 @@ async def handle_chat(request: ChatRequest):
         
         if hasattr(db_response, 'error') and db_response.error:
             logger.error(f"Supabase RPC Error: {db_response.error.message}")
+            error_message = "I encountered a problem searching the database. Please try rephrasing your request."
             if 'PGRST202' in str(db_response.error.message):
-                 return ChatResponse(
-                    text_response="I'm sorry, I tried to search for a feature that isn't supported yet. Please try a different search.",
-                    session_state=request.session_state
-                )
-            raise HTTPException(status_code=500, detail=f"Database query failed: {db_response.error.message}")
+                 error_message = "I'm sorry, I tried to search for a feature that isn't supported yet. Please try a different search."
+            
+            return ChatResponse(
+                text_response=error_message,
+                session_state=request.session_state
+            )
 
         properties_found = db_response.data if db_response.data else []
         logger.info(f"Found {len(properties_found)} properties in the database.")
@@ -173,7 +178,8 @@ async def handle_chat(request: ChatRequest):
             "content": json.dumps(properties_found, cls=CustomEncoder),
         }
         
-        chat_history.append(message)
+        # Append the assistant's thought process (message with tool_call) and the tool's result
+        chat_history.append(message.model_dump())
         chat_history.append(function_response_message)
 
         final_response = groq_client.chat.completions.create(model="llama3-70b-8192", messages=chat_history)

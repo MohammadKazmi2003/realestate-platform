@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, User, Sparkles } from 'lucide-react';
+import { Send, Loader2, User, Sparkles, X } from 'lucide-react';
 import { ChatPropertyCard } from './ChatPropertyCard';
 
 type Message = {
@@ -10,6 +10,12 @@ type Message = {
   content: string;
   properties?: any[];
 };
+
+// Add this type for session state
+type SessionState = {
+  [key: string]: any;
+};
+
 
 type ChatAssistantProps = {
   isOpen: boolean;
@@ -20,6 +26,8 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // ++ Add this new state variable ++
+  const [sessionState, setSessionState] = useState<SessionState>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -33,22 +41,37 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
 
     const userMessage: Message = { role: 'user', content: input };
     setMessages(prev => [...prev, userMessage]);
+    const currentInput = input;
     setInput('');
     setIsLoading(true);
+
+    // Implement a "clear" command on the frontend
+    if (currentInput.toLowerCase().trim() === 'clear' || currentInput.toLowerCase().trim() === 'new search') {
+      setSessionState({});
+      setMessages(prev => [...prev, {role: 'assistant', content: "Starting a new search! What are you looking for?"}]);
+      setIsLoading(false);
+      return;
+    }
+
 
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [...messages, userMessage] }),
+        // ++ Include the session_state in the request body ++
+        body: JSON.stringify({ messages: [...messages, userMessage], session_state: sessionState }),
       });
 
       if (!response.ok) {
-        throw new Error('Network response was not ok');
+        const errorData = await response.json().catch(() => ({ detail: 'Network response was not ok' }));
+        throw new Error(errorData.detail || 'An unknown error occurred');
       }
 
       const data = await response.json();
       
+      // ++ Set the new session state from the response ++
+      setSessionState(data.session_state);
+
       const assistantMessage: Message = {
         role: 'assistant',
         content: data.text_response,
@@ -56,11 +79,11 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
       };
       setMessages(prev => [...prev, assistantMessage]);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to fetch AI response:", error);
       const errorMessage: Message = {
         role: 'assistant',
-        content: "Sorry, I'm having trouble connecting. Please try again in a moment.",
+        content: `Sorry, I'm having trouble connecting. Please try again in a moment. (Error: ${error.message})`,
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -79,7 +102,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         {/* Header */}
         <div className="p-4 border-b border-gray-200/80 flex justify-between items-center">
           <h2 className="text-lg font-bold text-gray-800">AI Property Assistant</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-800">&times;</button>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-800"><X size={24} /></button>
         </div>
 
         {/* Message List */}
