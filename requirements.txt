@@ -1,4 +1,4 @@
-Tell the installer to look for CPU-specific torch versions at this URL
+#Tell the installer to look for CPU-specific torch versions at this URL
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 fastapi
