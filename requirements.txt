@@ -7,5 +7,5 @@ python-dotenv
 groq
 supabase
 sentence-transformers
-torch
+torch==2.2.2+cpu
 pydantic
