@@ -123,6 +123,7 @@ You are a state-of-the-art UAE real estate assistant. Your primary goal is to pr
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def handle_chat(request: ChatRequest):
+<<<<<<< HEAD
     logger.info(f"Received request: {request.messages[-1].content} with state: {request.session_state}")
 
     # --- FIX: Handle Chat Reset ---
@@ -132,6 +133,12 @@ async def handle_chat(request: ChatRequest):
 
     # Prepare messages for the LLM
     current_filters_text = f"current_filters: {json.dumps(request.session_state)}"
+=======
+    logger.info(f"Received request for /api/chat with session state: {request.session_state}")
+    
+    current_filters_text = f"current_filters: {json.dumps(request.session_state)}"
+    
+>>>>>>> 1dfb6f22ac358315086cd90db93cfd9780a84dbf
     messages_for_api = [msg.dict() for msg in request.messages]
     messages_for_api[-1]['content'] = f"{current_filters_text}\n\nUser query: {messages_for_api[-1]['content']}"
     chat_history = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_for_api
