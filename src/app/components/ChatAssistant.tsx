@@ -11,11 +11,9 @@ type Message = {
   properties?: any[];
 };
 
-// Add this type for session state
 type SessionState = {
   [key: string]: any;
 };
-
 
 type ChatAssistantProps = {
   isOpen: boolean;
@@ -26,7 +24,6 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  // ++ Add this new state variable ++
   const [sessionState, setSessionState] = useState<SessionState>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -37,29 +34,34 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   useEffect(scrollToBottom, [messages]);
 
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: 'user', content: input };
+    
+    // *** FIX: Append user message immediately ***
     setMessages(prev => [...prev, userMessage]);
+    
     const currentInput = input;
     setInput('');
     setIsLoading(true);
 
-    // Implement a "clear" command on the frontend
-    if (currentInput.toLowerCase().trim() === 'clear' || currentInput.toLowerCase().trim() === 'new search') {
-      setSessionState({});
-      setMessages(prev => [...prev, {role: 'assistant', content: "Starting a new search! What are you looking for?"}]);
-      setIsLoading(false);
-      return;
-    }
+    const isResetCommand = currentInput.toLowerCase().trim() === 'clear' || 
+                           currentInput.toLowerCase().trim() === 'new search' ||
+                           currentInput.toLowerCase().trim() === 'start over';
 
+    // Optimistically reset on the frontend for a faster UI response
+    if (isResetCommand) {
+        setSessionState({});
+    }
 
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // ++ Include the session_state in the request body ++
-        body: JSON.stringify({ messages: [...messages, userMessage], session_state: sessionState }),
+        body: JSON.stringify({ 
+          messages: [...messages, userMessage], // Send the full history
+          session_state: isResetCommand ? {} : sessionState // Send empty state if it's a reset command
+        }),
       });
 
       if (!response.ok) {
@@ -69,7 +71,6 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
 
       const data = await response.json();
       
-      // ++ Set the new session state from the response ++
       setSessionState(data.session_state);
 
       const assistantMessage: Message = {
@@ -77,13 +78,15 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         content: data.text_response,
         properties: data.properties || [],
       };
+      
+      // *** FIX: Append assistant message to the existing list ***
       setMessages(prev => [...prev, assistantMessage]);
 
     } catch (error: any) {
       console.error("Failed to fetch AI response:", error);
       const errorMessage: Message = {
         role: 'assistant',
-        content: `Sorry, I'm having trouble connecting. Please try again in a moment. (Error: ${error.message})`,
+        content: `Sorry, I'm having trouble connecting. (Error: ${error.message})`,
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -99,42 +102,42 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl w-full max-w-md h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="p-4 border-b border-gray-200/80 flex justify-between items-center">
           <h2 className="text-lg font-bold text-gray-800">AI Property Assistant</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-800"><X size={24} /></button>
         </div>
 
-        {/* Message List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((msg, index) => (
-            <div key={index} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Sparkles size={16} /></div>}
-              <div className={`max-w-xs md:max-w-sm ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} rounded-2xl p-3`}>
-                <p className="text-sm">{msg.content}</p>
+            <div key={index}>
+              <div className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Sparkles size={16} /></div>}
+                <div className={`max-w-xs md:max-w-sm ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} rounded-2xl p-3`}>
+                  <p className="text-sm">{msg.content}</p>
+                </div>
+                {msg.role === 'user' && <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 shrink-0"><User size={16} /></div>}
               </div>
-               {msg.role === 'user' && <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 shrink-0"><User size={16} /></div>}
+              {/* Render property cards associated with an assistant message */}
+              {msg.role === 'assistant' && msg.properties && msg.properties.length > 0 && (
+                <div className="flex overflow-x-auto space-x-4 pb-2 mt-3 snap-x snap-mandatory">
+                  {msg.properties.map((prop: any) => (
+                    <ChatPropertyCard key={prop.id} property={prop} />
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {isLoading && (
-            <div className="flex gap-3 justify-start">
+             <div className="flex gap-3 justify-start">
               <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Loader2 className="animate-spin" size={16} /></div>
               <div className="max-w-xs md:max-w-sm bg-gray-200 text-gray-800 rounded-2xl p-3">
-                <p className="text-sm">Searching for properties...</p>
+                <p className="text-sm">Searching...</p>
               </div>
-            </div>
-          )}
-          {messages.length > 0 && messages[messages.length - 1].properties && messages[messages.length - 1].properties!.length > 0 && (
-            <div className="flex overflow-x-auto space-x-4 pb-2 snap-x snap-mandatory">
-              {messages[messages.length - 1].properties!.map((prop: any) => (
-                <ChatPropertyCard key={prop.id} property={prop} />
-              ))}
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Form */}
         <div className="p-4 border-t border-gray-200/80">
           <div className="relative">
             <input
