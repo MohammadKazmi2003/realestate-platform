@@ -107,10 +107,8 @@ You are a friendly and expert UAE real estate assistant. Your goal is to help us
 async def handle_chat(request: ChatRequest):
     logger.info(f"Received request for /api/chat with session state: {request.session_state}")
     
-    # Prepend current filters to the last user message for context
     current_filters_text = f"current_filters: {json.dumps(request.session_state)}"
     
-    # Create a mutable copy of messages
     messages_for_api = [msg.dict() for msg in request.messages]
     messages_for_api[-1]['content'] = f"{current_filters_text}\n\nUser query: {messages_for_api[-1]['content']}"
 
@@ -143,6 +141,7 @@ async def handle_chat(request: ChatRequest):
         updated_args = {**request.session_state, **new_args}
         cleaned_args = {k: v for k, v in updated_args.items() if v is not None and v != ""}
 
+        # *** FIX #1: Robustly parse the bedrooms argument to ensure it's an integer ***
         if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
             match = re.search(r'\d+', cleaned_args['p_bedrooms'])
             if match:
@@ -150,6 +149,7 @@ async def handle_chat(request: ChatRequest):
             elif 'studio' in cleaned_args['p_bedrooms'].lower():
                 cleaned_args['p_bedrooms'] = 0
             else:
+                # If no number is found, remove the filter to avoid errors
                 del cleaned_args['p_bedrooms']
 
         logger.info(f"Executing Supabase RPC 'search_all_properties' with merged args: {cleaned_args}")
@@ -158,8 +158,8 @@ async def handle_chat(request: ChatRequest):
         if hasattr(db_response, 'error') and db_response.error:
             logger.error(f"Supabase RPC Error: {db_response.error.message}")
             error_message = "I encountered a problem searching the database. Please try rephrasing your request."
-            if 'PGRST202' in str(db_response.error.message):
-                 error_message = "I'm sorry, I tried to search for a feature that isn't supported yet. Please try a different search."
+            if '22P02' in str(db_response.error.code):
+                 error_message = "I had trouble understanding one of the search values. Could you try phrasing it differently?"
             
             return ChatResponse(
                 text_response=error_message,
@@ -178,7 +178,7 @@ async def handle_chat(request: ChatRequest):
             "content": json.dumps(properties_found, cls=CustomEncoder),
         }
         
-        # Append the assistant's thought process (message with tool_call) and the tool's result
+        # *** FIX #2: Convert the message object to a plain dictionary before appending ***
         chat_history.append(message.model_dump())
         chat_history.append(function_response_message)
 
