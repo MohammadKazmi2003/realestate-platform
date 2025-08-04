@@ -209,7 +209,9 @@ async def handle_chat(request: ChatRequest):
         chat_history.append(function_response_message)
 
         final_response = groq_client.chat.completions.create(model="llama3-70b-8192", messages=chat_history)
-        text_content = final_raesponse.choices[0].message.content
+        
+        # *** THIS IS THE TYPO FIX ***
+        text_content = final_response.choices[0].message.content
 
         valid_properties = [PropertyCard(**p) for p in properties_found]
 
