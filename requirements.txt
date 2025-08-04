@@ -4,3 +4,5 @@ groq
 pydantic
 supabase
 python-dotenv
+sentence-transformers
+torch
