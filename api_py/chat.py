@@ -141,24 +141,31 @@ async def handle_chat(request: ChatRequest):
         updated_args = {**request.session_state, **new_args}
         cleaned_args = {k: v for k, v in updated_args.items() if v is not None and v != ""}
 
-        # *** FIX #1: Robustly parse the bedrooms argument to ensure it's an integer ***
-        if 'p_bedrooms' in cleaned_args and isinstance(cleaned_args['p_bedrooms'], str):
-            match = re.search(r'\d+', cleaned_args['p_bedrooms'])
-            if match:
-                cleaned_args['p_bedrooms'] = int(match.group(0))
-            elif 'studio' in cleaned_args['p_bedrooms'].lower():
-                cleaned_args['p_bedrooms'] = 0
-            else:
-                # If no number is found, remove the filter to avoid errors
-                del cleaned_args['p_bedrooms']
+        # *** FIX #1: More robustly parse the bedrooms argument to ensure it's an integer ***
+        if 'p_bedrooms' in cleaned_args:
+            try:
+                # Attempt to convert directly to int first
+                cleaned_args['p_bedrooms'] = int(cleaned_args['p_bedrooms'])
+            except (ValueError, TypeError):
+                # If it fails, it's likely a string like "4 BHK" or "studio"
+                bedrooms_str = str(cleaned_args.get('p_bedrooms', '')).lower()
+                if 'studio' in bedrooms_str:
+                    cleaned_args['p_bedrooms'] = 0
+                else:
+                    match = re.search(r'\d+', bedrooms_str)
+                    if match:
+                        cleaned_args['p_bedrooms'] = int(match.group(0))
+                    else:
+                        # If no number is found, remove the filter to avoid errors
+                        del cleaned_args['p_bedrooms']
 
         logger.info(f"Executing Supabase RPC 'search_all_properties' with merged args: {cleaned_args}")
         db_response = supabase.rpc("search_all_properties", cleaned_args).execute()
         
         if hasattr(db_response, 'error') and db_response.error:
-            logger.error(f"Supabase RPC Error: {db_response.error.message}")
+            logger.error(f"Supabase RPC Error: {db_response.error}")
             error_message = "I encountered a problem searching the database. Please try rephrasing your request."
-            if '22P02' in str(db_response.error.code):
+            if db_response.code == '22P02':
                  error_message = "I had trouble understanding one of the search values. Could you try phrasing it differently?"
             
             return ChatResponse(
@@ -178,8 +185,12 @@ async def handle_chat(request: ChatRequest):
             "content": json.dumps(properties_found, cls=CustomEncoder),
         }
         
-        # *** FIX #2: Convert the message object to a plain dictionary before appending ***
-        chat_history.append(message.model_dump())
+        # *** FIX #2: Manually construct the assistant message dictionary to avoid unsupported properties ***
+        assistant_message_for_history = {
+            "role": "assistant",
+            "tool_calls": message.tool_calls
+        }
+        chat_history.append(assistant_message_for_history)
         chat_history.append(function_response_message)
 
         final_response = groq_client.chat.completions.create(model="llama3-70b-8192", messages=chat_history)
