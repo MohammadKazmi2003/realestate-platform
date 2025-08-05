@@ -11,6 +11,9 @@ import groq
 from supabase import create_client, Client
 from decimal import Decimal
 from sentence_transformers import SentenceTransformer
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # --- SETUP ---
 logging.basicConfig(level=logging.INFO)
@@ -89,11 +92,14 @@ SEMANTIC_SEARCH_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "query_embedding": {"type": "array", "items": {"type": "number"}, "description": "The 768-dimension vector embedding of the user's query."},
+            "query": {
+                "type": "string",
+                "description": "The user's original, natural language query text to be used for the semantic search."
+            },
             "match_threshold": {"type": "number", "description": "Similarity threshold. A good default is 0.75."},
             "match_count": {"type": "integer", "description": "Number of properties to return. Default is 10."}
         },
-        "required": ["query_embedding", "match_threshold", "match_count"],
+        "required": ["query"],
     },
 }
 
@@ -110,8 +116,9 @@ You are a state-of-the-art UAE real estate assistant. Your primary goal is to pr
 
 2.  **`match_properties_semantic` (SEMANTIC/VECTOR SEARCH):**
     * **USE WHEN:** The user's query is descriptive, subjective, or about the *feeling* or *concept* of a property.
-    * **Examples:** "Find me a quiet place near the water", "a modern apartment with lots of light", "a villa that's good for entertaining guests".
-    * **DO NOT** use this for simple location or filter-based queries.
+    * **Examples:** "Find me a quiet place near the water", "a modern apartment with lots of light".
+    * **IMPORTANT:** You must pass the user's original query text directly to the `query` parameter. The system will handle generating the embedding vector from this text. **DO NOT** attempt to create or guess the vector yourself.
+
 
 **CONVERSATIONAL CONTEXT RULES:**
 
@@ -171,23 +178,36 @@ async def handle_chat(request: ChatRequest):
                     final_args['p_bedrooms'] = int(final_args['p_bedrooms'])
                 except (ValueError, TypeError):
                     del final_args['p_bedrooms']
+            # 🚨 Only include 'p_exclude_ids' and 'p_amenities' if they are non-empty lists
+            for key in ['p_exclude_ids', 'p_amenities']:
+                if key in final_args:
+                    if not isinstance(final_args[key], list) or not final_args[key]:
+                        del final_args[key]
+            logger.debug(f"Final args passed to RPC: {json.dumps(final_args, indent=2)}")
 
             db_response = supabase.rpc(function_name, final_args).execute()
-
+            
         elif function_name == 'match_properties_semantic':
-            logger.info(f"Tool chosen: SEMANTIC search")
+            logger.info(f"Tool chosen: SEMANTIC search with args: {args}")
             if not embedding_model:
                 raise HTTPException(status_code=500, detail="Embedding model is not available.")
-            
-            query_text = request.messages[-1].content
+
+            # Get the raw query text from the LLM's tool call
+            query_text = args.get("query")
+            if not query_text:
+                raise HTTPException(status_code=400, detail="Query text is required for semantic search.")
+
+            # Generate the embedding on the backend
             embedding = embedding_model.encode(query_text).tolist()
-            
-            args['query_embedding'] = embedding
-            args.setdefault('match_threshold', 0.75)
-            args.setdefault('match_count', 10)
-            final_args = args # Semantic search doesn't use session state filters
-            
-            db_response = supabase.rpc(function_name, final_args).execute()
+
+            # Prepare the arguments for the Supabase RPC call
+            final_args = {
+                "query_embedding": embedding,
+                "match_threshold": args.get('match_threshold', 0.75),
+                "match_count": args.get('match_count', 10),
+            }
+
+            db_response = supabase.rpc('match_properties_semantic', final_args).execute()
 
         if hasattr(db_response, 'error') and db_response.error:
             logger.error(f"Supabase RPC Error: {db_response.error}")
@@ -202,18 +222,39 @@ async def handle_chat(request: ChatRequest):
         final_args['shown_ids'] = all_shown_ids
 
         # Generate final response
-        assistant_message_for_history = {"role": "assistant", "tool_calls": message.tool_calls}
-        function_response_message = {"role": "tool", "tool_call_id": tool_call.id, "name": function_name, "content": json.dumps(properties_found, cls=CustomEncoder)}
-        
+                # Only pass count of properties to Groq to reduce payload size
+        assistant_message_for_history = {
+            "role": "assistant",
+            "tool_calls": message.tool_calls
+        }
+        function_response_message = {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "name": function_name,
+            "content": json.dumps({"result_count": len(properties_found)})
+        }
+
         chat_history.append(assistant_message_for_history)
         chat_history.append(function_response_message)
 
-        final_response = groq_client.chat.completions.create(model="llama3-70b-8192", messages=chat_history)
-        
+        # Limit history size (system prompt + last 3 exchanges = safe)
+        chat_history_trimmed = chat_history[:1] + chat_history[-6:]
+
+        # Now send trimmed history to Groq
+        final_response = groq_client.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=chat_history_trimmed
+        )
+
+
         # *** THIS IS THE TYPO FIX ***
         text_content = final_response.choices[0].message.content
 
         valid_properties = [PropertyCard(**p) for p in properties_found]
+        
+        # FIX: Remove the embedding before sending the state back to the client
+        if 'query_embedding' in final_args:
+            del final_args['query_embedding']
 
         return ChatResponse(
             text_response=text_content, 
