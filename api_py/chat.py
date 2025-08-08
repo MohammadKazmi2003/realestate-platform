@@ -94,8 +94,7 @@ You are "Prophet", a world-class, friendly, and conversational real estate assis
 4.  **Summarize Results:** After the system finds properties, you will be given the results. Your final job is to present these results to the user in a helpful, human-friendly summary. Start with a confirmation, mention the number of properties found, and highlight 1-2 key properties with their title, price, and location. ALWAYS provide links.
 """
 
-# --- FIX: REVISED FINAL RESPONSE PROMPT ---
-# This new prompt enforces conciseness and Markdown formatting.
+# --- FINAL RESPONSE PROMPT ---
 FINAL_RESPONSE_PROMPT_TEMPLATE = """
 You are "Prophet", a helpful real estate assistant. A search has been performed.
 
@@ -116,7 +115,6 @@ Your task is to craft a **concise, friendly, and helpful** response to the user.
 def summarize_properties_for_llm(properties: List[Dict]) -> str:
     if not properties:
         return "No properties found."
-    # --- FIX: Include the page_link in the summary for the LLM to use ---
     summary = ""
     for p in properties[:5]:
         summary += f"- Title: {p.get('title', 'N/A')}, Price: {p.get('price', 'N/A')}, Location: {p.get('location', 'N/A')}, Link: {p.get('page_link', 'N/A')}\n"
@@ -154,25 +152,24 @@ async def handle_chat(request: ChatRequest):
         new_args = json.loads(tool_call.function.arguments)
         
         properties_found = []
-        db_response = None
         
         if function_name == 'search_all_properties':
             logger.info(f"Tool: FILTER search, New args: {new_args}")
             
-            # --- FIX: More robust logic for resetting context ---
-            # If the new query contains a new location and property type, it's a new search.
-            if 'p_location' in new_args and 'p_property_type' in new_args:
-                current_search_params = new_args
-            else:
+            is_show_more = "more" in last_user_message.lower() or "options" in last_user_message.lower()
+            if not is_show_more:
                 current_search_params.update(new_args)
 
             valid_db_keys = {'p_location', 'p_property_type', 'p_min_price', 'p_max_price', 'p_bedrooms', 'p_amenities'}
             final_args_for_db = {key: current_search_params[key] for key in valid_db_keys if key in current_search_params and current_search_params[key]}
+            
+            # --- FIX: Correctly add p_exclude_ids for pagination ---
             if current_search_params.get('shown_ids'):
                 final_args_for_db['p_exclude_ids'] = current_search_params['shown_ids']
             
             logger.info(f"Executing 'search_all_properties' with: {final_args_for_db}")
             db_response = supabase.rpc("search_all_properties", final_args_for_db).execute()
+            properties_found = db_response.data or []
 
         elif function_name == 'match_properties_semantic':
             logger.info(f"Tool: SEMANTIC search, Query: {new_args.get('query')}")
@@ -186,18 +183,16 @@ async def handle_chat(request: ChatRequest):
             }).execute()
 
             matched_ids = [item['id'] for item in chunk_response.data]
+            
+            # --- FIX: Fetch full property details after getting matched IDs ---
             if not matched_ids:
                 properties_found = []
             else:
-                # --- FIX: Ensure db_response is assigned here ---
-                db_response = supabase.from_('unified_listings_view').select('*').in_('id', matched_ids).execute()
-                properties_found = db_response.data
+                # Use the matched IDs to get the full property data
+                properties_response = supabase.from_('unified_listings_view').select('*').in_('id', matched_ids).execute()
+                properties_found = properties_response.data or []
             
             current_search_params = {"semantic_query": query_text}
-
-        # --- FIX: Unified handling of db_response ---
-        if db_response:
-             properties_found = db_response.data or []
 
         logger.info(f"Found {len(properties_found)} properties.")
         
