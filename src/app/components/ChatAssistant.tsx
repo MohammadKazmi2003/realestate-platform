@@ -4,7 +4,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, User, Sparkles, X } from 'lucide-react';
 import { ChatPropertyCard } from './ChatPropertyCard';
-
+import ReactMarkdown from 'react-markdown';
+import './ChatAssistant.css';
 type Message = {
   role: 'user' | 'assistant';
   content: string;
@@ -113,7 +114,16 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
               <div className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Sparkles size={16} /></div>}
                 <div className={`max-w-xs md:max-w-sm ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} rounded-2xl p-3`}>
-                  <p className="text-sm">{msg.content}</p>
+                <ReactMarkdown
+                  components={{
+                    // Target the 'a' (link) tag and apply your desired class
+                    a: ({node, ...props}) => <a className="text-blue-600 underline font-medium" {...props} />,
+                    // Target the 'p' (paragraph) tag to remove default margins
+                    p: ({node, ...props}) => <p className="m-0" {...props} />
+                  }}
+                  >
+                  {msg.content}
+                </ReactMarkdown>
                 </div>
                 {msg.role === 'user' && <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 shrink-0"><User size={16} /></div>}
               </div>
@@ -145,7 +155,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="e.g., 2 bed villas in Arabian Ranches"
+              placeholder="e.g., Show Me Villas In Dubai"
               className="w-full p-3 pr-12 rounded-full border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
             />
             <button

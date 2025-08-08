@@ -1,0 +1,15 @@
+/* src/app/components/ChatAssistant.css */
+
+.chat-markdown p {
+    margin: 0;
+  }
+  
+  .chat-markdown a {
+    color: #2563eb; /* A nice blue color */
+    text-decoration: underline;
+    font-weight: 500;
+  }
+  
+  .chat-markdown a:hover {
+    color: #1d4ed8;
+  }

@@ -11,12 +11,11 @@ from supabase import create_client, Client
 from decimal import Decimal
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
-# --- FIX: Import the specific exception for better error handling ---
 from postgrest.exceptions import APIError
 
 load_dotenv()
 
-# --- SETUP (remains the same) ---
+# --- SETUP ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -32,7 +31,7 @@ except Exception as e:
     logger.error(f"Failed to load SentenceTransformer model: {e}")
     embedding_model = None
 
-# --- MODELS (remains the same) ---
+# --- MODELS ---
 class Message(BaseModel):
     role: str
     content: str
@@ -55,7 +54,7 @@ class ChatResponse(BaseModel):
 
 app = FastAPI()
 
-# --- FUNCTION SCHEMAS (remains the same) ---
+# --- FUNCTION SCHEMAS ---
 FILTER_SEARCH_SCHEMA = {
     "name": "search_all_properties",
     "description": "Searches for properties using specific, concrete filters like location, price, or bedroom count.",
@@ -79,7 +78,7 @@ SEMANTIC_SEARCH_SCHEMA = {
     },
 }
 
-# --- MASTER SYSTEM PROMPT (remains the same) ---
+# --- MASTER SYSTEM PROMPT ---
 SYSTEM_PROMPT = """
 You are "Prophet", a world-class, friendly, and conversational real estate assistant for the UAE. Your goal is to help users find their dream property.
 
@@ -95,29 +94,31 @@ You are "Prophet", a world-class, friendly, and conversational real estate assis
 4.  **Summarize Results:** After the system finds properties, you will be given the results. Your final job is to present these results to the user in a helpful, human-friendly summary. Start with a confirmation, mention the number of properties found, and highlight 1-2 key properties with their title, price, and location. ALWAYS provide links.
 """
 
-# --- FINAL RESPONSE PROMPT (remains the same) ---
+# --- FIX: REVISED FINAL RESPONSE PROMPT ---
+# This new prompt enforces conciseness and Markdown formatting.
 FINAL_RESPONSE_PROMPT_TEMPLATE = """
-You are "Prophet", a helpful real estate assistant. A search has been performed based on the user's criteria.
+You are "Prophet", a helpful real estate assistant. A search has been performed.
 
 **User's final query:** "{user_query}"
 **Search criteria used:** {search_criteria}
-**Properties found:**
+**Properties found summary:**
 {properties_summary}
 
-Your task is to craft a friendly, conversational, and informative response to the user.
-- Start with a confirmation like "Certainly!" or "I've found some great options for you."
-- State the number of properties found.
-- If properties were found, briefly highlight 1-2 of the best matches, mentioning their title, price, and location.
-- Ensure your tone is helpful and professional, not robotic.
-- ALWAYS include the `page_link` for the properties you mention.
-- If no properties were found, say so gracefully and suggest broadening the search criteria.
+Your task is to craft a **concise, friendly, and helpful** response to the user.
+- **Keep it brief:** Your entire response should be under 150 words.
+- **Summarize:** State the number of properties found.
+- **Highlight:** If properties were found, briefly mention 1-2 of the best matches with their title and price.
+- **Use Markdown Links:** When you mention a property, format its link like this: `[Property Title](page_link)`.
+- **Example:** "I found 3 great villas for you in Sharjah. One standout is the [Luxury Sharjah Villa](http://example.com/property/123) for AED 2,500,000. Would you like to see more details or explore other options?"
+- **No Results:** If no properties were found, say so gracefully and suggest broadening the search.
 """
 
 def summarize_properties_for_llm(properties: List[Dict]) -> str:
     if not properties:
         return "No properties found."
+    # --- FIX: Include the page_link in the summary for the LLM to use ---
     summary = ""
-    for p in properties[:5]: # Summarize the top 5
+    for p in properties[:5]:
         summary += f"- Title: {p.get('title', 'N/A')}, Price: {p.get('price', 'N/A')}, Location: {p.get('location', 'N/A')}, Link: {p.get('page_link', 'N/A')}\n"
     return summary
 
@@ -153,14 +154,18 @@ async def handle_chat(request: ChatRequest):
         new_args = json.loads(tool_call.function.arguments)
         
         properties_found = []
-        db_response_data = []
+        db_response = None
         
         if function_name == 'search_all_properties':
             logger.info(f"Tool: FILTER search, New args: {new_args}")
-            is_show_more = "more" in last_user_message.lower() or "options" in last_user_message.lower()
-            if not is_show_more:
-                current_search_params.update(new_args)
             
+            # --- FIX: More robust logic for resetting context ---
+            # If the new query contains a new location and property type, it's a new search.
+            if 'p_location' in new_args and 'p_property_type' in new_args:
+                current_search_params = new_args
+            else:
+                current_search_params.update(new_args)
+
             valid_db_keys = {'p_location', 'p_property_type', 'p_min_price', 'p_max_price', 'p_bedrooms', 'p_amenities'}
             final_args_for_db = {key: current_search_params[key] for key in valid_db_keys if key in current_search_params and current_search_params[key]}
             if current_search_params.get('shown_ids'):
@@ -170,7 +175,6 @@ async def handle_chat(request: ChatRequest):
             db_response = supabase.rpc("search_all_properties", final_args_for_db).execute()
 
         elif function_name == 'match_properties_semantic':
-            # --- FIX: Corrected variable name from 'args' to 'new_args' ---
             logger.info(f"Tool: SEMANTIC search, Query: {new_args.get('query')}")
             if not embedding_model: raise HTTPException(500, "Embedding model not available.")
             
@@ -178,23 +182,22 @@ async def handle_chat(request: ChatRequest):
             embedding = embedding_model.encode(query_text).tolist()
             
             chunk_response = supabase.rpc('match_property_chunks', {
-                "query_embedding": embedding,
-                "match_threshold": 0.75,
-                "match_count": 10
+                "query_embedding": embedding, "match_threshold": 0.75, "match_count": 10
             }).execute()
 
             matched_ids = [item['id'] for item in chunk_response.data]
             if not matched_ids:
-                db_response_data = []
+                properties_found = []
             else:
+                # --- FIX: Ensure db_response is assigned here ---
                 db_response = supabase.from_('unified_listings_view').select('*').in_('id', matched_ids).execute()
+                properties_found = db_response.data
             
             current_search_params = {"semantic_query": query_text}
 
-        # --- FIX: Correct error handling for Supabase client ---
-        # The new client raises an APIError on failure, so we wrap calls in a try/except block.
-        # A successful call's response object does not have an `.error` attribute.
-        properties_found = db_response.data
+        # --- FIX: Unified handling of db_response ---
+        if db_response:
+             properties_found = db_response.data or []
 
         logger.info(f"Found {len(properties_found)} properties.")
         
