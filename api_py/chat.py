@@ -94,8 +94,7 @@ You are "Prophet", a world-class, friendly, and conversational real estate assis
 4.  **Summarize Results:** After the system finds properties, you will be given the results. Your final job is to present these results to the user in a helpful, human-friendly summary. Start with a confirmation, mention the number of properties found, and highlight 1-2 key properties with their title, price, and location. ALWAYS provide links.
 """
 
-# --- FIX: REVISED FINAL RESPONSE PROMPT ---
-# This new prompt enforces conciseness and Markdown formatting.
+# --- FINAL RESPONSE PROMPT ---
 FINAL_RESPONSE_PROMPT_TEMPLATE = """
 You are "Prophet", a helpful real estate assistant. A search has been performed.
 
@@ -103,27 +102,81 @@ You are "Prophet", a helpful real estate assistant. A search has been performed.
 **Search criteria used:** {search_criteria}
 **Properties found summary:**
 {properties_summary}
+**Special Context:** {special_context}
 
-Your task is to craft a **concise, friendly, and helpful** response to the user.
+Your task is to craft a **concise, friendly, and helpful** response to the user based on the context.
 - **Keep it brief:** Your entire response should be under 150 words.
+- **Handle No New Results:** If the special context is "NO_NEW_RESULTS", you MUST inform the user that you've already shown them all matching properties and suggest they broaden their search.
+- **Handle Fallback:** If the special context is "FALLBACK_TO_SEMANTIC", explain that you couldn't find an exact match for the filters but found some conceptually similar properties.
 - **Summarize:** State the number of properties found.
 - **Highlight:** If properties were found, briefly mention 1-2 of the best matches with their title and price.
 - **Use Markdown Links:** When you mention a property, format its link like this: `[Property Title](page_link)`.
-- **Example:** "I found 3 great villas for you in Sharjah. One standout is the [Luxury Sharjah Villa](http://example.com/property/123) for AED 2,500,000. Would you like to see more details or explore other options?"
-- **No Results:** If no properties were found, say so gracefully and suggest broadening the search.
+- **No Results:** If no properties were found, say so gracefully and suggest different criteria.
 """
+
+# --- QUERY EXPANSION PROMPT ---
+QUERY_EXPANSION_PROMPT_TEMPLATE = """
+You are a search query expansion expert. Your task is to rewrite a short, abstract user query into a more descriptive sentence that captures the user's likely intent for a real estate search. The expanded query should be ideal for a vector database search.
+
+**Examples:**
+- User query: "lots of greenery"
+- Expanded query: "A property that features lush green spaces, gardens, parks, or a forest-like, natural and peaceful environment."
+
+- User query: "sea view"
+- Expanded query: "A property with a direct and clear view of the sea or ocean from its windows, balcony, or terrace."
+
+---
+User query: "{user_query}"
+Expanded query:
+"""
+
 
 def summarize_properties_for_llm(properties: List[Dict]) -> str:
     if not properties:
         return "No properties found."
-    # --- FIX: Include the page_link in the summary for the LLM to use ---
     summary = ""
     for p in properties[:5]:
         summary += f"- Title: {p.get('title', 'N/A')}, Price: {p.get('price', 'N/A')}, Location: {p.get('location', 'N/A')}, Link: {p.get('page_link', 'N/A')}\n"
     return summary
 
+def run_semantic_search(query_text: str) -> List[Dict]:
+    """Helper function to run a semantic search and return property data."""
+    logger.info(f"Running semantic search for: '{query_text}'")
+    if not embedding_model:
+        raise HTTPException(500, "Embedding model not available.")
+
+    if len(query_text.split()) <= 5:
+        logger.info("Short query detected. Expanding for better results...")
+        expansion_prompt = QUERY_EXPANSION_PROMPT_TEMPLATE.format(user_query=query_text)
+        try:
+            expansion_response = groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[{"role": "system", "content": expansion_prompt}],
+                temperature=0
+            )
+            expanded_query = expansion_response.choices[0].message.content.strip()
+            query_text = expanded_query
+            logger.info(f"Expanded query to: '{query_text}'")
+        except Exception as e:
+            logger.error(f"Failed to expand query: {e}. Using original query.")
+
+    embedding = embedding_model.encode(query_text).tolist()
+    
+    chunk_response = supabase.rpc('match_property_chunks', {
+        "query_embedding": embedding, "match_threshold": 0.72, "match_count": 15
+    }).execute()
+
+    matched_ids = list({item['id'] for item in chunk_response.data})
+    
+    if not matched_ids:
+        return []
+    
+    properties_response = supabase.from_('unified_listings_view').select('*').in_('id', matched_ids).execute()
+    return properties_response.data or []
+
+
 @app.post("/api/chat", response_model=ChatResponse)
-async def handle_chat(request: ChatRequest):
+def handle_chat(request: ChatRequest):
     current_search_params = request.session_state or {}
     last_user_message = request.messages[-1].content
     logger.info(f"Received message: '{last_user_message}' with current state: {current_search_params}")
@@ -131,11 +184,15 @@ async def handle_chat(request: ChatRequest):
     if last_user_message.lower().strip() in ["clear", "reset", "start over", "new search", "start afresh"]:
         return ChatResponse(text_response="Let's start fresh! What are you looking for?", properties=[], session_state={})
 
+    # --- FIX: Implement History Trimming ---
+    # Keep the system prompt, context, and only the last 4 messages (2 user, 2 assistant)
     messages_for_planning = [{"role": "system", "content": SYSTEM_PROMPT}]
     if current_search_params:
         context_message = f"Current search criteria: {json.dumps(current_search_params)}"
         messages_for_planning.append({"role": "system", "content": context_message})
-    messages_for_planning.extend([msg.dict() for msg in request.messages])
+    
+    # Add the last 4 messages from the history
+    messages_for_planning.extend([msg.dict() for msg in request.messages[-4:]])
 
     try:
         response = groq_client.chat.completions.create(
@@ -154,50 +211,38 @@ async def handle_chat(request: ChatRequest):
         new_args = json.loads(tool_call.function.arguments)
         
         properties_found = []
-        db_response = None
+        special_context = "NONE"
         
         if function_name == 'search_all_properties':
             logger.info(f"Tool: FILTER search, New args: {new_args}")
             
-            # --- FIX: More robust logic for resetting context ---
-            # If the new query contains a new location and property type, it's a new search.
-            if 'p_location' in new_args and 'p_property_type' in new_args:
-                current_search_params = new_args
-            else:
+            is_show_more = "more" in last_user_message.lower() or "options" in last_user_message.lower()
+            if not is_show_more:
                 current_search_params.update(new_args)
 
             valid_db_keys = {'p_location', 'p_property_type', 'p_min_price', 'p_max_price', 'p_bedrooms', 'p_amenities'}
             final_args_for_db = {key: current_search_params[key] for key in valid_db_keys if key in current_search_params and current_search_params[key]}
+            
             if current_search_params.get('shown_ids'):
                 final_args_for_db['p_exclude_ids'] = current_search_params['shown_ids']
             
             logger.info(f"Executing 'search_all_properties' with: {final_args_for_db}")
             db_response = supabase.rpc("search_all_properties", final_args_for_db).execute()
+            properties_found = db_response.data or []
+            
+            if not properties_found and not is_show_more:
+                logger.info("Filter search returned 0 results. Falling back to semantic search.")
+                special_context = "FALLBACK_TO_SEMANTIC"
+                properties_found = run_semantic_search(last_user_message)
+                current_search_params = {"semantic_query": last_user_message}
+
+            elif is_show_more and not properties_found:
+                special_context = "NO_NEW_RESULTS"
 
         elif function_name == 'match_properties_semantic':
-            logger.info(f"Tool: SEMANTIC search, Query: {new_args.get('query')}")
-            if not embedding_model: raise HTTPException(500, "Embedding model not available.")
-            
             query_text = new_args.get("query")
-            embedding = embedding_model.encode(query_text).tolist()
-            
-            chunk_response = supabase.rpc('match_property_chunks', {
-                "query_embedding": embedding, "match_threshold": 0.75, "match_count": 10
-            }).execute()
-
-            matched_ids = [item['id'] for item in chunk_response.data]
-            if not matched_ids:
-                properties_found = []
-            else:
-                # --- FIX: Ensure db_response is assigned here ---
-                db_response = supabase.from_('unified_listings_view').select('*').in_('id', matched_ids).execute()
-                properties_found = db_response.data
-            
+            properties_found = run_semantic_search(query_text)
             current_search_params = {"semantic_query": query_text}
-
-        # --- FIX: Unified handling of db_response ---
-        if db_response:
-             properties_found = db_response.data or []
 
         logger.info(f"Found {len(properties_found)} properties.")
         
@@ -209,7 +254,8 @@ async def handle_chat(request: ChatRequest):
         final_prompt = FINAL_RESPONSE_PROMPT_TEMPLATE.format(
             user_query=last_user_message,
             search_criteria=json.dumps(current_search_params),
-            properties_summary=properties_summary
+            properties_summary=properties_summary,
+            special_context=special_context
         )
         
         final_response_completion = groq_client.chat.completions.create(

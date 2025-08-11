@@ -1,11 +1,9 @@
 #Tell the installer to look for CPU-specific torch versions at this URL
---extra-index-url https://download.pytorch.org/whl/cpu
-
+ 
 fastapi
 uvicorn[standard]
 python-dotenv
 groq
 supabase
 sentence-transformers
-torch==2.2.2+cpu
 pydantic
