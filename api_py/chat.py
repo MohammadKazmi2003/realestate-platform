@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+# --- FIX: Add your app's base URL for constructing full links ---
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
+
+
 if not SUPABASE_URL or not SUPABASE_KEY or not GROQ_API_KEY:
     raise ValueError("Supabase and Groq API keys must be set.")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -94,24 +98,22 @@ You are "Prophet", a world-class, friendly, and conversational real estate assis
 4.  **Summarize Results:** After the system finds properties, you will be given the results. Your final job is to present these results to the user in a helpful, human-friendly summary. Start with a confirmation, mention the number of properties found, and highlight 1-2 key properties with their title, price, and location. ALWAYS provide links.
 """
 
-# --- FINAL RESPONSE PROMPT ---
+# --- FIX: Updated FINAL RESPONSE PROMPT ---
 FINAL_RESPONSE_PROMPT_TEMPLATE = """
 You are "Prophet", a helpful real estate assistant. A search has been performed.
 
 **User's final query:** "{user_query}"
-**Search criteria used:** {search_criteria}
-**Properties found summary:**
+**Total properties found:** {total_found}
+**Summary of top properties provided to you:**
 {properties_summary}
 **Special Context:** {special_context}
 
-Your task is to craft a **concise, friendly, and helpful** response to the user based on the context.
-- **Keep it brief:** Your entire response should be under 150 words.
-- **Handle No New Results:** If the special context is "NO_NEW_RESULTS", you MUST inform the user that you've already shown them all matching properties and suggest they broaden their search.
-- **Handle Fallback:** If the special context is "FALLBACK_TO_SEMANTIC", explain that you couldn't find an exact match for the filters but found some conceptually similar properties.
-- **Summarize:** State the number of properties found.
-- **Highlight:** If properties were found, briefly mention 1-2 of the best matches with their title and price.
-- **Use Markdown Links:** When you mention a property, format its link like this: `[Property Title](page_link)`.
-- **No Results:** If no properties were found, say so gracefully and suggest different criteria.
+Your task is to craft a **concise, friendly, and helpful** response.
+- **Be Honest:** State the total number of properties found.
+- **Highlight Only What You See:** Mention 1-2 of the best matches from the summary provided to you. DO NOT promise to show all properties.
+- **Use Markdown Links:** When you mention a property, you MUST use the full URL provided in the summary. Format it like this: `[Property Title](full_url)`.
+- **Example:** "I found 12 properties matching your search. A couple of great options are the [Luxury Sharjah Villa](http://localhost:3000/project/shoumous-property/sharjah-garden-city) and the [Downtown Apartment](http://localhost:3000/property/...). Would you like to refine your search?"
+- **No Results:** If no properties were found, say so gracefully.
 """
 
 # --- QUERY EXPANSION PROMPT ---
@@ -136,7 +138,9 @@ def summarize_properties_for_llm(properties: List[Dict]) -> str:
         return "No properties found."
     summary = ""
     for p in properties[:5]:
-        summary += f"- Title: {p.get('title', 'N/A')}, Price: {p.get('price', 'N/A')}, Location: {p.get('location', 'N/A')}, Link: {p.get('page_link', 'N/A')}\n"
+        # --- FIX: Construct a full, absolute URL ---
+        full_link = f"{APP_BASE_URL}{p.get('page_link', '')}"
+        summary += f"- Title: {p.get('title', 'N/A')}, Price: {p.get('price', 'N/A')}, Location: {p.get('location', 'N/A')}, Link: {full_link}\n"
     return summary
 
 def run_semantic_search(query_text: str) -> List[Dict]:
@@ -163,7 +167,7 @@ def run_semantic_search(query_text: str) -> List[Dict]:
     embedding = embedding_model.encode(query_text).tolist()
     
     chunk_response = supabase.rpc('match_property_chunks', {
-        "query_embedding": embedding, "match_threshold": 0.72, "match_count": 15
+        "query_embedding": embedding, "match_threshold": 0.60, "match_count": 15
     }).execute()
 
     matched_ids = list({item['id'] for item in chunk_response.data})
@@ -181,17 +185,17 @@ def handle_chat(request: ChatRequest):
     last_user_message = request.messages[-1].content
     logger.info(f"Received message: '{last_user_message}' with current state: {current_search_params}")
 
-    if last_user_message.lower().strip() in ["clear", "reset", "start over", "new search", "start afresh"]:
+    if last_user_message.lower().strip() in ["clear", "reset", "start over", "new search", "start afresh","new chat"]:
         return ChatResponse(text_response="Let's start fresh! What are you looking for?", properties=[], session_state={})
 
-    # --- FIX: Implement History Trimming ---
-    # Keep the system prompt, context, and only the last 4 messages (2 user, 2 assistant)
     messages_for_planning = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if current_search_params:
-        context_message = f"Current search criteria: {json.dumps(current_search_params)}"
-        messages_for_planning.append({"role": "system", "content": context_message})
     
-    # Add the last 4 messages from the history
+    if current_search_params:
+        llm_context = {k: v for k, v in current_search_params.items() if k != 'shown_ids'}
+        if llm_context:
+            context_message = f"Current search criteria: {json.dumps(llm_context)}"
+            messages_for_planning.append({"role": "system", "content": context_message})
+    
     messages_for_planning.extend([msg.dict() for msg in request.messages[-4:]])
 
     try:
@@ -255,7 +259,8 @@ def handle_chat(request: ChatRequest):
             user_query=last_user_message,
             search_criteria=json.dumps(current_search_params),
             properties_summary=properties_summary,
-            special_context=special_context
+            special_context=special_context,
+            total_found=len(properties_found) # Pass the total count
         )
         
         final_response_completion = groq_client.chat.completions.create(

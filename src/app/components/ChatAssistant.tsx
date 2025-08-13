@@ -116,12 +116,17 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
                 <div className={`max-w-xs md:max-w-sm ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} rounded-2xl p-3`}>
                 <ReactMarkdown
                   components={{
-                    // Target the 'a' (link) tag and apply your desired class
-                    a: ({node, ...props}) => <a className="text-blue-600 underline font-medium" {...props} />,
-                    // Target the 'p' (paragraph) tag to remove default margins
+                    a: ({node, ...props}) => (
+                      <a 
+                        className="text-blue-600 underline font-medium" 
+                        {...props} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                      />
+                    ),
                     p: ({node, ...props}) => <p className="m-0" {...props} />
                   }}
-                  >
+                >
                   {msg.content}
                 </ReactMarkdown>
                 </div>
