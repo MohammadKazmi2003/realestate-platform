@@ -11,7 +11,7 @@ const nextConfig = {
       },
       {
         protocol: 'https',
-        hostname: '**.propertyfinder.com', // This will match new-projects-media.propertyfinder.com
+        hostname: '**.propertyfinder.com',
       },
       {
         protocol: 'https',
@@ -25,17 +25,27 @@ const nextConfig = {
     config.resolve.fallback = { fs: false, net: false, tls: false };
     return config;
   },
-  // We are preserving this block from your old config for consistency.
   env: {
     SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   },
-  // These settings are crucial for a successful deployment.
   eslint: {
     ignoreDuringBuilds: true,
   },
   typescript: {
     ignoreBuildErrors: true,
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/api/chat',
+        destination: 'http://localhost:8000/api/chat',
+      },
+      {
+        source: '/api/health',
+        destination: 'http://localhost:8000/health',
+      },
+    ];
   },
 };
 
@@ -45,5 +55,5 @@ if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_A
   process.exit(1);
 }
 
-// Use ESM export default syntax
+// ✅ Use ESM export syntax
 export default nextConfig;
