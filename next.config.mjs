@@ -42,6 +42,10 @@ const nextConfig = {
         destination: 'http://localhost:8000/api/chat',
       },
       {
+        source: '/api/chat_langchain',
+        destination: 'http://localhost:8000/api/chat_langchain',
+      },
+      {
         source: '/api/health',
         destination: 'http://localhost:8000/health',
       },

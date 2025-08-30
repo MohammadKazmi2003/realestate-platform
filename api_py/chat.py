@@ -1,47 +1,59 @@
-# api/chat.py
-
 import os
-import json
-import logging
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+import re
+from dotenv import load_dotenv, find_dotenv
+
+# --- Configuration & Initialization ---
+
+# Use find_dotenv() to automatically locate the .env file in the project root
+load_dotenv(find_dotenv())
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import spacy
+from spacy.matcher import Matcher
+from typing import Dict, Any, List, Optional, Tuple
+from pydantic import BaseModel, Field
 import groq
 from supabase import create_client, Client
-from decimal import Decimal
+import logging
+from datetime import datetime
+from cachetools import TTLCache
 from sentence_transformers import SentenceTransformer
-from dotenv import load_dotenv
-from postgrest.exceptions import APIError
 
-load_dotenv()
+# Logging Configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- SETUP ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Environment Variables
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-# --- FIX: Add your app's base URL for constructing full links ---
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
 
+if not all([SUPABASE_URL, SUPABASE_KEY, GROQ_API_KEY]):
+    raise ValueError("Missing required environment variables (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY)")
 
-if not SUPABASE_URL or not SUPABASE_KEY or not GROQ_API_KEY:
-    raise ValueError("Supabase and Groq API keys must be set.")
+# API Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-groq_client = groq.Client(api_key=GROQ_API_KEY)
+llm = groq.Client(api_key=GROQ_API_KEY)
+app = FastAPI()
+
+# spaCy & Embedding Models
 try:
+    nlp = spacy.load("en_core_web_lg")
     embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v1', trust_remote_code=True)
-except Exception as e:
-    logger.error(f"Failed to load SentenceTransformer model: {e}")
+except OSError:
+    logging.error("SpaCy model or SentenceTransformer not found. Please run 'pip install en_core_web_lg sentence-transformers'.")
+    nlp = None
     embedding_model = None
 
-# --- MODELS ---
+# In-memory cache for conversation state
+conversation_cache = TTLCache(maxsize=1000, ttl=3600)
+
+
+# --- Pydantic Models ---
 class Message(BaseModel):
     role: str
     content: str
-class ChatRequest(BaseModel):
-    messages: List[Message]
-    session_state: Optional[Dict[str, Any]] = {}
+
 class PropertyCard(BaseModel):
     id: str
     title: Optional[str] = None
@@ -51,236 +63,233 @@ class PropertyCard(BaseModel):
     location: Optional[str] = None
     bedrooms: Optional[int] = None
     page_link: Optional[str] = None
+    description: Optional[str] = None
+
+class ChatRequest(BaseModel):
+    messages: List[Message]
+    session_id: str
+    session_state: Optional[Dict[str, Any]] = {}
+
 class ChatResponse(BaseModel):
     text_response: str
     properties: List[PropertyCard] = []
     session_state: Dict[str, Any]
 
-app = FastAPI()
+class SearchParameters(BaseModel):
+    locations: List[str] = Field(default_factory=list)
+    property_types: List[str] = Field(default_factory=list)
+    min_price: Optional[float] = None
+    max_price: Optional[float] = None
+    min_bedrooms: Optional[int] = None
+    amenities: List[str] = Field(default_factory=list)
 
-# --- FUNCTION SCHEMAS ---
-FILTER_SEARCH_SCHEMA = {
-    "name": "search_all_properties",
-    "description": "Searches for properties using specific, concrete filters like location, price, or bedroom count.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "p_location": {"type": "string"}, "p_property_type": {"type": "string"},
-            "p_min_price": {"type": "number"}, "p_max_price": {"type": "number"},
-            "p_bedrooms": {"type": "integer"},
-            "p_amenities": {"type": "array", "items": {"type": "string"}},
-        },
-    },
-}
-SEMANTIC_SEARCH_SCHEMA = {
-    "name": "match_properties_semantic",
-    "description": "Use for abstract, conceptual, or lifestyle-based queries like 'peaceful homes' or 'good for families'.",
-    "parameters": {
-        "type": "object",
-        "properties": {"query": {"type": "string", "description": "The user's original, natural language query text."}},
-        "required": ["query"],
-    },
-}
+class ConversationState(BaseModel):
+    session_id: str
+    history: List[Message] = Field(default_factory=list)
+    search_params: SearchParameters = Field(default_factory=SearchParameters)
+    last_search_results: List[Dict[str, Any]] = Field(default_factory=list)
+    focused_property_id: Optional[str] = None
+    shown_ids: List[str] = Field(default_factory=list)
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
 
-# --- MASTER SYSTEM PROMPT ---
-SYSTEM_PROMPT = """
-You are "Prophet", a world-class, friendly, and conversational real estate assistant for the UAE. Your goal is to help users find their dream property.
+# --- Domain Knowledge ---
+DOMAIN_SYNONYMS = {"payment_plan": ["payment schedule", "installment plan"], "price": ["cost", "budget"]}
+AMENITIES_KEYWORDS = ["pool", "gym", "parking", "balcony", "security", "garden", "playground"]
+PROPERTY_TYPE_KEYWORDS = ["apartment", "villa", "townhouse", "penthouse", "land", "commercial"]
 
-**YOUR BEHAVIOR:**
-1.  **Analyze Intent:** First, understand the user's intent. Are they providing specific filters (like "3 bedrooms in Dubai Marina"), or are they describing a feeling or lifestyle (like "a quiet place with a nice view")?
-2.  **Tool Selection:**
-    * For specific filters, always use the `search_all_properties` tool.
-    * For abstract or lifestyle queries, always use the `match_properties_semantic` tool.
-3.  **Conversational Memory:** The user's current search criteria are provided. Use this to handle follow-up questions.
-    * If they add a filter ("with a pool"), call `search_all_properties` with BOTH the old criteria and the new amenity.
-    * If they change a filter ("in Abu Dhabi instead"), call `search_all_properties` replacing the old location with the new one.
-    * If they ask for "more options", call `search_all_properties` with the exact same criteria again.
-4.  **Summarize Results:** After the system finds properties, you will be given the results. Your final job is to present these results to the user in a helpful, human-friendly summary. Start with a confirmation, mention the number of properties found, and highlight 1-2 key properties with their title, price, and location. ALWAYS provide links.
-"""
+# --- Core Logic ---
+class NLUProcessor:
+    def __init__(self, nlp_model):
+        self.nlp = nlp_model
 
-# --- FIX: Updated FINAL RESPONSE PROMPT ---
-FINAL_RESPONSE_PROMPT_TEMPLATE = """
-You are "Prophet", a helpful real estate assistant. A search has been performed.
+    def extract_entities(self, text: str) -> Dict[str, Any]:
+        if not self.nlp: return {}
+        doc = self.nlp(text.lower())
+        entities = {
+            "locations": [ent.text.title() for ent in doc.ents if ent.label_ in ["GPE", "LOC"]],
+            "prices": [float(ent.text) for ent in doc.ents if ent.label_ == "MONEY"],
+            "numbers": [int(token.text) for token in doc if token.like_num and token.is_digit],
+            "amenities": [token.lemma_ for token in doc if token.lemma_ in AMENITIES_KEYWORDS],
+            "property_types": [token.lemma_ for token in doc if token.lemma_ in PROPERTY_TYPE_KEYWORDS]
+        }
+        return entities
 
-**User's final query:** "{user_query}"
-**Total properties found:** {total_found}
-**Summary of top properties provided to you:**
-{properties_summary}
-**Special Context:** {special_context}
+    def classify_intent(self, text: str, state: ConversationState) -> str:
+        text = text.lower()
+        if any(kw in text for kw in ["search", "find", "look for", "show me"]): return "SEARCH"
+        if state.last_search_results:
+            if any(kw in text for kw in ["first one", "second one", "third one", "last one"]): return "SELECT_PROPERTY"
+            if any(kw in text for kw in DOMAIN_SYNONYMS["payment_plan"] + ["payment plan", "price", "how much"]): return "GET_DETAILS"
+        return "REFINE_SEARCH"
 
-Your task is to craft a **concise, friendly, and helpful** response.
-- **Be Honest:** State the total number of properties found.
-- **Highlight Only What You See:** Mention 1-2 of the best matches from the summary provided to you. DO NOT promise to show all properties.
-- **Use Markdown Links:** When you mention a property, you MUST use the full URL provided in the summary. Format it like this: `[Property Title](full_url)`.
-- **Example:** "I found 12 properties matching your search. A couple of great options are the [Luxury Sharjah Villa](http://localhost:3000/project/shoumous-property/sharjah-garden-city) and the [Downtown Apartment](http://localhost:3000/property/...). Would you like to refine your search?"
-- **No Results:** If no properties were found, say so gracefully.
-"""
+class ConversationManager:
+    @staticmethod
+    def get_state(session_id: str, initial_state: dict) -> ConversationState:
+        if session_id in conversation_cache: return conversation_cache[session_id]
+        return ConversationState(session_id=session_id, **initial_state)
 
-# --- QUERY EXPANSION PROMPT ---
-QUERY_EXPANSION_PROMPT_TEMPLATE = """
-You are a search query expansion expert. Your task is to rewrite a short, abstract user query into a more descriptive sentence that captures the user's likely intent for a real estate search. The expanded query should be ideal for a vector database search.
+    @staticmethod
+    def save_state(state: ConversationState):
+        state.last_updated = datetime.utcnow()
+        conversation_cache[state.session_id] = state
 
-**Examples:**
-- User query: "lots of greenery"
-- Expanded query: "A property that features lush green spaces, gardens, parks, or a forest-like, natural and peaceful environment."
+    @staticmethod
+    def update_search_params(state: ConversationState, entities: dict) -> ConversationState:
+        params = state.search_params
+        if entities.get("locations"): params.locations = list(set(params.locations + entities["locations"]))
+        if entities.get("property_types"): params.property_types = list(set(params.property_types + entities["property_types"]))
+        if entities.get("prices"): params.max_price = entities["prices"][0]
+        if entities.get("numbers"): params.min_bedrooms = entities["numbers"][0]
+        if entities.get("amenities"): params.amenities = list(set(params.amenities + entities["amenities"]))
+        state.search_params = params
+        return state
 
-- User query: "sea view"
-- Expanded query: "A property with a direct and clear view of the sea or ocean from its windows, balcony, or terrace."
-
----
-User query: "{user_query}"
-Expanded query:
-"""
-
-
-def summarize_properties_for_llm(properties: List[Dict]) -> str:
-    if not properties:
-        return "No properties found."
-    summary = ""
-    for p in properties[:5]:
-        # --- FIX: Construct a full, absolute URL ---
-        full_link = f"{APP_BASE_URL}{p.get('page_link', '')}"
-        summary += f"- Title: {p.get('title', 'N/A')}, Price: {p.get('price', 'N/A')}, Location: {p.get('location', 'N/A')}, Link: {full_link}\n"
-    return summary
-
-def run_semantic_search(query_text: str) -> List[Dict]:
-    """Helper function to run a semantic search and return property data."""
-    logger.info(f"Running semantic search for: '{query_text}'")
-    if not embedding_model:
-        raise HTTPException(500, "Embedding model not available.")
-
-    if len(query_text.split()) <= 5:
-        logger.info("Short query detected. Expanding for better results...")
-        expansion_prompt = QUERY_EXPANSION_PROMPT_TEMPLATE.format(user_query=query_text)
+class SearchHandler:
+    @staticmethod
+    def search_properties(params: SearchParameters, exclude_ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            expansion_response = groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[{"role": "system", "content": expansion_prompt}],
-                temperature=0
-            )
-            expanded_query = expansion_response.choices[0].message.content.strip()
-            query_text = expanded_query
-            logger.info(f"Expanded query to: '{query_text}'")
+            # ** FIX **: Parameters are now passed as lists (arrays) to match the SQL function.
+            rpc_params = {
+                "p_property_types": params.property_types or None,
+                "p_locations": params.locations or None,
+                "p_min_price": params.min_price,
+                "p_max_price": params.max_price,
+                "p_min_bedrooms": params.min_bedrooms,
+                "p_amenities": params.amenities or None,
+                "p_exclude_ids": exclude_ids or None
+            }
+            logging.info(f"Filtered search with corrected params: {rpc_params}")
+            response = supabase.rpc("search_all_properties", rpc_params).execute()
+            return response.data or []
         except Exception as e:
-            logger.error(f"Failed to expand query: {e}. Using original query.")
+            logging.error(f"Filtered search failed: {e}")
+            return []
 
-    embedding = embedding_model.encode(query_text).tolist()
-    
-    chunk_response = supabase.rpc('match_property_chunks', {
-        "query_embedding": embedding, "match_threshold": 0.60, "match_count": 15
-    }).execute()
+    @staticmethod
+    def semantic_search(query: str, exclude_ids: List[str]) -> List[Dict[str, Any]]:
+        if not embedding_model: return []
+        try:
+            embedding = embedding_model.encode(query).tolist()
+            params = {"query_embedding": embedding, "match_threshold": 0.6, "match_count": 20, "p_exclude_ids": exclude_ids or None}
+            logging.info(f"Semantic search for: '{query}'")
+            return supabase.rpc("semantic_search_properties", params).execute().data or []
+        except Exception as e:
+            logging.error(f"Semantic search failed: {e}")
+            return []
 
-    matched_ids = list({item['id'] for item in chunk_response.data})
-    
-    if not matched_ids:
-        return []
-    
-    properties_response = supabase.from_('unified_listings_view').select('*').in_('id', matched_ids).execute()
-    return properties_response.data or []
+class ResponseGenerator:
+    @staticmethod
+    def generate_response(prompt: str, messages: List[Message]) -> str:
+        try:
+            system_message = {"role": "system", "content": "You are a helpful and concise real estate assistant."}
+            user_prompt = {"role": "user", "content": prompt}
+            history = [msg.dict() for msg in messages[-4:]]
+            completion = llm.chat.completions.create(
+                model="llama3-70b-8192", messages=[system_message, *history, user_prompt],
+                temperature=0.3, max_tokens=1024
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Groq API call failed: {e}")
+            return "I'm sorry, an unexpected error occurred."
 
+    def summary_of_results(self, properties: List[Dict], query: str, messages: List[Message]) -> str:
+        if not properties: return "I couldn't find any properties matching your criteria. Would you like to try a different search?"
+        
+        prop_summaries = []
+        for p in properties[:5]:
+            prop_summaries.append(f"- **{p.get('title')}** in {p.get('location')} for AED {p.get('price'):,}")
+        
+        summaries_text = "\n".join(prop_summaries)
+        prompt = f"""
+        User asked: "{query}"
+        I found {len(properties)} properties. Here are the top results:
+        {summaries_text}
+        
+        Please provide a friendly, brief summary of these findings and ask if the user wants more details on one or to refine the search.
+        """
+        return self.generate_response(prompt, messages)
+
+    def single_property_details(self, prop: Dict, detail_request: str, messages: List[Message]) -> str:
+        prompt = f"""
+        The user is asking for details about the property: "{prop.get('title')}"
+        Their specific question is: "{detail_request}"
+        
+        Here is the property's information:
+        - Description: {prop.get('description')}
+        - Payment Plan: {prop.get('payment_plan')}
+        - Handover Year: {prop.get('handover_year')}
+        
+        Answer the user's question based *only* on the provided information. If a detail is not present, say so.
+        """
+        return self.generate_response(prompt, messages)
+
+# --- FastAPI App ---
+app = FastAPI()
+nlu_processor = NLUProcessor(nlp)
+response_generator = ResponseGenerator()
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.post("/api/chat", response_model=ChatResponse)
-def handle_chat(request: ChatRequest):
-    current_search_params = request.session_state or {}
-    last_user_message = request.messages[-1].content
-    logger.info(f"Received message: '{last_user_message}' with current state: {current_search_params}")
-
-    if last_user_message.lower().strip() in ["clear", "reset", "start over", "new search", "start afresh","new chat"]:
-        return ChatResponse(text_response="Let's start fresh! What are you looking for?", properties=[], session_state={})
-
-    messages_for_planning = [{"role": "system", "content": SYSTEM_PROMPT}]
-    
-    if current_search_params:
-        llm_context = {k: v for k, v in current_search_params.items() if k != 'shown_ids'}
-        if llm_context:
-            context_message = f"Current search criteria: {json.dumps(llm_context)}"
-            messages_for_planning.append({"role": "system", "content": context_message})
-    
-    messages_for_planning.extend([msg.dict() for msg in request.messages[-4:]])
-
+async def chat(req: ChatRequest):
     try:
-        response = groq_client.chat.completions.create(
-            model="llama3-70b-8192", messages=messages_for_planning,
-            tools=[{"type": "function", "function": FILTER_SEARCH_SCHEMA}, {"type": "function", "function": SEMANTIC_SEARCH_SCHEMA}],
-            tool_choice="auto", temperature=0
-        )
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
+        state = ConversationManager.get_state(req.session_id, req.session_state)
+        state.history.extend(req.messages)
+        user_msg = req.messages[-1].content
 
-        if not tool_calls:
-            return ChatResponse(text_response=response_message.content or "How can I help you further?", properties=[], session_state=current_search_params)
+        entities = nlu_processor.extract_entities(user_msg)
+        state = ConversationManager.update_search_params(state, entities)
+        intent = nlu_processor.classify_intent(user_msg, state)
+        logging.info(f"Session: {req.session_id}, Intent: {intent}")
 
-        tool_call = tool_calls[0]
-        function_name = tool_call.function.name
-        new_args = json.loads(tool_call.function.arguments)
-        
-        properties_found = []
-        special_context = "NONE"
-        
-        if function_name == 'search_all_properties':
-            logger.info(f"Tool: FILTER search, New args: {new_args}")
+        text_response, properties = "", []
+
+        if intent in ["SEARCH", "REFINE_SEARCH"]:
+            # Switch to semantic search for broad, non-specific queries
+            if not any([state.search_params.locations, state.search_params.property_types, state.search_params.min_price, state.search_params.max_price, state.search_params.min_bedrooms]):
+                results = SearchHandler.semantic_search(user_msg, state.shown_ids)
+            else:
+                results = SearchHandler.search_properties(state.search_params, state.shown_ids)
             
-            is_show_more = "more" in last_user_message.lower() or "options" in last_user_message.lower()
-            if not is_show_more:
-                current_search_params.update(new_args)
+            if not results:
+                text_response = "I couldn't find any properties matching your new criteria. You can try broadening your search."
+            else:
+                state.last_search_results = results
+                state.shown_ids.extend([str(p['id']) for p in results])
+                text_response = response_generator.summary_of_results(results, user_msg, state.history)
+                properties = [PropertyCard(**p) for p in results[:5]]
 
-            valid_db_keys = {'p_location', 'p_property_type', 'p_min_price', 'p_max_price', 'p_bedrooms', 'p_amenities'}
-            final_args_for_db = {key: current_search_params[key] for key in valid_db_keys if key in current_search_params and current_search_params[key]}
+        elif intent == "SELECT_PROPERTY":
+            idx = -1
+            if "first" in user_msg.lower(): idx = 0
+            elif "second" in user_msg.lower(): idx = 1
             
-            if current_search_params.get('shown_ids'):
-                final_args_for_db['p_exclude_ids'] = current_search_params['shown_ids']
-            
-            logger.info(f"Executing 'search_all_properties' with: {final_args_for_db}")
-            db_response = supabase.rpc("search_all_properties", final_args_for_db).execute()
-            properties_found = db_response.data or []
-            
-            if not properties_found and not is_show_more:
-                logger.info("Filter search returned 0 results. Falling back to semantic search.")
-                special_context = "FALLBACK_TO_SEMANTIC"
-                properties_found = run_semantic_search(last_user_message)
-                current_search_params = {"semantic_query": last_user_message}
+            if 0 <= idx < len(state.last_search_results):
+                prop = state.last_search_results[idx]
+                state.focused_property_id = str(prop.get('id'))
+                text_response = response_generator.single_property_details(prop, "Tell me more about it.", state.history)
+                properties = [PropertyCard(**prop)]
+            else:
+                text_response = "Sorry, I couldn't figure out which property you meant."
 
-            elif is_show_more and not properties_found:
-                special_context = "NO_NEW_RESULTS"
+        elif intent == "GET_DETAILS" and state.focused_property_id:
+            prop = next((p for p in state.last_search_results if str(p.get('id')) == state.focused_property_id), None)
+            if prop:
+                text_response = response_generator.single_property_details(prop, user_msg, state.history)
+                properties = [PropertyCard(**prop)]
+            else:
+                text_response = "I've lost track of the property. Could you clarify?"
+        else:
+            text_response = response_generator.generate_response(user_msg, state.history)
 
-        elif function_name == 'match_properties_semantic':
-            query_text = new_args.get("query")
-            properties_found = run_semantic_search(query_text)
-            current_search_params = {"semantic_query": query_text}
+        ConversationManager.save_state(state)
+        return ChatResponse(text_response=text_response, properties=properties, session_state=state.dict(exclude={'history'}))
 
-        logger.info(f"Found {len(properties_found)} properties.")
-        
-        newly_shown_ids = [p['id'] for p in properties_found]
-        all_shown_ids = list(set(current_search_params.get('shown_ids', []) + newly_shown_ids))
-        current_search_params['shown_ids'] = all_shown_ids
-
-        properties_summary = summarize_properties_for_llm(properties_found)
-        final_prompt = FINAL_RESPONSE_PROMPT_TEMPLATE.format(
-            user_query=last_user_message,
-            search_criteria=json.dumps(current_search_params),
-            properties_summary=properties_summary,
-            special_context=special_context,
-            total_found=len(properties_found) # Pass the total count
-        )
-        
-        final_response_completion = groq_client.chat.completions.create(
-            model="llama3-70b-8192",
-            messages=[{"role": "system", "content": final_prompt}],
-            temperature=0.2
-        )
-        text_content = final_response_completion.choices[0].message.content
-
-        valid_properties = [PropertyCard(**p) for p in properties_found]
-
-        return ChatResponse(
-            text_response=text_content, 
-            properties=valid_properties,
-            session_state=current_search_params
-        )
-
-    except APIError as e:
-        logger.error(f"Supabase API Error: {e.message}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Database error: {e.message}")
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}", exc_info=True) 
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+        logging.error(f"Chat endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
+@app.get("/")
+def read_root(): return {"status": "ok"}
+

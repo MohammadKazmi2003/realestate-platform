@@ -3,9 +3,9 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, User, Sparkles, X } from 'lucide-react';
-import { ChatPropertyCard } from './ChatPropertyCard';
+import { ChatPropertyCard } from '@/app/components/ChatPropertyCard';
 import ReactMarkdown from 'react-markdown';
-import './ChatAssistant.css';
+import '@/app/components/ChatAssistant.css';
 type Message = {
   role: 'user' | 'assistant';
   content: string;
@@ -56,7 +56,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     }
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/chat_langchain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 

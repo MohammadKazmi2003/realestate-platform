@@ -6,6 +6,10 @@
       "use": "@vercel/python"
     },
     {
+      "src": "api_py/langchain_chatbot.py",
+      "use": "@vercel/python"
+    },
+    {
       "src": "package.json",
       "use": "@vercel/next"
     }
@@ -14,6 +18,10 @@
     {
       "src": "/api/chat",
       "dest": "/api_py/chat.py"
+    },
+    {
+      "src": "/api/chat_langchain",
+      "dest": "/api_py/langchain_chatbot.py"
     }
   ]
 }
