@@ -160,7 +160,7 @@ async def get_structured_criteria(query: str) -> dict:
     chain = few_shot_prompt | llm | parser
     return await chain.ainvoke({})
 
-# *** FIX: Implemented a robust, two-stage RAG pipeline ***
+# *** FIX: Implemented a context-aware RAG pipeline ***
 async def handle_follow_up_question(history: List[Message], query: str) -> str:
     """
     Uses a two-stage RAG process to answer a specific question about a property.
@@ -175,30 +175,44 @@ async def handle_follow_up_question(history: List[Message], query: str) -> str:
     if not properties_in_context:
         return "I'm sorry, I don't have any properties in our current conversation to discuss. How about we search for some?"
 
-    # --- Stage 1: Targeted Retrieval ---
+    # --- Stage 1: Context-Aware Retrieval ---
     property_titles = [p.get('title', '') for p in properties_in_context]
     
+    # Get the last assistant message for context
+    last_assistant_message = ""
+    if len(history) > 1:
+        # The last message is the user's, the one before is the assistant's
+        last_assistant_message = history[-2].content
+
     retriever_prompt = ChatPromptTemplate.from_template(
-        """Your job is to identify the single most relevant property from the list based on the user's question.
+        """Your job is to identify the single most relevant property from the list based on the user's question and the immediate context of the conversation.
         Return ONLY the name of the property.
+
+        CONVERSATION CONTEXT:
+        The user was just told: "{last_assistant_message}"
+
+        USER QUESTION: "{question}"
         
-        User Question: {question}
-        
-        Available Property Titles:
+        AVAILABLE PROPERTY TITLES:
         - {titles}
         
-        Most Relevant Title:"""
+        Most Relevant Title based on the question and context:"""
     )
     
     retriever_chain = retriever_prompt | llm | StrOutputParser()
-    retrieved_title = await retriever_chain.ainvoke({"question": query, "titles": "\n- ".join(property_titles)})
+    retrieved_title = await retriever_chain.ainvoke({
+        "question": query, 
+        "titles": "\n- ".join(property_titles),
+        "last_assistant_message": last_assistant_message
+    })
     
     logger.info(f"RAG Retriever identified '{retrieved_title}' as the most relevant property.")
     
     # Find the full details for the retrieved property
     target_property = None
     for prop in properties_in_context:
-        if prop.get('title') and retrieved_title.strip() in prop.get('title'):
+        # Use a more flexible check to find the property
+        if prop.get('title') and re.search(re.escape(retrieved_title.strip()), prop.get('title'), re.IGNORECASE):
             target_property = prop
             break
             
