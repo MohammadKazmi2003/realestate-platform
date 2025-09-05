@@ -1,12 +1,7 @@
 {
-  "buildCommand": "cd api_py && pip install --no-cache-dir --disable-pip-version-check --target . --upgrade -r requirements.txt",
   "builds": [
     {
-      "src": "api_py/chat.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "api_py/langchain_chatbot.py",
+      "src": "api_py/search.py",
       "use": "@vercel/python"
     },
     {
@@ -16,12 +11,9 @@
   ],
   "routes": [
     {
-      "src": "/api/chat",
-      "dest": "/api_py/chat.py"
-    },
-    {
-      "src": "/api/chat_langchain",
-      "dest": "/api_py/langchain_chatbot.py"
+      "src": "/api/(.*)",
+      "dest": "/api_py/search.py"
     }
   ]
 }
+

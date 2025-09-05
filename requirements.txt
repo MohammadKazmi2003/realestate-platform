@@ -5,4 +5,10 @@ python-dotenv
 groq
 supabase
 sentence-transformers
-torch==2.2.2+cpu
+torch
+openai
+spacy
+cachetools
+en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.1/en_core_web_lg-3.7.1.tar.gz
+tavily-python
+langchain-community

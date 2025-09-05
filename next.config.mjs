@@ -38,16 +38,17 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        source: '/api/search',
+        destination: 'http://localhost:8000/api/search',
+      },
+      {
         source: '/api/chat',
         destination: 'http://localhost:8000/api/chat',
       },
+      // *** FIX: Added the missing rewrite for the new intelligent chatbot endpoint ***
       {
         source: '/api/chat_langchain',
         destination: 'http://localhost:8000/api/chat_langchain',
-      },
-      {
-        source: '/api/health',
-        destination: 'http://localhost:8000/health',
       },
     ];
   },

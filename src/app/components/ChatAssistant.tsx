@@ -1,19 +1,16 @@
 // src/app/components/ChatAssistant.tsx
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Loader2, User, Sparkles, X } from 'lucide-react';
-import { ChatPropertyCard } from '@/app/components/ChatPropertyCard';
+import { ChatPropertyCard } from './ChatPropertyCard';
 import ReactMarkdown from 'react-markdown';
-import '@/app/components/ChatAssistant.css';
+import './ChatAssistant.css';
+
 type Message = {
   role: 'user' | 'assistant';
   content: string;
   properties?: any[];
-};
-
-type SessionState = {
-  [key: string]: any;
 };
 
 type ChatAssistantProps = {
@@ -25,7 +22,8 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionState, setSessionState] = useState<SessionState>({});
+  // State to hold IDs of properties already shown to the user
+  const [excludeIds, setExcludeIds] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -34,66 +32,72 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
 
   useEffect(scrollToBottom, [messages]);
 
-  const handleSend = async () => {
+  // Reset state when the chat is opened
+  useEffect(() => {
+    if (isOpen) {
+        setMessages([
+            {
+                role: 'assistant',
+                content: "Hello! How can I help you find your next property today?"
+            }
+        ]);
+        setInput('');
+        setIsLoading(false);
+        setExcludeIds([]);
+    }
+  }, [isOpen]);
+
+  const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: 'user', content: input };
-    
-    // *** FIX: Append user message immediately ***
-    setMessages(prev => [...prev, userMessage]);
-    
-    const currentInput = input;
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setInput('');
     setIsLoading(true);
 
-    const isResetCommand = currentInput.toLowerCase().trim() === 'clear' || 
-                           currentInput.toLowerCase().trim() === 'new search' ||
-                           currentInput.toLowerCase().trim() === 'start over';
-
-    // Optimistically reset on the frontend for a faster UI response
-    if (isResetCommand) {
-        setSessionState({});
-    }
-
     try {
-      const response = await fetch('/api/chat_langchain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          messages: [...messages, userMessage], // Send the full history
-          session_state: isResetCommand ? {} : sessionState // Send empty state if it's a reset command
-        }),
-      });
+        // All queries now go to the single, intelligent endpoint
+        const response = await fetch('/api/chat_langchain', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                messages: newMessages,
+                exclude_ids_context: excludeIds, // Pass the list of seen properties
+            }),
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Network response was not ok' }));
-        throw new Error(errorData.detail || 'An unknown error occurred');
-      }
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: 'Network response was not ok' }));
+            throw new Error(errorData.detail || 'An unknown error occurred');
+        }
+        
+        const data = await response.json();
+        const assistantMessage: Message = {
+            role: 'assistant',
+            content: data.text_response,
+            properties: data.properties || [],
+        };
+        setMessages(prev => [...prev, assistantMessage]);
 
-      const data = await response.json();
-      
-      setSessionState(data.session_state);
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.text_response,
-        properties: data.properties || [],
-      };
-      
-      // *** FIX: Append assistant message to the existing list ***
-      setMessages(prev => [...prev, assistantMessage]);
+        // Update the list of seen property IDs for the next turn
+        if (data.properties && data.properties.length > 0) {
+            const newIds = data.properties.map((p: any) => p.id);
+            // Using a Set ensures we don't have duplicate IDs
+            setExcludeIds(prev => [...new Set([...prev, ...newIds])]);
+        }
 
     } catch (error: any) {
-      console.error("Failed to fetch AI response:", error);
-      const errorMessage: Message = {
-        role: 'assistant',
-        content: `Sorry, I'm having trouble connecting. (Error: ${error.message})`,
-      };
-      setMessages(prev => [...prev, errorMessage]);
+        console.error("Failed to fetch AI response:", error);
+        const errorMessage: Message = {
+            role: 'assistant',
+            content: `Sorry, I'm having trouble connecting. (Error: ${error.message})`,
+        };
+        setMessages(prev => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
-  };
+  }, [input, isLoading, messages, excludeIds]);
   
   if (!isOpen) return null;
 
@@ -132,7 +136,6 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
                 </div>
                 {msg.role === 'user' && <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 shrink-0"><User size={16} /></div>}
               </div>
-              {/* Render property cards associated with an assistant message */}
               {msg.role === 'assistant' && msg.properties && msg.properties.length > 0 && (
                 <div className="flex overflow-x-auto space-x-4 pb-2 mt-3 snap-x snap-mandatory">
                   {msg.properties.map((prop: any) => (
@@ -176,3 +179,4 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     </div>
   );
 }
+
