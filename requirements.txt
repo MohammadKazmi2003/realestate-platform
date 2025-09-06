@@ -12,3 +12,7 @@ cachetools
 en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.1/en_core_web_lg-3.7.1.tar.gz
 tavily-python
 langchain-community
+langchain-tavily
+langchain
+langchain-groq
+langchain-huggingface 
