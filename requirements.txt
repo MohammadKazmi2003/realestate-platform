@@ -16,3 +16,4 @@ langchain-tavily
 langchain
 langchain-groq
 langchain-huggingface 
+langgraph

@@ -13,6 +13,12 @@ type Message = {
   properties?: any[];
 };
 
+type SessionState = {
+  page?: number;
+  last_search_type?: string;
+  structured_criteria?: Record<string, any>;
+};
+
 type ChatAssistantProps = {
   isOpen: boolean;
   onClose: () => void;
@@ -22,8 +28,9 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  // State to hold IDs of properties already shown to the user
   const [excludeIds, setExcludeIds] = useState<string[]>([]);
+  // --- FIX: Add state to hold the session context from the backend ---
+  const [sessionState, setSessionState] = useState<SessionState>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -44,6 +51,8 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         setInput('');
         setIsLoading(false);
         setExcludeIds([]);
+        // --- FIX: Reset session state on open ---
+        setSessionState({});
     }
   }, [isOpen]);
 
@@ -57,13 +66,14 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     setIsLoading(true);
 
     try {
-        // All queries now go to the single, intelligent endpoint
         const response = await fetch('/api/chat_langchain', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                messages: newMessages,
-                exclude_ids_context: excludeIds, // Pass the list of seen properties
+                messages: newMessages.map(({ role, content, properties }) => ({ role, content, properties })),
+                exclude_ids_context: excludeIds,
+                // --- FIX: Send the current session state back to the backend ---
+                session_state: sessionState,
             }),
         });
 
@@ -80,10 +90,11 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         };
         setMessages(prev => [...prev, assistantMessage]);
 
-        // Update the list of seen property IDs for the next turn
+        // --- FIX: Update the local session state with the new state from the backend ---
+        setSessionState(data.session_state || {});
+
         if (data.properties && data.properties.length > 0) {
             const newIds = data.properties.map((p: any) => p.id);
-            // Using a Set ensures we don't have duplicate IDs
             setExcludeIds(prev => [...new Set([...prev, ...newIds])]);
         }
 
@@ -97,7 +108,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     } finally {
         setIsLoading(false);
     }
-  }, [input, isLoading, messages, excludeIds]);
+  }, [input, isLoading, messages, excludeIds, sessionState]);
   
   if (!isOpen) return null;
 
@@ -179,4 +190,3 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     </div>
   );
 }
-
