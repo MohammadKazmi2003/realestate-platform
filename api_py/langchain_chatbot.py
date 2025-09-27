@@ -1,22 +1,22 @@
 import os
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TypedDict, Literal
 from uuid import UUID
 import re
+import json
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_groq import ChatGroq
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
-# FIX: Use the correct, modern import paths
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_huggingface import HuggingFaceEmbeddings
+from langgraph.graph import StateGraph, END
 
 # --- Environment and Global Setup ---
 load_dotenv()
@@ -30,12 +30,10 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY, TAVILY_API_KEY]):
-    raise ValueError("One or more required environment variables are missing (Supabase, Groq, Tavily).")
+    raise ValueError("One or more required environment variables are missing.")
 
 try:
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    # FIX: Use a dedicated, reliable local embeddings client with the required flag.
-    # This is the industry best practice for speed, efficiency, and cost-effectiveness.
     embedding_client = HuggingFaceEmbeddings(
         model_name="nomic-ai/nomic-embed-text-v1",
         model_kwargs={'trust_remote_code': True}
@@ -46,6 +44,9 @@ except Exception as e:
 
 router = APIRouter()
 
+# --- LLM ---
+llm = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
+
 # --- Pydantic Models ---
 class Message(BaseModel):
     role: str
@@ -54,226 +55,271 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[Message]
-    exclude_ids_context: List[str] = []
+    session_state: Dict[str, Any] = {}
 
-class SearchCriteria(BaseModel):
-    location: Optional[str] = Field(None, description="The city or area to search in, inferred from landmarks if necessary (e.g., 'near Burj Khalifa' should become 'Downtown Dubai').")
-    property_type: Optional[str] = Field(None, description="The type of property, e.g., 'apartment' or 'villa'.")
-    min_price: Optional[float] = Field(None, description="The minimum price.")
-    max_price: Optional[float] = Field(None, description="The maximum price.")
-    bedrooms: Optional[int] = Field(None, description="The number of bedrooms.")
+class ToolChoice(BaseModel):
+    tool_name: Literal[
+        "structured_property_search", "full_text_property_search", "semantic_property_search",
+        "get_listing_details", "knowledge_web_search", "respond_to_user"
+    ] = Field(..., description="The tool to use based on the user's query.")
+    tool_input: Optional[Dict[str, Any]] = Field(None, description="The input parameters for the chosen tool.")
 
-# --- LLM Definition ---
-llm = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
-
-# --- Tool Definitions ---
-
+# --- Asynchronous Tools ---
 @tool
 async def structured_property_search(
-    location: Optional[str] = None,
-    property_type: Optional[str] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    bedrooms: Optional[int] = None,
-    exclude_ids: List[str] = [],
-) -> List[Dict[str, Any]]:
-    """
-    Use for specific property searches with clear criteria like location, price, or bedroom count.
-    """
-    valid_exclude_ids = [str(UUID(item)) for item in exclude_ids if item]
-    logger.info(f"Executing structured search with criteria: {{location: {location}, type: {property_type}, max_price: {max_price}}}")
-    
-    # FIX: Removed the unsupported p_property_name parameter to align with the DB schema
-    response = supabase_client.rpc("search_all_properties", {
-        "p_location": location, "p_property_type": property_type,
-        "p_min_price": min_price, "p_max_price": max_price,
-        "p_bedrooms": bedrooms, "p_amenities": None,
-        "p_exclude_ids": valid_exclude_ids,
-    }).execute()
-    return response.data or []
+    location: Optional[str] = None, property_type: Optional[str] = None,
+    min_price: Optional[float] = None, max_price: Optional[float] = None,
+    bedrooms: Optional[int] = None, page: int = 1
+) -> str:
+    """Searches for properties with structured criteria."""
+    logger.info(f"TOOL CALL: Structured search with criteria: {{location: {location}, property_type: {property_type}, page: {page}}}")
+    params = { "p_location": location, "p_property_type": property_type, "p_min_price": min_price, "p_max_price": max_price, "p_bedrooms": bedrooms, "p_amenities": None, "p_exclude_ids": [], "p_page": page, "p_limit": 10 }
+    response = await asyncio.to_thread(supabase_client.rpc("search_all_properties", params).execute)
+    return json.dumps(response.data, indent=2) if response.data else "No properties found matching your criteria."
 
 @tool
-async def full_text_property_search(query: str, exclude_ids: List[str] = []) -> List[Dict[str, Any]]:
-    """
-    Use this tool when the user is searching for a specific property by its name or title.
-    """
-    valid_exclude_ids = [str(UUID(item)) for item in exclude_ids if item]
-    logger.info(f"Executing FTS for query: '{query}'")
-    
-    response = supabase_client.rpc("text_search_properties", {
-        "p_query": query,
-        "p_exclude_ids": valid_exclude_ids,
-    }).execute()
-    return response.data or []
+async def full_text_property_search(query: str) -> str:
+    """Searches for a property by its name."""
+    logger.info(f"TOOL CALL: Full-text search for query: '{query}'")
+    params = {"p_query": query, "p_exclude_ids": []}
+    response = await asyncio.to_thread(supabase_client.rpc("text_search_properties", params).execute)
+    return json.dumps(response.data, indent=2) if response.data else f"No properties found for '{query}'."
 
 @tool
-async def semantic_property_search(query: str, exclude_ids: List[str] = []) -> List[Dict[str, Any]]:
-    """
-    Use for vague, descriptive searches like 'a villa with a sea view' or 'something modern'.
-    """
-    valid_exclude_ids = [str(UUID(item)) for item in exclude_ids if item]
-    logger.info(f"Executing semantic search for query: '{query}'")
-    
+async def semantic_property_search(query: str) -> str:
+    """Searches for properties based on descriptive text."""
+    logger.info(f"TOOL CALL: Semantic search for query: '{query}'")
     query_embedding = embedding_client.embed_query(query)
-    
-    # FIX: Removed unsupported p_exclude_ids to match the database schema hint
-    response = supabase_client.rpc("match_property_chunks", {
-        "query_embedding": query_embedding,
-        "match_threshold": 0.78, 
-        "match_count": 10,
-    }).execute()
-    
-    if response.data and valid_exclude_ids:
-        return [item for item in response.data if item.get('id') not in valid_exclude_ids]
-    
-    return response.data or []
+    params = {"query_embedding": query_embedding, "match_threshold": 0.78, "match_count": 10}
+    response = await asyncio.to_thread(supabase_client.rpc("match_property_chunks", params).execute)
+    return json.dumps(response.data, indent=2) if response.data else "No properties found for that description."
+
+@tool
+async def get_listing_details(listing_id: str) -> str:
+    """Fetches full details for a listing."""
+    logger.info(f"TOOL CALL: Fetching full details for listing ID: {listing_id}")
+    try:
+        UUID(listing_id)
+        response = await asyncio.to_thread(supabase_client.rpc('get_listing_details', {'p_listing_id': listing_id}).execute)
+        
+        if not response.data:
+            return "Error: No data found for this ID."
+            
+        details_object = response.data[0] if isinstance(response.data, list) else response.data
+        return json.dumps(details_object, indent=2)
+
+    except (ValueError, TypeError):
+        return f"Error: The provided ID '{listing_id}' is not a valid UUID. Please provide the correct ID from the context."
+    except Exception as e:
+        logger.error(f"Error in get_listing_details_tool: {e}", exc_info=True)
+        return f"An error occurred while fetching details. Please check the system logs. Error: {e}"
 
 @tool
 async def knowledge_web_search(query: str) -> str:
-    """
-    Use for general real estate questions that are not property searches.
-    """
-    logger.info(f"Executing knowledge search for query: '{query}'")
+    """Searches the web for general real estate questions."""
+    logger.info(f"TOOL CALL: Knowledge search for query: '{query}'")
     tavily_tool = TavilySearchResults(max_results=3, api_key=TAVILY_API_KEY)
     results = await tavily_tool.ainvoke(query)
     return "\n".join([res["content"] for res in results])
 
+tools = {
+    "structured_property_search": structured_property_search,
+    "full_text_property_search": full_text_property_search,
+    "semantic_property_search": semantic_property_search,
+    "get_listing_details": get_listing_details,
+    "knowledge_web_search": knowledge_web_search,
+}
 
-# --- Core Logic Components ---
+# --- LangGraph State Definition ---
+class AgentState(TypedDict):
+    messages: List[BaseMessage]
+    properties: List[Dict[str, Any]]
+    last_search_criteria: Optional[Dict[str, Any]]
+    page: int
+    tool_choice: Optional[ToolChoice]
+    tool_output: Optional[str]
 
-async def get_intent(chat_history: List[Dict[str, Any]]) -> str:
-    # FIX: Added 'property_name_search' to the intent router
-    router_prompt = ChatPromptTemplate.from_template(
-        """Analyze the last user message and classify the intent. Categories: 'structured_search', 'property_name_search', 'semantic_search', 'knowledge_search', 'follow_up_question'.
-        - 'property_name_search': User gives the specific name of a property (e.g., "more about Bugatti Residences").
-        - 'structured_search': User gives criteria like location or price (e.g., "villas in Dubai under 2M").
-        - 'semantic_search': User uses descriptive terms (e.g., "a place with a sea view").
-        - 'knowledge_search': User asks a general question.
-        - 'follow_up_question': User asks about a property already shown.
-
-        Conversation: {history}
-        Classification:"""
-    )
-    chain = router_prompt | llm | StrOutputParser()
-    return await chain.ainvoke({"history": chat_history})
-
-# FIX: Criteria extractor is now context-aware and handles complex queries
-async def get_structured_criteria(history: List[Dict[str, Any]]) -> dict:
-    parser = JsonOutputParser(pydantic_object=SearchCriteria)
+# --- Agent Nodes ---
+async def agent_router_node(state: AgentState) -> Dict[str, Any]:
+    logger.info("--- NODE: Agent Router ---")
     
-    few_shot_prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content="You are a data extraction expert. Your job is to analyze a conversation and extract the final, consolidated search criteria into a raw JSON object. Do not include any other text. Infer criteria from previous messages if the last message is a continuation (e.g., 'show me more'). Resolve landmarks to locations (e.g., 'near Burj Khalifa' is 'Downtown Dubai')."),
-        HumanMessage(content="show me 3 bedroom villas in dubai under 2.5 million AED"),
-        AIMessage(content='{"location": "Dubai", "property_type": "villa", "min_price": 0, "max_price": 2500000, "bedrooms": 3}'),
-        HumanMessage(content="""[{'role': 'user', 'content': 'apartments near Burj Khalifa'}, {'role': 'assistant', 'content': 'I found 10 properties...'}, {'role': 'user', 'content': 'show me more options'}]"""),
-        AIMessage(content='{"location": "Downtown Dubai", "property_type": "apartment", "min_price": null, "max_price": null, "bedrooms": null}'),
-        HumanMessage(content=f"Extract the consolidated JSON search criteria from this conversation history:\n\n{history}\n\n{parser.get_format_instructions()}"),
+    system_template = """You are an intelligent real estate assistant responsible for routing user requests to the correct tool.
+    Based on the conversation history and current context, you must decide which tool to call next.
+
+    **DATABASE SCHEMA & CONSTRAINTS:**
+    - The `property_type` parameter for `structured_property_search` MUST be one of the following exact, case-sensitive values: 'Villa', 'Apartment', 'Land', 'Commercial'.
+    - You MUST normalize user input to match these values (e.g., "villas" or "Villas" becomes "Villa").
+
+    **TOOL CHOICES:**
+    - `structured_property_search`: For new searches with clear criteria.
+    - `full_text_property_search`: For searches for a specific property by its proper name.
+    - `semantic_property_search`: For vague, descriptive searches.
+    - `get_listing_details`: For follow-up questions about a property already shown.
+    - `knowledge_web_search`: For general questions NOT about finding a property.
+    - `respond_to_user`: If no tool is needed or if a tool has just been successfully used.
+
+    **CRITICAL INSTRUCTIONS FOR FOLLOW-UPS:**
+    1.  When the user asks about a property using ordinal references (e.g., "the second one"), you MUST look at the `properties_in_context` list.
+    2.  Identify the correct property from that list based on its position (index).
+    3.  Extract its `id` and use that as the `listing_id` for the `get_listing_details` tool.
+    4.  DO NOT pass the property's title as the ID.
+
+    **CRITICAL INSTRUCTIONS FOR PAGINATION:**
+    - For "show more" requests, choose `structured_property_search`, use the `last_search_criteria`, and increment the `page` number.
+
+    **Current Context:**
+    {context}
+    """
+    
+    context_data = {
+        "properties_in_context": [{'id': p.get('id'), 'title': p.get('title')} for p in state.get('properties', [])],
+        "current_session_page": state.get('page', 1),
+        "last_search_criteria": state.get('last_search_criteria')
+    }
+    context_str = json.dumps(context_data, indent=2)
+    
+    parser = llm.with_structured_output(ToolChoice)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+        ("user", "{history}")
     ])
+    chain = prompt | parser
     
-    chain = few_shot_prompt | llm | parser
-    return await chain.ainvoke({})
-
-# FIX: RAG retriever is now context-aware
-async def handle_follow_up_question(history: List[Message], query: str) -> str:
-    logger.info(f"Handling follow-up question: '{query}'")
+    history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
     
-    properties_in_context = [p for msg in reversed(history) if msg.properties for p in msg.properties]
+    tool_choice = await chain.ainvoke({"history": history_str, "context": context_str})
     
-    if not properties_in_context:
-        return "I'm sorry, I don't have any properties in our current conversation to discuss."
+    logger.info(f"Agent chose tool: {tool_choice.tool_name} with input: {tool_choice.tool_input}")
+    return {"tool_choice": tool_choice}
 
-    property_titles = [p.get('title', '') for p in properties_in_context]
-    last_assistant_message = history[-2].content if len(history) > 1 else ""
-
-    retriever_prompt = ChatPromptTemplate.from_template(
-        """Your job is to identify the single most relevant property from the list based on the user's question and the immediate context. Return ONLY the name of the property.
-
-        CONTEXT: The assistant just said: "{last_assistant_message}"
-        USER QUESTION: "{question}"
-        AVAILABLE PROPERTY TITLES:
-        - {titles}
+async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
+    logger.info("--- NODE: Tool Executor ---")
+    tool_choice = state["tool_choice"]
+    tool_to_call = tools.get(tool_choice.tool_name)
+    if tool_to_call:
+        tool_input = tool_choice.tool_input or {}
         
-        Most Relevant Title:"""
-    )
-    
-    retriever_chain = retriever_prompt | llm | StrOutputParser()
-    retrieved_title = await retriever_chain.ainvoke({
-        "question": query, "titles": "\n- ".join(property_titles), "last_assistant_message": last_assistant_message
-    })
-    
-    logger.info(f"RAG Retriever identified '{retrieved_title}' as the most relevant property.")
-    
-    target_property = next((p for p in properties_in_context if p.get('title') and re.search(re.escape(retrieved_title.strip()), p.get('title'), re.IGNORECASE)), None)
+        if tool_choice.tool_name == "structured_property_search" and tool_input.get('page', 1) > 1:
+             if state.get('last_search_criteria'):
+                tool_input = {**state['last_search_criteria'], 'page': state['page'] + 1}
+
+        output = await tool_to_call.ainvoke(tool_input)
+        
+        if tool_choice.tool_name == "structured_property_search":
+            return {"tool_output": output, "last_search_criteria": tool_input, "page": tool_input.get('page', 1)}
+        else:
+            return {"tool_output": output}
             
-    if not target_property:
-        return "I'm sorry, I couldn't find the specific property you're asking about in our conversation history. Could you please clarify?"
+    return {"tool_output": "Error: Invalid tool chosen."}
 
-    context_for_rag = f"Property Name: {target_property.get('title', 'N/A')}\nDetails: {target_property.get('description', 'No description available.')}\nPrice: {target_property.get('price', 'N/A')}"
-
-    generator_prompt = ChatPromptTemplate.from_template(
-        """You are a helpful real estate assistant. Use ONLY the provided property details below to answer the user's question. Respond in a concise, natural, and helpful tone.
-        
-        Property Details: {context}
-        User's Question: {question}
-        Answer:"""
-    )
+# FIX: Rewrote the response generation node to enforce separation of concerns.
+async def generate_response_node(state: AgentState) -> Dict[str, Any]:
+    logger.info("--- NODE: Generate Response ---")
     
-    generator_chain = generator_prompt | llm | StrOutputParser()
-    return await generator_chain.ainvoke({"context": context_for_rag, "question": query})
+    tool_choice = state.get("tool_choice")
+    tool_output = state.get('tool_output')
+    properties_for_ui = []
 
+    # Only populate properties_for_ui if a search tool was called
+    search_tools = ["structured_property_search", "full_text_property_search", "semantic_property_search"]
+    if tool_choice and tool_choice.tool_name in search_tools and tool_output and not tool_output.startswith("Error"):
+        try:
+            properties_for_ui = json.loads(tool_output)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
-# --- Main Orchestrator Endpoint ---
+    system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response.
+    - If a search tool returned a list of properties, inform the user how many you found.
+    - If the `get_listing_details` tool returned detailed information, use it to comprehensively answer the user's specific question (e.g., about the master plan, amenities, etc.).
+    - If a tool returned an error or "not found", inform the user clearly and politely.
+    - If you are just responding to a greeting or chat, continue the conversation naturally.
+    - Be concise, informative, and maintain a positive tone. Do not just dump raw JSON.
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+        ("user", "Conversation History:\n{history}\n\nLatest Tool Output to inform your answer:\n{tool_output}")
+    ])
+    chain = prompt | llm
+    
+    history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
+    tool_output_str = tool_output or 'No new information.'
+    
+    response = await chain.ainvoke({"history": history_str, "tool_output": tool_output_str})
+    
+    final_messages = state["messages"] + [AIMessage(content=response.content)]
+    
+    # Return the final state, ensuring properties is only populated for searches.
+    return {
+        "messages": final_messages, 
+        "properties": properties_for_ui,
+        "last_search_criteria": state.get("last_search_criteria"),
+        "page": state.get("page")
+    }
 
+def should_call_tool(state: AgentState) -> str:
+    return "tool_executor_node" if state.get("tool_choice") and state["tool_choice"].tool_name != "respond_to_user" else "generate_response_node"
+
+# --- Graph Definition ---
+def build_graph():
+    workflow = StateGraph(AgentState)
+    workflow.add_node("agent_router_node", agent_router_node)
+    workflow.add_node("tool_executor_node", tool_executor_node)
+    workflow.add_node("generate_response_node", generate_response_node)
+    
+    workflow.set_entry_point("agent_router_node")
+    
+    workflow.add_conditional_edges("agent_router_node", should_call_tool, {
+        "tool_executor_node": "tool_executor_node", 
+        "generate_response_node": "generate_response_node"
+    })
+    workflow.add_edge("tool_executor_node", "generate_response_node")
+    workflow.add_edge("generate_response_node", END)
+    
+    return workflow.compile()
+
+app = build_graph()
+
+# --- Main FastAPI Endpoint ---
 @router.post("/api/chat_langchain")
 async def chat_langchain_endpoint(chat_request: ChatRequest):
-    messages = [Message(**msg.dict()) for msg in chat_request.messages]
-    history_for_llms = [{"role": msg.role, "content": msg.content} for msg in messages]
-    latest_query = history_for_llms[-1]['content']
-    exclude_ids = chat_request.exclude_ids_context
-
-    intent = await get_intent(history_for_llms)
-    logger.info(f"Detected user intent: '{intent}'")
-
-    properties_to_return = []
-    text_response = ""
-
-    try:
-        if "property_name_search" in intent:
-            properties_to_return = await full_text_property_search.ainvoke({"query": latest_query, "exclude_ids": exclude_ids})
-            text_response = f"I found {len(properties_to_return)} properties matching that name:" if properties_to_return else f"I couldn't find any properties named '{latest_query}'."
-
-        elif "structured_search" in intent:
-            criteria = await get_structured_criteria(history_for_llms)
-            properties_to_return = await structured_property_search.ainvoke({**criteria, "exclude_ids": exclude_ids})
-            count = len(properties_to_return)
-            text_response = f"I found {count} properties matching your criteria." if count > 0 else "I couldn't find any properties matching your criteria."
-
-        elif "semantic_search" in intent:
-            properties_to_return = await semantic_property_search.ainvoke({"query": latest_query, "exclude_ids": exclude_ids})
-            text_response = f"Based on your description, I found {len(properties_to_return)} properties you might like:" if properties_to_return else "I couldn't find any properties that fit that description."
+    latest_query = chat_request.messages[-1].content.lower().strip()
+    if latest_query in ['close', 'exit', 'goodbye', 'bye', "that's all"]:
+        return {"text_response": "You're welcome!", "properties": [], "session_state": {}}
         
-        elif "knowledge_search" in intent:
-            text_response = await knowledge_web_search.ainvoke(latest_query)
-        
-        elif "follow_up_question" in intent:
-            text_response = await handle_follow_up_question(messages, latest_query)
-
+    messages = []
+    for msg in chat_request.messages:
+        if msg.role == 'user':
+            messages.append(HumanMessage(content=msg.content))
         else:
-            text_response = await knowledge_web_search.ainvoke(latest_query)
+            content = msg.content
+            if msg.properties:
+                content += f"\n\n[Context: You have already shown the user {len(msg.properties)} properties.]"
+            messages.append(AIMessage(content=content))
 
-        if properties_to_return:
-             property_ids = [p.get("id") for p in properties_to_return if p.get("id")]
-             if property_ids:
-                 full_data_result = supabase_client.from_("unified_listings_view").select("*").in_("id", property_ids).execute()
-                 properties_to_return = full_data_result.data or []
-
-        return {
-            "text_response": text_response,
-            "properties": properties_to_return,
-            "session_state": {} 
+    initial_state: AgentState = {
+        "messages": messages,
+        "properties": [p for m in chat_request.messages if m.properties for p in m.properties],
+        "last_search_criteria": chat_request.session_state.get("last_search_criteria"),
+        "page": chat_request.session_state.get("page", 1)
+    }
+    
+    try:
+        final_state = await app.ainvoke(initial_state, {"recursion_limit": 25})
+        final_message = final_state['messages'][-1]
+        
+        properties_to_return = final_state.get("properties", [])
+        
+        response_session_state = {
+            "page": final_state.get("page"),
+            "last_search_criteria": final_state.get("last_search_criteria"),
         }
-
+        
+        return {
+            "text_response": final_message.content,
+            "properties": properties_to_return,
+            "session_state": response_session_state
+        }
     except Exception as e:
-        logger.error(f"An error occurred in the chat orchestrator: {e}", exc_info=True)
+        logger.error(f"An error occurred in the LangGraph agent orchestrator: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
