@@ -18,8 +18,7 @@ from supabase import create_client, Client
 import logging
 from datetime import datetime
 from cachetools import TTLCache
-from sentence_transformers import SentenceTransformer
-
+from api_py.shared_embedding import embedding_engine
 # Logging Configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -39,7 +38,7 @@ app = FastAPI()
 # spaCy & Embedding Models
 try:
     nlp = spacy.load("en_core_web_lg")
-    embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v1', trust_remote_code=True)
+
 except OSError:
     logging.error("SpaCy model or SentenceTransformer not found. Please run 'pip install en_core_web_lg sentence-transformers'.")
     nlp = None
@@ -169,7 +168,7 @@ class SearchHandler:
     def semantic_search(query: str, exclude_ids: List[str]) -> List[Dict[str, Any]]:
         if not embedding_model: return []
         try:
-            embedding = embedding_model.encode(query).tolist()
+            embedding = embedding_engine.embed_query(query)
             params = {"query_embedding": embedding, "match_threshold": 0.6, "match_count": 20, "p_exclude_ids": exclude_ids or None}
             logging.info(f"Semantic search for: '{query}'")
             return supabase.rpc("semantic_search_properties", params).execute().data or []

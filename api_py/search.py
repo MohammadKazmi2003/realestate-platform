@@ -8,8 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
-from sentence_transformers import SentenceTransformer
-
+from api_py.shared_embedding import embedding_engine
 # Import the router from the langchain chatbot file
 from api_py.langchain_chatbot import router as langchain_router
 
@@ -27,7 +26,7 @@ if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
 
 try:
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v1', trust_remote_code=True)
+
 except Exception as e:
     logger.error(f"Failed to initialize clients or models: {e}")
     raise
@@ -106,7 +105,7 @@ async def search(request: SearchRequest):
 
     logger.info("Falling back to semantic search.")
     try:
-        embedding = embedding_model.encode(request.query).tolist()
+        embedding = embedding_engine.embed_query(request.query)
         semantic_query = supabase_client.rpc(
             "match_property_chunks",
             {"query_embedding": embedding, "match_threshold": 0.75, "match_count": 10}

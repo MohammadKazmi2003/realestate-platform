@@ -15,8 +15,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
+from api_py.shared_embedding import embedding_engine
 
 # --- Environment and Global Setup ---
 load_dotenv()
@@ -34,18 +34,19 @@ if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY, TAVILY_API_KEY]):
 
 try:
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    embedding_client = HuggingFaceEmbeddings(
-        model_name="nomic-ai/nomic-embed-text-v1",
-        model_kwargs={'trust_remote_code': True}
-    )
+    
 except Exception as e:
     logger.error(f"Failed to initialize clients: {e}")
     raise
 
 router = APIRouter()
 
-# --- LLM ---
-llm = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
+# --- FIX: Implement the dual-model architecture for performance ---
+# Use a lightweight, fast model for routing and classification
+llm_router = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
+# Use a powerful model for generating high-quality, final responses
+llm_generator = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
+
 
 # --- Pydantic Models ---
 class Message(BaseModel):
@@ -89,7 +90,7 @@ async def full_text_property_search(query: str) -> str:
 async def semantic_property_search(query: str) -> str:
     """Searches for properties based on descriptive text."""
     logger.info(f"TOOL CALL: Semantic search for query: '{query}'")
-    query_embedding = embedding_client.embed_query(query)
+    query_embedding = embedding_engine.embed_query(query)
     params = {"query_embedding": query_embedding, "match_threshold": 0.78, "match_count": 10}
     response = await asyncio.to_thread(supabase_client.rpc("match_property_chunks", params).execute)
     return json.dumps(response.data, indent=2) if response.data else "No properties found for that description."
@@ -104,7 +105,7 @@ async def get_listing_details(listing_id: str) -> str:
         
         if not response.data:
             return "Error: No data found for this ID."
-            
+        
         details_object = response.data[0] if isinstance(response.data, list) else response.data
         return json.dumps(details_object, indent=2)
 
@@ -178,7 +179,8 @@ async def agent_router_node(state: AgentState) -> Dict[str, Any]:
     }
     context_str = json.dumps(context_data, indent=2)
     
-    parser = llm.with_structured_output(ToolChoice)
+    # FIX: Use the lightweight router model for this node.
+    parser = llm_router.with_structured_output(ToolChoice)
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
         ("user", "{history}")
@@ -212,7 +214,6 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             
     return {"tool_output": "Error: Invalid tool chosen."}
 
-# FIX: Rewrote the response generation node to enforce separation of concerns.
 async def generate_response_node(state: AgentState) -> Dict[str, Any]:
     logger.info("--- NODE: Generate Response ---")
     
@@ -220,17 +221,17 @@ async def generate_response_node(state: AgentState) -> Dict[str, Any]:
     tool_output = state.get('tool_output')
     properties_for_ui = []
 
-    # Only populate properties_for_ui if a search tool was called
-    search_tools = ["structured_property_search", "full_text_property_search", "semantic_property_search"]
-    if tool_choice and tool_choice.tool_name in search_tools and tool_output and not tool_output.startswith("Error"):
-        try:
-            properties_for_ui = json.loads(tool_output)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    if tool_choice:
+        search_tools = ["structured_property_search", "full_text_property_search", "semantic_property_search"]
+        if tool_choice.tool_name in search_tools and tool_output and not tool_output.startswith("Error"):
+            try:
+                properties_for_ui = json.loads(tool_output)
+            except (json.JSONDecodeError, TypeError):
+                pass
 
     system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response.
     - If a search tool returned a list of properties, inform the user how many you found.
-    - If the `get_listing_details` tool returned detailed information, use it to comprehensively answer the user's specific question (e.g., about the master plan, amenities, etc.).
+    - If the `get_listing_details` tool returned detailed information, use it to comprehensively answer the user's specific question.
     - If a tool returned an error or "not found", inform the user clearly and politely.
     - If you are just responding to a greeting or chat, continue the conversation naturally.
     - Be concise, informative, and maintain a positive tone. Do not just dump raw JSON.
@@ -239,7 +240,8 @@ async def generate_response_node(state: AgentState) -> Dict[str, Any]:
         ("system", system_template),
         ("user", "Conversation History:\n{history}\n\nLatest Tool Output to inform your answer:\n{tool_output}")
     ])
-    chain = prompt | llm
+    # FIX: Use the powerful generator model for this node.
+    chain = prompt | llm_generator
     
     history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
     tool_output_str = tool_output or 'No new information.'
@@ -248,7 +250,6 @@ async def generate_response_node(state: AgentState) -> Dict[str, Any]:
     
     final_messages = state["messages"] + [AIMessage(content=response.content)]
     
-    # Return the final state, ensuring properties is only populated for searches.
     return {
         "messages": final_messages, 
         "properties": properties_for_ui,
