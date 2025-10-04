@@ -34,18 +34,14 @@ if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY, TAVILY_API_KEY]):
 
 try:
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    
 except Exception as e:
     logger.error(f"Failed to initialize clients: {e}")
     raise
 
 router = APIRouter()
 
-# --- FIX: Implement the dual-model architecture for performance ---
-# Use a lightweight, fast model for routing and classification
-llm_router = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
-# Use a powerful model for generating high-quality, final responses
-llm_generator = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
+# --- FIX: Consolidated to a single, powerful LLM for all agent tasks ---
+llm = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
 
 
 # --- Pydantic Models ---
@@ -104,8 +100,8 @@ async def get_listing_details(listing_id: str) -> str:
         response = await asyncio.to_thread(supabase_client.rpc('get_listing_details', {'p_listing_id': listing_id}).execute)
         
         if not response.data:
-            return "Error: No data found for this ID."
-        
+            return "Error: No data was found for this ID in the database."
+
         details_object = response.data[0] if isinstance(response.data, list) else response.data
         return json.dumps(details_object, indent=2)
 
@@ -179,8 +175,7 @@ async def agent_router_node(state: AgentState) -> Dict[str, Any]:
     }
     context_str = json.dumps(context_data, indent=2)
     
-    # FIX: Use the lightweight router model for this node.
-    parser = llm_router.with_structured_output(ToolChoice)
+    parser = llm.with_structured_output(ToolChoice)
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
         ("user", "{history}")
@@ -207,10 +202,12 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         output = await tool_to_call.ainvoke(tool_input)
         
+        # FIX: Correctly persist state across ALL tool calls.
         if tool_choice.tool_name == "structured_property_search":
             return {"tool_output": output, "last_search_criteria": tool_input, "page": tool_input.get('page', 1)}
         else:
-            return {"tool_output": output}
+            # Preserve the previous search context during non-search tool calls
+            return {"tool_output": output, "last_search_criteria": state.get("last_search_criteria"), "page": state.get("page")}
             
     return {"tool_output": "Error: Invalid tool chosen."}
 
@@ -240,8 +237,7 @@ async def generate_response_node(state: AgentState) -> Dict[str, Any]:
         ("system", system_template),
         ("user", "Conversation History:\n{history}\n\nLatest Tool Output to inform your answer:\n{tool_output}")
     ])
-    # FIX: Use the powerful generator model for this node.
-    chain = prompt | llm_generator
+    chain = prompt | llm
     
     history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
     tool_output_str = tool_output or 'No new information.'
