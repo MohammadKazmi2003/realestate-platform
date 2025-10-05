@@ -73,17 +73,52 @@ def format_property_summary(properties: List[Dict[str, Any]]) -> str:
     return "\n".join(summary_lines)
 
 def format_property_details(details: Dict[str, Any]) -> str:
-    formatted_details = []
-    simple_details = {k: v for k, v in details.items() if isinstance(v, (str, int, float, bool))}
-    for key, value in simple_details.items():
+    """Formats detailed property information into a comprehensive, readable summary for the LLM."""
+    if not details:
+        return "No details available."
+
+    output_lines = []
+    simple_keys = [
+        'title', 'price', 'bedrooms', 'bathrooms', 'area_sqft', 'property_type', 'location', 'status'
+    ]
+    for key in simple_keys:
+        value = details.get(key)
         if value is not None and value != '':
             formatted_key = key.replace('_', ' ').title()
-            formatted_details.append(f"{formatted_key}: {value}")
-    if details.get('description'):
-        desc = details['description']
-        truncated_desc = (desc[:200] + '...') if len(desc) > 200 else desc
-        formatted_details.append(f"Description: {truncated_desc}")
-    return "\n".join(formatted_details)
+            if key == 'price' and isinstance(value, (int, float)):
+                 value = f"₹{value:,}"
+            output_lines.append(f"{formatted_key}: {value}")
+
+    list_keys = ['features', 'amenities']
+    for key in list_keys:
+        value = details.get(key)
+        if isinstance(value, list) and value:
+            items = [str(item) for item in value if item]
+            if items:
+                formatted_key = key.replace('_', ' ').title()
+                output_lines.append(f"{formatted_key}: {', '.join(items)}")
+
+    text_keys = ['description', 'master_plan_description']
+    for key in text_keys:
+        value = details.get(key)
+        if value and isinstance(value, str):
+            formatted_key = key.replace('_', ' ').title()
+            output_lines.append(f"\n{formatted_key}:\n{value}")
+
+    faq_data = details.get('faq')
+    if faq_data and isinstance(faq_data, list):
+        faq_lines = ["\nFAQ:"]
+        for item in faq_data:
+            if isinstance(item, dict) and 'question' in item and 'answer' in item:
+                q = item.get('question')
+                a = item.get('answer')
+                if q and a:
+                    faq_lines.append(f"Q: {q}\nA: {a}")
+        if len(faq_lines) > 1:
+            output_lines.append("\n".join(faq_lines))
+
+    return "\n".join(output_lines)
+
 
 # --- Asynchronous Tools Definition ---
 @tool
@@ -161,8 +196,8 @@ tools = {
 # --- LangGraph State Definition ---
 class AgentState(TypedDict):
     messages: List[BaseMessage]
-    properties: List[Dict[str, Any]] # For conversational context (persistent)
-    properties_for_ui: Optional[List[Dict[str, Any]]] # For rendering in the UI this turn (transient)
+    properties: List[Dict[str, Any]] 
+    properties_for_ui: Optional[List[Dict[str, Any]]]
     last_search_criteria: Optional[Dict[str, Any]]
     focused_property_id: Optional[str]
     focused_property_details: Optional[Dict[str, Any]]
@@ -176,31 +211,38 @@ async def agent_router_node(state: AgentState) -> Dict[str, Any]:
     system_template = """You are an intelligent real estate assistant acting as a router. Your primary goal is to analyze the user's query and the conversation context, then decide which tool to use. Your reasoning must be precise and methodical.
 
     **Your Thought Process:**
-    1.  **Analyze the User's Latest Query:** What is the user's specific intent? Are they starting a new search, asking about a specific property, or asking a general question?
-    2.  **Handle Ordinal References:** If the user says "the first one," "the third one," or "the 6th," you MUST map this to the correct item in the `properties_in_context` list. The list is 0-indexed, so "the first one" is index 0, "the sixth one" is index 5. Extract the corresponding `id`.
-    3.  **Review the Context:** Look at `focused_property_id` and `focused_property_details_available`. Do I already have the information needed to answer the question?
-    4.  **Select the Correct Tool:** Based on your analysis, choose one of the tools below.
+    1.  **Analyze the User's Latest Query:** What is the user's specific intent? Is it a new search, a follow-up, a pagination request, or a general question?
+    2.  **Handle Pagination:** If the user query is "show more", "next", "more options", or similar, check if `last_search_criteria` exists. If it does, this is a pagination request.
+    3.  **Handle Ordinal References:** If the user says "the first one," or "the 6th," map this to the correct item in the `properties_in_context` list (0-indexed).
+    4.  **Review the Context:** Look at `focused_property_id` and `focused_property_details_available`. Do I already have the info?
+    5.  **Select the Correct Tool:** Based on your analysis, choose a tool.
 
     **TOOL DESCRIPTIONS & USAGE:**
-    - `structured_property_search`: Use for NEW property searches with clear, filterable criteria (e.g., location, price, bedrooms).
-    - `get_listing_details`: Use ONLY when the user asks for details about a specific property for the FIRST time in the conversation, and you DO NOT have the `focused_property_details` in your context.
-    - `respond_to_user`: This is a critical tool for follow-up questions. Use it when the user asks a question about a property whose details are ALREADY in the `focused_property_details` context. This tool takes NO ARGUMENTS (`tool_input` must be null). It signals that the next step should be to generate a response from existing data.
-    - `knowledge_web_search`: Use for general real estate questions (e.g., "what is stamp duty?", "how to negotiate a price?").
+    - `structured_property_search`: Use for NEW property searches OR for pagination requests.
+    - `get_listing_details`: Use ONLY for a first-time inquiry about a specific property.
+    - `respond_to_user`: Use for follow-up questions when details are ALREADY in context. `tool_input` must be null.
+    - `knowledge_web_search`: Use for general real estate questions.
     - `full_text_property_search` / `semantic_property_search`: Use for broader, name-based or descriptive searches.
 
     **CRITICAL SCENARIOS & EXAMPLES (Follow these strictly):**
 
-    **Scenario 1: Ordinal Reference Inquiry**
+    **Scenario 1: Pagination Request**
+    - **Context:** `last_search_criteria` exists, `current_session_page` is 1.
+    - **User Query:** "show me more options"
+    - **Your Action:** This is a pagination request. You MUST reuse the `last_search_criteria` and set the `page` parameter to `current_session_page + 1`.
+    - **Your Output:** `tool_name='structured_property_search', tool_input={{...last_search_criteria, 'page': 2}}`
+
+    **Scenario 2: Ordinal Reference Inquiry**
     - **Context:** `properties_in_context` contains 10 items.
     - **User Query:** "Tell me more about the 6th one."
-    - **Your Action:** Map "6th" to index 5 of the `properties_in_context` list. Extract the ID of that property.
+    - **Your Action:** Map "6th" to index 5. Extract the ID.
     - **Your Output:** `tool_name='get_listing_details', tool_input={{'listing_id': 'id_of_the_6th_property'}}`
 
-    **Scenario 2: Follow-up Question When Details Are Already Loaded**
-    - **Context:** `focused_property_id` is "some-uuid", and `focused_property_details_available` is "Yes".
-    - **User Query:** "How much is it completed?" or "Does it have a balcony?"
-    - **Your Action:** Recognize that you already have the data to answer this.
-    - **Your Output:** `tool_name='respond_to_user', tool_input=null`. This is MANDATORY. Do not call `get_listing_details` again.
+    **Scenario 3: Follow-up Question When Details Are Loaded**
+    - **Context:** `focused_property_id` is set, `focused_property_details_available` is "Yes".
+    - **User Query:** "Does it have a balcony?"
+    - **Your Action:** Recognize you already have the data.
+    - **Your Output:** `tool_name='respond_to_user', tool_input=null`.
 
     **Current Context:**
     {context}
@@ -222,6 +264,21 @@ async def agent_router_node(state: AgentState) -> Dict[str, Any]:
     tool_choice = await chain.ainvoke({"history": history_str, "context": context_str})
     
     logger.info(f"Agent chose tool: {tool_choice.tool_name} with input: {tool_choice.tool_input}")
+
+    # --- PAGINATION GUARDRAIL ---
+    # This logic overrides the LLM's choice if pagination is clearly intended, ensuring reliability.
+    user_query = state["messages"][-1].content.lower()
+    pagination_keywords = ["more", "next", "continue", "another"]
+    # Check for keywords and the existence of a previous search to continue from
+    if any(keyword in user_query for keyword in pagination_keywords) and state.get("last_search_criteria"):
+        logger.info("Pagination intent detected by guardrail. Overriding tool choice.")
+        page_to_fetch = state.get("page", 1) + 1 # Calculate the next page number reliably
+        # Manually construct the correct tool call, ignoring the LLM's output
+        tool_choice = ToolChoice(
+            tool_name="structured_property_search",
+            tool_input={**state["last_search_criteria"], "page": page_to_fetch}
+        )
+    # --- END GUARDRAIL ---
     
     focused_id = state.get("focused_property_id")
     if tool_choice.tool_name == "get_listing_details" and tool_choice.tool_input:
@@ -239,10 +296,6 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     if not tool_to_call: return {"tool_output": f"Error: Invalid tool '{tool_choice.tool_name}' chosen."}
 
     tool_input = tool_choice.tool_input or {}
-    if tool_choice.tool_name == "structured_property_search" and tool_input.get('page', 1) > 1:
-         if state.get('last_search_criteria'):
-            tool_input = {**state['last_search_criteria'], 'page': state.get('page', 1) + 1}
-
     output = await tool_to_call.ainvoke(tool_input)
     update: Dict[str, Any] = {"tool_output": output}
     
@@ -276,8 +329,12 @@ async def generate_response_node(state: AgentState) -> Dict[str, Any]:
             
             if is_new_search:
                 properties_for_ui = parsed_output
-                persistent_properties = parsed_output
-                formatted_context = f"Found {len(properties_for_ui)} properties:\n{format_property_summary(properties_for_ui)}"
+                if tool_choice.tool_input and tool_choice.tool_input.get('page', 1) == 1:
+                    persistent_properties = parsed_output
+                else: 
+                    persistent_properties.extend(parsed_output)
+
+                formatted_context = f"Found {len(properties_for_ui)} more properties:\n{format_property_summary(properties_for_ui)}"
             
             elif tool_choice.tool_name == "get_listing_details":
                 formatted_context = f"Here are the newly fetched details for the requested property:\n{format_property_details(parsed_output)}"
@@ -336,12 +393,13 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
         return {"text_response": "You're welcome! Let me know if you need anything else.", "properties": [], "session_state": {}}
         
     messages: List[BaseMessage] = []
+    properties_from_session = chat_request.session_state.get("properties", [])
     for msg in chat_request.messages:
         messages.append(HumanMessage(content=msg.content) if msg.role == 'user' else AIMessage(content=msg.content))
 
     initial_state: AgentState = {
         "messages": messages,
-        "properties": [p for m in chat_request.messages if m.properties for p in m.properties],
+        "properties": properties_from_session,
         "properties_for_ui": None,
         "last_search_criteria": chat_request.session_state.get("last_search_criteria"),
         "focused_property_id": chat_request.session_state.get("focused_property_id"),
@@ -360,12 +418,12 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
             "last_search_criteria": final_state.get("last_search_criteria"),
             "focused_property_id": final_state.get("focused_property_id"),
             "focused_property_details": final_state.get("focused_property_details"),
-            "properties": final_state.get("properties") # Persist the context properties
+            "properties": final_state.get("properties")
         }
         
         return {
             "text_response": final_message.content,
-            "properties": final_state.get("properties_for_ui", []), # Send only UI-specific properties
+            "properties": final_state.get("properties_for_ui", []),
             "session_state": response_session_state
         }
     except Exception as e:
