@@ -78,6 +78,7 @@ def format_property_details(details: Dict[str, Any]) -> str:
         return "No details available."
 
     output_lines = []
+    # 1. Handle simple, direct key-value pairs first in a preferred order
     simple_keys = [
         'title', 'price', 'bedrooms', 'bathrooms', 'area_sqft', 'property_type', 'location', 'status'
     ]
@@ -89,15 +90,19 @@ def format_property_details(details: Dict[str, Any]) -> str:
                  value = f"₹{value:,}"
             output_lines.append(f"{formatted_key}: {value}")
 
+    # 2. Handle list-based fields (features, amenities)
     list_keys = ['features', 'amenities']
     for key in list_keys:
         value = details.get(key)
+        # Ensure value is a list and not empty
         if isinstance(value, list) and value:
+            # Filter out any None or empty string values from the list before joining
             items = [str(item) for item in value if item]
             if items:
                 formatted_key = key.replace('_', ' ').title()
                 output_lines.append(f"{formatted_key}: {', '.join(items)}")
 
+    # 3. Handle long text fields without truncation
     text_keys = ['description', 'master_plan_description']
     for key in text_keys:
         value = details.get(key)
@@ -105,15 +110,17 @@ def format_property_details(details: Dict[str, Any]) -> str:
             formatted_key = key.replace('_', ' ').title()
             output_lines.append(f"\n{formatted_key}:\n{value}")
 
+    # 4. Handle the FAQ section specifically
     faq_data = details.get('faq')
     if faq_data and isinstance(faq_data, list):
-        faq_lines = ["\nFAQ:"]
+        faq_lines = ["\nFAQ:"] # Add a header for clarity
         for item in faq_data:
             if isinstance(item, dict) and 'question' in item and 'answer' in item:
                 q = item.get('question')
                 a = item.get('answer')
                 if q and a:
                     faq_lines.append(f"Q: {q}\nA: {a}")
+        # Only add the FAQ section if it contains valid entries
         if len(faq_lines) > 1:
             output_lines.append("\n".join(faq_lines))
 
@@ -208,41 +215,38 @@ class AgentState(TypedDict):
 # --- Agent Nodes ---
 async def agent_router_node(state: AgentState) -> Dict[str, Any]:
     logger.info("--- NODE: Agent Router ---")
-    system_template = """You are an intelligent real estate assistant acting as a router. Your primary goal is to analyze the user's query and the conversation context, then decide which tool to use. Your reasoning must be precise and methodical.
+    system_template = """You are a highly intelligent and methodical real estate assistant. Your primary goal is to analyze the user's query and the conversation context to select the correct tool and parameters.
 
-    **Your Thought Process:**
-    1.  **Analyze the User's Latest Query:** What is the user's specific intent? Is it a new search, a follow-up, a pagination request, or a general question?
-    2.  **Handle Pagination:** If the user query is "show more", "next", "more options", or similar, check if `last_search_criteria` exists. If it does, this is a pagination request.
-    3.  **Handle Ordinal References:** If the user says "the first one," or "the 6th," map this to the correct item in the `properties_in_context` list (0-indexed).
-    4.  **Review the Context:** Look at `focused_property_id` and `focused_property_details_available`. Do I already have the info?
-    5.  **Select the Correct Tool:** Based on your analysis, choose a tool.
-
-    **TOOL DESCRIPTIONS & USAGE:**
-    - `structured_property_search`: Use for NEW property searches OR for pagination requests.
-    - `get_listing_details`: Use ONLY for a first-time inquiry about a specific property.
-    - `respond_to_user`: Use for follow-up questions when details are ALREADY in context. `tool_input` must be null.
-    - `knowledge_web_search`: Use for general real estate questions.
-    - `full_text_property_search` / `semantic_property_search`: Use for broader, name-based or descriptive searches.
+    **Your Core Reasoning Process:**
+    1.  **Analyze User Intent:** Determine the user's primary goal. Is it a new search, a follow-up on a specific property, a request for more results (pagination), or a general question?
+    2.  **Contextual Check:** Before doing anything else, check the `properties_in_context` list. If the user mentions a property by name (e.g., "Azure Heights") or by position ("the first one," "the 3rd property"), you MUST first check if that property exists in the context list.
+    3.  **Tool Selection Logic:**
+        - **If it's a follow-up on a property IN CONTEXT:** Use `get_listing_details` with the correct ID from the context.
+        - **If it's a follow-up on a property NOT IN CONTEXT:** This is a new search. Use `full_text_property_search`.
+        - **If it's a pagination request ("show more," "next"):** Check for `last_search_criteria`. If it exists, use `structured_property_search`, reusing the criteria and incrementing the page number (`current_session_page + 1`).
+        - **If it's a new, filtered search:** Use `structured_property_search`.
+        - **If you already have the details:** For follow-up questions about a property whose details are already in `focused_property_details`, use `respond_to_user`.
+        - **For general questions:** Use `knowledge_web_search`.
 
     **CRITICAL SCENARIOS & EXAMPLES (Follow these strictly):**
 
-    **Scenario 1: Pagination Request**
+    **Scenario 1: Follow-up by Name (In Context)**
+    - **Context:** `properties_in_context` includes a property titled "Azure Heights".
+    - **User Query:** "Tell me more about Azure Heights."
+    - **Your Action:** You see "Azure Heights" is in the context. You will extract its ID.
+    - **Your Output:** `tool_name='get_listing_details', tool_input={{'listing_id': 'id_of_azure_heights'}}`
+
+    **Scenario 2: Follow-up by Name (NOT in Context)**
+    - **Context:** "Azure Heights" is NOT in `properties_in_context`.
+    - **User Query:** "Tell me more about Azure Heights."
+    - **Your Action:** The property is not in your immediate context, so you must perform a new search.
+    - **Your Output:** `tool_name='full_text_property_search', tool_input={{'query': 'Azure Heights'}}`
+
+    **Scenario 3: Pagination Request**
     - **Context:** `last_search_criteria` exists, `current_session_page` is 1.
     - **User Query:** "show me more options"
-    - **Your Action:** This is a pagination request. You MUST reuse the `last_search_criteria` and set the `page` parameter to `current_session_page + 1`.
+    - **Your Action:** This is a clear pagination request. You MUST reuse `last_search_criteria` and set the `page` to `current_session_page + 1`.
     - **Your Output:** `tool_name='structured_property_search', tool_input={{...last_search_criteria, 'page': 2}}`
-
-    **Scenario 2: Ordinal Reference Inquiry**
-    - **Context:** `properties_in_context` contains 10 items.
-    - **User Query:** "Tell me more about the 6th one."
-    - **Your Action:** Map "6th" to index 5. Extract the ID.
-    - **Your Output:** `tool_name='get_listing_details', tool_input={{'listing_id': 'id_of_the_6th_property'}}`
-
-    **Scenario 3: Follow-up Question When Details Are Loaded**
-    - **Context:** `focused_property_id` is set, `focused_property_details_available` is "Yes".
-    - **User Query:** "Does it have a balcony?"
-    - **Your Action:** Recognize you already have the data.
-    - **Your Output:** `tool_name='respond_to_user', tool_input=null`.
 
     **Current Context:**
     {context}
@@ -263,22 +267,7 @@ async def agent_router_node(state: AgentState) -> Dict[str, Any]:
     history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
     tool_choice = await chain.ainvoke({"history": history_str, "context": context_str})
     
-    logger.info(f"Agent chose tool: {tool_choice.tool_name} with input: {tool_choice.tool_input}")
-
-    # --- PAGINATION GUARDRAIL ---
-    # This logic overrides the LLM's choice if pagination is clearly intended, ensuring reliability.
-    user_query = state["messages"][-1].content.lower()
-    pagination_keywords = ["more", "next", "continue", "another"]
-    # Check for keywords and the existence of a previous search to continue from
-    if any(keyword in user_query for keyword in pagination_keywords) and state.get("last_search_criteria"):
-        logger.info("Pagination intent detected by guardrail. Overriding tool choice.")
-        page_to_fetch = state.get("page", 1) + 1 # Calculate the next page number reliably
-        # Manually construct the correct tool call, ignoring the LLM's output
-        tool_choice = ToolChoice(
-            tool_name="structured_property_search",
-            tool_input={**state["last_search_criteria"], "page": page_to_fetch}
-        )
-    # --- END GUARDRAIL ---
+    logger.info(f"LLM chose tool: {tool_choice.tool_name} with input: {tool_choice.tool_input}")
     
     focused_id = state.get("focused_property_id")
     if tool_choice.tool_name == "get_listing_details" and tool_choice.tool_input:
@@ -317,34 +306,49 @@ async def generate_response_node(state: AgentState) -> Dict[str, Any]:
     
     properties_for_ui = []
     persistent_properties = state.get('properties', [])
-    formatted_context = "No new information was gathered. Please formulate a response based on the conversation history."
+    formatted_context = "I couldn't find any information about that. Could you please rephrase your request?"
 
     if tool_choice and tool_choice.tool_name == "respond_to_user" and state.get("focused_property_details"):
         formatted_context = f"You already have the following details for the property in focus. Use them to answer the user's latest question:\n{format_property_details(state['focused_property_details'])}"
     
-    elif tool_choice and tool_output and not tool_output.startswith("Error"):
-        try:
-            parsed_output = json.loads(tool_output)
-            is_new_search = tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]
-            
-            if is_new_search:
-                properties_for_ui = parsed_output
-                if tool_choice.tool_input and tool_choice.tool_input.get('page', 1) == 1:
-                    persistent_properties = parsed_output
-                else: 
-                    persistent_properties.extend(parsed_output)
-
-                formatted_context = f"Found {len(properties_for_ui)} more properties:\n{format_property_summary(properties_for_ui)}"
-            
-            elif tool_choice.tool_name == "get_listing_details":
-                formatted_context = f"Here are the newly fetched details for the requested property:\n{format_property_details(parsed_output)}"
-            
-            else:
-                formatted_context = tool_output
-        except (json.JSONDecodeError, TypeError):
+    elif tool_choice and tool_output:
+        if tool_output.startswith("Error"):
             formatted_context = tool_output
+        else:
+            try:
+                parsed_output = json.loads(tool_output)
+                is_new_search = tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]
+                
+                if is_new_search:
+                    properties_for_ui = parsed_output
+                    if tool_choice.tool_input and tool_choice.tool_input.get('page', 1) == 1:
+                        persistent_properties = parsed_output
+                    else: 
+                        persistent_properties.extend(parsed_output)
 
-    system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response based on the latest information."""
+                    if properties_for_ui:
+                        formatted_context = f"Found {len(properties_for_ui)} more properties:\n{format_property_summary(properties_for_ui)}"
+                    else:
+                        formatted_context = "I couldn't find any properties matching that description. Would you like to try a different search?"
+                
+                elif tool_choice.tool_name == "get_listing_details":
+                    # When getting details, format them for the LLM
+                    formatted_context = f"Here are the newly fetched details for the requested property:\n{format_property_details(parsed_output)}"
+                
+                else: # knowledge_web_search
+                    formatted_context = tool_output
+            except (json.JSONDecodeError, TypeError):
+                formatted_context = tool_output # Fallback for non-JSON text from knowledge search
+
+    # --- INSPECTION LOGGING ---
+    # Log the exact context being sent to the final generator LLM.
+    logger.info(f"--- CONTEXT FOR GENERATOR ---\n{formatted_context}")
+    # --- END INSPECTION LOGGING ---
+
+    system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response based on the information provided in the 'Latest Information' section.
+
+    **CRITICAL INSTRUCTION:** You MUST use the information provided in the 'Latest Information to Formulate Your Answer' section to answer the user's question. Do not rely on prior knowledge or make assumptions. If the answer exists in the provided text (like in an FAQ section), you must extract it and provide it to the user. If the information is not present, then you can say you do not have that specific detail.
+    """
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
         ("user", "Conversation History:\n{history}\n\nLatest Information to Formulate Your Answer:\n{context}")
@@ -395,7 +399,10 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
     messages: List[BaseMessage] = []
     properties_from_session = chat_request.session_state.get("properties", [])
     for msg in chat_request.messages:
-        messages.append(HumanMessage(content=msg.content) if msg.role == 'user' else AIMessage(content=msg.content))
+        if msg.role == 'user':
+            messages.append(HumanMessage(content=msg.content))
+        else:
+            messages.append(AIMessage(content=msg.content))
 
     initial_state: AgentState = {
         "messages": messages,
