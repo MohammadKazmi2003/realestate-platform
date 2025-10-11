@@ -73,56 +73,80 @@ def format_property_summary(properties: List[Dict[str, Any]]) -> str:
     return "\n".join(summary_lines)
 
 def format_property_details(details: Dict[str, Any]) -> str:
-    """Formats detailed property information into a comprehensive, readable summary for the LLM."""
+    """
+    Formats the complete property details JSON into a comprehensive, readable, 
+    and AI-friendly summary. It preserves all critical information.
+    """
     if not details:
-        return "No details available."
+        return "No details available for this property."
 
     output_lines = []
-    # 1. Handle simple, direct key-value pairs first in a preferred order
-    simple_keys = [
-        'title', 'price', 'bedrooms', 'bathrooms', 'area_sqft', 'property_type', 'location', 'status'
-    ]
-    for key in simple_keys:
-        value = details.get(key)
-        if value is not None and value != '':
-            formatted_key = key.replace('_', ' ').title()
-            if key == 'price' and isinstance(value, (int, float)):
-                 value = f"₹{value:,}"
-            output_lines.append(f"{formatted_key}: {value}")
 
-    # 2. Handle list-based fields (features, amenities)
-    list_keys = ['features', 'amenities']
-    for key in list_keys:
-        value = details.get(key)
-        # Ensure value is a list and not empty
+    def format_value(val):
+        """Helper to format individual values for readability."""
+        if val is None or val == '':
+            return None
+        if isinstance(val, bool):
+            return "Yes" if val else "No"
+        if isinstance(val, (int, float)):
+            if val > 10000:
+                return f"₹{val:,}"
+            return str(val)
+        return str(val)
+
+    # --- Process All Fields Dynamically ---
+    for key, value in details.items():
+        # Skip empty fields and internal IDs/links that are not useful for the LLM
+        if value is None or value == '' or key in ['id', 'page_link', 'images', 'listing_type', 'user_id', 'created_at', 'profiles', 'property_media', 'project_media']:
+            continue
+
+        formatted_key = key.replace('_', ' ').title()
+
+        # Handle lists (e.g., features, amenities, faqs)
         if isinstance(value, list) and value:
-            # Filter out any None or empty string values from the list before joining
-            items = [str(item) for item in value if item]
-            if items:
-                formatted_key = key.replace('_', ' ').title()
-                output_lines.append(f"{formatted_key}: {', '.join(items)}")
+            # Handle lists of dicts first
+            if all(isinstance(item, dict) for item in value):
+                # Specifically for FAQs
+                if key == 'faqs' and all('question' in item and 'answer' in item for item in value):
+                    faq_lines = [f"\n{formatted_key}:"]
+                    for item in value:
+                        q = item.get('question')
+                        a = item.get('answer')
+                        if q and a:
+                            faq_lines.append(f"  Q: {q}\n  A: {a}")
+                    if len(faq_lines) > 1:
+                        output_lines.append("\n".join(faq_lines))
+                # Generic handler for other lists of dicts (like amenities)
+                else:
+                    items = [item.get('name') for item in value if item.get('name')]
+                    if items:
+                        output_lines.append(f"{formatted_key}: {', '.join(items)}")
 
-    # 3. Handle long text fields without truncation
-    text_keys = ['description', 'master_plan_description']
-    for key in text_keys:
-        value = details.get(key)
-        if value and isinstance(value, str):
-            formatted_key = key.replace('_', ' ').title()
-            output_lines.append(f"\n{formatted_key}:\n{value}")
+            # Handle simple lists of strings/numbers (like property_types for projects)
+            elif all(isinstance(item, (str, int, float)) for item in value):
+                items = [format_value(item) for item in value if item]
+                if items:
+                    output_lines.append(f"{formatted_key}: {', '.join(items)}")
+        
+        # Handle dictionary/object values (e.g., status, price_range)
+        elif isinstance(value, dict) and value:
+            dict_lines = [f"\n{formatted_key}:"]
+            for sub_key, sub_val in value.items():
+                formatted_sub_val = format_value(sub_val)
+                if formatted_sub_val:
+                    dict_lines.append(f"  {sub_key.replace('_', ' ').title()}: {formatted_sub_val}")
+            if len(dict_lines) > 1:
+                output_lines.append("\n".join(dict_lines))
 
-    # 4. Handle the FAQ section specifically
-    faq_data = details.get('faq')
-    if faq_data and isinstance(faq_data, list):
-        faq_lines = ["\nFAQ:"] # Add a header for clarity
-        for item in faq_data:
-            if isinstance(item, dict) and 'question' in item and 'answer' in item:
-                q = item.get('question')
-                a = item.get('answer')
-                if q and a:
-                    faq_lines.append(f"Q: {q}\nA: {a}")
-        # Only add the FAQ section if it contains valid entries
-        if len(faq_lines) > 1:
-            output_lines.append("\n".join(faq_lines))
+        # Handle simple key-value pairs (strings, numbers, bools)
+        else:
+            formatted_val = format_value(value)
+            if formatted_val:
+                # Add extra spacing for long text fields
+                if key in ['description', 'master_plan_description', 'description_html']:
+                    output_lines.append(f"\n{formatted_key}:\n{formatted_val}")
+                else:
+                    output_lines.append(f"{formatted_key}: {formatted_val}")
 
     return "\n".join(output_lines)
 
@@ -436,4 +460,5 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
     except Exception as e:
         logger.error(f"An error occurred in the LangGraph agent orchestrator: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
-
+#studio Entry point
+app = langgraph_app
