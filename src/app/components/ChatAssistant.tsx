@@ -113,9 +113,11 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
-      <div 
-        className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl w-full max-w-md h-[80vh] flex flex-col"
+    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-0">
+    <div 
+      className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl 
+                 w-[90vw] md:w-[80vw] lg:w-[70vw] 
+                 h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-4 border-b border-gray-200/80 flex justify-between items-center">
@@ -128,7 +130,9 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
             <div key={index}>
               <div className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Sparkles size={16} /></div>}
-                <div className={`max-w-xs md:max-w-sm ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} rounded-2xl p-3`}>
+                <div className={`max-w-[90%] md:max-w-[70%] lg:max-w-[90%] 
+                ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} 
+                rounded-2xl p-3`}>
                 <ReactMarkdown
                   components={{
                     a: ({node, ...props}) => (
