@@ -130,7 +130,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
             <div key={index}>
               <div className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Sparkles size={16} /></div>}
-                <div className={`max-w-[90%] md:max-w-[70%] lg:max-w-[90%] 
+                <div className={`max-w-[90%] md:max-w-[70%] lg:max-w-[75%] 
                 ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} 
                 rounded-2xl p-3`}>
                 <ReactMarkdown
