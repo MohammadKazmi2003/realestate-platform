@@ -16,6 +16,8 @@ from supabase import create_client, Client
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langgraph.graph import StateGraph, END
 from api_py.shared_embedding import embedding_engine
+from bs4 import BeautifulSoup
+
 
 # --- Environment and Global Setup ---
 load_dotenv()
@@ -71,6 +73,14 @@ def format_property_summary(properties: List[Dict[str, Any]]) -> str:
             f"ID: {prop.get('id')}, Title: {prop.get('title')}, Price: {price}, Location: {prop.get('location')}"
         )
     return "\n".join(summary_lines)
+
+# Html strip function to store fields without html tags 
+def strip_html(text: Optional[str]) -> str:
+    """Remove HTML tags from a string while preserving readable text."""
+    if not text:
+        return ""
+    return BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+
 
 def format_property_details(details: Dict[str, Any]) -> str:
     """
@@ -144,7 +154,8 @@ def format_property_details(details: Dict[str, Any]) -> str:
             if formatted_val:
                 # Add extra spacing for long text fields
                 if key in ['description', 'master_plan_description', 'description_html']:
-                    output_lines.append(f"\n{formatted_key}:\n{formatted_val}")
+                    cleaned_text = strip_html(formatted_val)  # <-- new line
+                    output_lines.append(f"\n{formatted_key}:\n{cleaned_text}")   # <-- use cleaned text
                 else:
                     output_lines.append(f"{formatted_key}: {formatted_val}")
 
