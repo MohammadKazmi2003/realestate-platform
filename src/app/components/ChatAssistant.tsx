@@ -7,16 +7,21 @@ import { ChatPropertyCard } from './ChatPropertyCard';
 import ReactMarkdown from 'react-markdown';
 import './ChatAssistant.css';
 
+// Defines the shape of a message in the chat history
 type Message = {
   role: 'user' | 'assistant';
   content: string;
-  properties?: any[];
+  properties?: any[]; // Holds properties to be displayed
 };
 
+// Defines the shape of the session state object
 type SessionState = {
   page?: number;
-  last_search_type?: string;
-  structured_criteria?: Record<string, any>;
+  last_successful_search?: Record<string, any>;
+  search_criteria?: Record<string, any>;
+  properties_in_context?: any[];
+  focused_property_id?: string;
+  focused_property_details?: Record<string, any>;
 };
 
 type ChatAssistantProps = {
@@ -28,8 +33,8 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [excludeIds, setExcludeIds] = useState<string[]>([]);
-  // --- FIX: Add state to hold the session context from the backend ---
+  
+  // This state holds the entire conversational context received from the backend
   const [sessionState, setSessionState] = useState<SessionState>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -50,8 +55,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         ]);
         setInput('');
         setIsLoading(false);
-        setExcludeIds([]);
-        // --- FIX: Reset session state on open ---
+        // Reset session state on open
         setSessionState({});
     }
   }, [isOpen]);
@@ -66,13 +70,14 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     setIsLoading(true);
 
     try {
+        // This endpoint now points to our new, unified FastAPI backend
         const response = await fetch('/api/chat_langchain', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                // Send only the necessary message info
                 messages: newMessages.map(({ role, content, properties }) => ({ role, content, properties })),
-                exclude_ids_context: excludeIds,
-                // --- FIX: Send the current session state back to the backend ---
+                // Send the current session state back to the backend for context
                 session_state: sessionState,
             }),
         });
@@ -90,13 +95,9 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         };
         setMessages(prev => [...prev, assistantMessage]);
 
-        // --- FIX: Update the local session state with the new state from the backend ---
+        // Update the local session state with the new state from the backend
+        // This is the core of maintaining context-first behavior
         setSessionState(data.session_state || {});
-
-        if (data.properties && data.properties.length > 0) {
-            const newIds = data.properties.map((p: any) => p.id);
-            setExcludeIds(prev => [...new Set([...prev, ...newIds])]);
-        }
 
     } catch (error: any) {
         console.error("Failed to fetch AI response:", error);
@@ -108,7 +109,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     } finally {
         setIsLoading(false);
     }
-  }, [input, isLoading, messages, excludeIds, sessionState]);
+  }, [input, isLoading, messages, sessionState]); // Add sessionState as a dependency
   
   if (!isOpen) return null;
 
@@ -130,9 +131,9 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
             <div key={index}>
               <div className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white shrink-0"><Sparkles size={16} /></div>}
-                <div className={`max-w-[90%] md:max-w-[70%] lg:max-w-[75%] 
+                <div className={`max-w-[90%] md:max-w-[70%] lg:w-fit lg:max-w-[75%]
                 ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'} 
-                rounded-2xl p-3`}>
+                rounded-2xl p-3 chat-markdown`}>
                 <ReactMarkdown
                   components={{
                     a: ({node, ...props}) => (

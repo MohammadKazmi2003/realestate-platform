@@ -1,15 +1,33 @@
 /* src/app/components/ChatAssistant.css */
 
 .chat-markdown p {
-    margin: 0;
-  }
-  
-  .chat-markdown a {
-    color: #2563eb; /* A nice blue color */
-    text-decoration: underline;
-    font-weight: 500;
-  }
-  
-  .chat-markdown a:hover {
-    color: #1d4ed8;
-  }
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.chat-markdown p:first-child {
+  margin-top: 0;
+}
+.chat-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown a {
+  color: #2563eb; /* A nice blue color */
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.chat-markdown a:hover {
+  color: #1d4ed8;
+}
+
+.chat-markdown ul, .chat-markdown ol {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 1.5rem;
+}
+
+.chat-markdown li {
+  margin-bottom: 0.25rem;
+}

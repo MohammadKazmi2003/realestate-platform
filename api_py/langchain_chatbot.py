@@ -1,475 +1,782 @@
+# --- api_py/langchain_chatbot.py ---
+"""
+This file implements the refactored, context-first conversational agent.
+(Version 7 - Adds FOLLOW_UP_QUESTION intent to fix context-loss.
+ Fixes tool invocation logic to use ainvoke(tool_input) for all tools.)
+
+It uses LangGraph to create a multi-stage reasoning graph with nodes for:
+1. Intent Classification
+2. Tool Orchestration
+3. Tool Execution
+4. Response Synthesis
+"""
+
 import os
-import asyncio
-import logging
 import json
+import logging
 from typing import List, Dict, Any, Optional, TypedDict, Literal
 from uuid import UUID
+import re
+from bs4 import BeautifulSoup
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field
-from supabase import create_client, Client
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langgraph.graph import StateGraph, END
-from api_py.shared_embedding import embedding_engine
-from bs4 import BeautifulSoup
+from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
 
+# Import the newly created tool definitions
+from api_py.tools import (
+    tools,
+    StructuredSearchInput, ListingDetailsInput,
+    TextSearchInput, SemanticSearchInput, KnowledgeSearchInput
+)
 
 # --- Environment and Global Setup ---
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Set logging level to INFO
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Configuration & Clients ---
-SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY environment variable is missing.")
 
-if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY, TAVILY_API_KEY]):
-    raise ValueError("One or more required environment variables are missing.")
-
-try:
-    supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-except Exception as e:
-    logger.error(f"Failed to initialize clients: {e}")
-    raise
-
-router = APIRouter()
-
-# --- Dual-Model Architecture ---
 llm_router = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
 llm_generator = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
 
-# --- Pydantic Models for Data Structure ---
+
+# --- Pydantic Models for Frontend Data Contract ---
+
 class Message(BaseModel):
+    """A single message in the chat history."""
     role: str
     content: str
     properties: Optional[List[Dict[str, Any]]] = None
 
 class ChatRequest(BaseModel):
+    """The request payload sent from the frontend."""
     messages: List[Message]
     session_state: Dict[str, Any] = {}
 
 class ToolChoice(BaseModel):
+    """
+    A model to represent the tool selected by the orchestrator node.
+    """
     tool_name: Literal[
-        "structured_property_search", "full_text_property_search", "semantic_property_search",
-        "get_listing_details", "knowledge_web_search", "respond_to_user"
-    ] = Field(..., description="The tool to use based on the user's query.")
-    tool_input: Optional[Dict[str, Any]] = Field(None, description="The input parameters for the chosen tool. Must be null for 'respond_to_user'.")
+        "structured_property_search",
+        "full_text_property_search",
+        "semantic_property_search",
+        "get_listing_details",
+        "knowledge_web_search",
+        "respond_to_user"
+    ] = Field(description="The name of the tool to execute.")
+    tool_input: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The input parameters for the chosen tool, as a dictionary."
+    )
 
-# --- Helper Functions for Token-Efficient Formatting ---
+# --- Pydantic Model for Parameter Extraction ---
+class ExtractedSearchCriteria(BaseModel):
+    """A schema for extracting structured search parameters from user text."""
+    location: Optional[str] = Field(default=None, description="The city, neighborhood, or area.")
+    property_type: Optional[str] = Field(default=None, description="e.g., 'apartment', 'villa', 'plot'")
+    min_price: Optional[float] = Field(default=None, description="The minimum numerical price. e.g., 5000000")
+    max_price: Optional[float] = Field(default=None, description="The maximum numerical price. e.g., 10000000")
+    bedrooms: Optional[int] = Field(default=None, description="The number of bedrooms. e.g., 2")
+
+    @field_validator('property_type')
+    @classmethod
+    def validate_property_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is None: return None
+        v_lower = v.lower()
+        if 'apartment' in v_lower: return 'apartment'
+        if 'villa' in v_lower: return 'villa'
+        if 'plot' in v_lower: return 'plot'
+        if 'commercial' in v_lower: return 'commercial'
+        if 'land' in v_lower: return 'land'
+        return v
+
+    @field_validator('bedrooms')
+    @classmethod
+    def validate_bedrooms(cls, v: Optional[int]) -> Optional[int]:
+        if isinstance(v, str):
+            match = re.search(r'\d+', v)
+            if match:
+                return int(match.group(0))
+        return v
+
+# Helper for extraction
+def _parse_price(text: str) -> Optional[float]:
+    """Helper to convert text like '1 million' or '50 lakhs' to float."""
+    text = text.lower().strip()
+    match = re.search(r'([\d\.]+)', text)
+    if not match:
+        return None
+
+    num = float(match.group(1))
+
+    if 'crore' in text or 'cr' in text:
+        return num * 10000000
+    if 'lakh' in text or 'lac' in text:
+        return num * 100000
+    if 'million' in text:
+        return num * 1000000
+    if 'thousand' in text or 'k' in text:
+        return num * 1000
+    return num
+
+# --- Helper Functions for Text Formatting ---
+
+def strip_html(text: Optional[str]) -> str:
+    """Remove HTML tags from a string."""
+    if not text:
+        return ""
+    try:
+        return BeautifulSoup(text, "lxml").get_text(" ", strip=True)
+    except:
+        try:
+            return BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            return str(text)
+
 def format_property_summary(properties: List[Dict[str, Any]]) -> str:
+    """Creates a token-efficient summary of multiple properties for the LLM."""
     if not properties:
         return "No properties found."
     summary_lines = []
-    for prop in properties:
-        price = f"₹{prop.get('price'):,}" if prop.get('price') else "Price on request"
+    for i, prop in enumerate(properties, 1):
+        price_num = prop.get('price')
+        price = f"₹{price_num:,.0f}" if isinstance(price_num, (int, float)) else "Price on request"
         summary_lines.append(
-            f"ID: {prop.get('id')}, Title: {prop.get('title')}, Price: {price}, Location: {prop.get('location')}"
+            f"Index: {i}, ID: {prop.get('id')}, Title: {prop.get('title')}, Price: {price}, Location: {prop.get('location')}"
         )
     return "\n".join(summary_lines)
 
-# Html strip function to store fields without html tags 
-def strip_html(text: Optional[str]) -> str:
-    """Remove HTML tags from a string while preserving readable text."""
-    if not text:
-        return ""
-    return BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
-
-
 def format_property_details(details: Dict[str, Any]) -> str:
-    """
-    Formats the complete property details JSON into a comprehensive, readable, 
-    and AI-friendly summary. It preserves all critical information.
-    """
+    """Formats the full JSONB details of a property into a readable summary for the LLM."""
     if not details:
         return "No details available for this property."
 
     output_lines = []
 
     def format_value(val):
-        """Helper to format individual values for readability."""
-        if val is None or val == '':
-            return None
-        if isinstance(val, bool):
-            return "Yes" if val else "No"
+        if val is None or val == '': return None
+        if isinstance(val, bool): return "Yes" if val else "No"
         if isinstance(val, (int, float)):
-            if val > 10000:
-                return f"₹{val:,}"
+            if val > 100000: return f"₹{val:,.0f}"
             return str(val)
         return str(val)
 
-    # --- Process All Fields Dynamically ---
+    key_fields = ['title', 'description', 'description_html', 'price']
+    for key in key_fields:
+        if key in details:
+            val = format_value(details[key])
+            if val:
+                key_title = key.replace('_', ' ').title()
+                if 'description' in key:
+                    output_lines.append(f"\n{key_title}:\n{strip_html(val)}")
+                else:
+                    output_lines.append(f"{key_title}: {val}")
+
     for key, value in details.items():
-        # Skip empty fields and internal IDs/links that are not useful for the LLM
-        if value is None or value == '' or key in ['id', 'page_link', 'images', 'listing_type', 'user_id', 'created_at', 'profiles', 'property_media', 'project_media']:
+        if key in key_fields or value is None or value == '' or key.startswith('lookup_') or 'media' in key:
             continue
 
         formatted_key = key.replace('_', ' ').title()
 
-        # Handle lists (e.g., features, amenities, faqs)
         if isinstance(value, list) and value:
-            # Handle lists of dicts first
             if all(isinstance(item, dict) for item in value):
-                # Specifically for FAQs
-                if key == 'faqs' and all('question' in item and 'answer' in item for item in value):
-                    faq_lines = [f"\n{formatted_key}:"]
+                if key.startswith('details_') and value[0]:
+                    output_lines.append(f"\n{formatted_key}:")
+                    for sub_key, sub_val in value[0].items():
+                        if 'id' not in sub_key and not isinstance(sub_val, (dict, list)):
+                            formatted_sub_val = format_value(sub_val)
+                            if formatted_sub_val:
+                                output_lines.append(f"  {sub_key.replace('_', ' ').title()}: {formatted_sub_val}")
+                elif key == 'faqs' and all('question' in item and 'answer' in item for item in value):
+                    output_lines.append("\nFAQs:")
                     for item in value:
-                        q = item.get('question')
-                        a = item.get('answer')
-                        if q and a:
-                            faq_lines.append(f"  Q: {q}\n  A: {a}")
-                    if len(faq_lines) > 1:
-                        output_lines.append("\n".join(faq_lines))
-                # Generic handler for other lists of dicts (like amenities)
+                        output_lines.append(f"  Q: {item.get('question')}\n  A: {item.get('answer')}")
                 else:
                     items = [item.get('name') for item in value if item.get('name')]
                     if items:
                         output_lines.append(f"{formatted_key}: {', '.join(items)}")
-
-            # Handle simple lists of strings/numbers (like property_types for projects)
             elif all(isinstance(item, (str, int, float)) for item in value):
                 items = [format_value(item) for item in value if item]
                 if items:
                     output_lines.append(f"{formatted_key}: {', '.join(items)}")
-        
-        # Handle dictionary/object values (e.g., status, price_range)
+
         elif isinstance(value, dict) and value:
-            dict_lines = [f"\n{formatted_key}:"]
+            output_lines.append(f"\n{formatted_key}:")
             for sub_key, sub_val in value.items():
                 formatted_sub_val = format_value(sub_val)
                 if formatted_sub_val:
-                    dict_lines.append(f"  {sub_key.replace('_', ' ').title()}: {formatted_sub_val}")
-            if len(dict_lines) > 1:
-                output_lines.append("\n".join(dict_lines))
-
-        # Handle simple key-value pairs (strings, numbers, bools)
-        else:
-            formatted_val = format_value(value)
-            if formatted_val:
-                # Add extra spacing for long text fields
-                if key in ['description', 'master_plan_description', 'description_html']:
-                    cleaned_text = strip_html(formatted_val)  # <-- new line
-                    output_lines.append(f"\n{formatted_key}:\n{cleaned_text}")   # <-- use cleaned text
-                else:
-                    output_lines.append(f"{formatted_key}: {formatted_val}")
+                    output_lines.append(f"  {sub_key.replace('_', ' ').title()}: {formatted_sub_val}")
 
     return "\n".join(output_lines)
 
 
-# --- Asynchronous Tools Definition ---
-@tool
-async def structured_property_search(
-    location: Optional[str] = None, property_type: Optional[str] = None,
-    min_price: Optional[float] = None, max_price: Optional[float] = None,
-    bedrooms: Optional[int] = None, page: int = 1
-) -> str:
-    """Searches for properties using specific, structured criteria like location, price, and number of bedrooms."""
-    logger.info(f"TOOL CALL: Structured search with criteria: {{location: {location}, property_type: {property_type}, page: {page}}}")
-    params = { 
-        "p_location": location, "p_property_type": property_type, "p_min_price": min_price, 
-        "p_max_price": max_price, "p_bedrooms": bedrooms, "p_amenities": None, 
-        "p_exclude_ids": [], "p_page": page, "p_limit": 10 
-    }
-    response = await asyncio.to_thread(supabase_client.rpc("search_all_properties", params).execute)
-    return json.dumps(response.data, indent=2) if response.data else "No properties found matching your criteria."
-
-@tool
-async def full_text_property_search(query: str) -> str:
-    """Performs a full-text search for properties by their name or title."""
-    logger.info(f"TOOL CALL: Full-text search for query: '{query}'")
-    params = {"p_query": query, "p_exclude_ids": []}
-    response = await asyncio.to_thread(supabase_client.rpc("text_search_properties", params).execute)
-    return json.dumps(response.data, indent=2) if response.data else f"No properties found for '{query}'."
-
-@tool
-async def semantic_property_search(query: str) -> str:
-    """Searches for properties based on a descriptive or conceptual query using vector embeddings."""
-    logger.info(f"TOOL CALL: Semantic search for query: '{query}'")
-    query_embedding = embedding_engine.embed_query(query)
-    params = {"query_embedding": query_embedding, "match_threshold": 0.78, "match_count": 10}
-    response = await asyncio.to_thread(supabase_client.rpc("match_property_chunks", params).execute)
-    return json.dumps(response.data, indent=2) if response.data else "No properties found for that description."
-
-@tool
-async def get_listing_details(listing_id: str) -> str:
-    """Fetches all available details for a single property or project using its unique ID."""
-    logger.info(f"TOOL CALL: Fetching full details for listing ID: {listing_id}")
-    if not listing_id:
-        return "Error: A valid listing_id must be provided."
-    try:
-        UUID(listing_id)
-        response = await asyncio.to_thread(supabase_client.rpc('get_listing_details', {'p_listing_id': listing_id}).execute)
-        
-        if not response.data:
-            return "Error: No data found for this ID."
-        
-        details_object = response.data[0] if isinstance(response.data, list) else response.data
-        return json.dumps(details_object, indent=2)
-
-    except (ValueError, TypeError):
-        return f"Error: The provided ID '{listing_id}' is not a valid UUID. Please find the correct ID from the context."
-    except Exception as e:
-        logger.error(f"Error in get_listing_details tool: {e}", exc_info=True)
-        return f"An error occurred while fetching details. Error: {e}"
-
-@tool
-async def knowledge_web_search(query: str) -> str:
-    """Searches the web to answer general real estate questions that do not involve property listings."""
-    logger.info(f"TOOL CALL: Knowledge search for query: '{query}'")
-    tavily_tool = TavilySearchResults(max_results=3, api_key=TAVILY_API_KEY)
-    results = await tavily_tool.ainvoke(query)
-    return "\n".join([res["content"] for res in results])
-
-# --- Tool Registry ---
-tools = {
-    "structured_property_search": structured_property_search,
-    "full_text_property_search": full_text_property_search,
-    "semantic_property_search": semantic_property_search,
-    "get_listing_details": get_listing_details,
-    "knowledge_web_search": knowledge_web_search,
-}
-
 # --- LangGraph State Definition ---
+
+UserIntent = Literal[
+    "NEW_SEARCH", "REFINE_SEARCH", "REQUEST_DETAILS", 
+    "FOLLOW_UP_QUESTION", # V7: Added new intent for context
+    "PAGINATION", "CLARIFICATION_RESPONSE", "META_COMMAND_RESET", "GENERAL_QUERY"
+]
+
 class AgentState(TypedDict):
+    """The full state object for the conversational agent."""
     messages: List[BaseMessage]
-    properties: List[Dict[str, Any]] 
-    properties_for_ui: Optional[List[Dict[str, Any]]]
-    last_search_criteria: Optional[Dict[str, Any]]
+    user_intent: Optional[UserIntent]
+    search_criteria: Dict[str, Any]
+    last_successful_search: Optional[Dict[str, Any]]
+    page: int
+    properties_in_context: List[Dict[str, Any]]
     focused_property_id: Optional[str]
     focused_property_details: Optional[Dict[str, Any]]
-    page: int
     tool_choice: Optional[ToolChoice]
     tool_output: Optional[str]
+    properties_for_ui: Optional[List[Dict[str, Any]]]
+
 
 # --- Agent Nodes ---
-async def agent_router_node(state: AgentState) -> Dict[str, Any]:
-    logger.info("--- NODE: Agent Router ---")
-    system_template = """You are a highly intelligent and methodical real estate assistant. Your primary goal is to analyze the user's query and the conversation context to select the correct tool and parameters.
 
-    **Your Core Reasoning Process:**
-    1.  **Analyze User Intent:** Determine the user's primary goal. Is it a new search, a follow-up on a specific property, a request for more results (pagination), or a general question?
-    2.  **Contextual Check:** Before doing anything else, check the `properties_in_context` list. If the user mentions a property by name (e.g., "Azure Heights") or by position ("the first one," "the 3rd property"), you MUST first check if that property exists in the context list.
-    3.  **Tool Selection Logic:**
-        - **If it's a follow-up on a property IN CONTEXT:** Use `get_listing_details` with the correct ID from the context.
-        - **If it's a follow-up on a property NOT IN CONTEXT:** This is a new search. Use `full_text_property_search`.
-        - **If it's a pagination request ("show more," "next"):** Check for `last_search_criteria`. If it exists, use `structured_property_search`, reusing the criteria and incrementing the page number (`current_session_page + 1`).
-        - **If it's a new, filtered search:** Use `structured_property_search`.
-        - **If you already have the details:** For follow-up questions about a property whose details are already in `focused_property_details`, use `respond_to_user`.
-        - **For general questions:** Use `knowledge_web_search`.
-
-    **CRITICAL SCENARIOS & EXAMPLES (Follow these strictly):**
-
-    **Scenario 1: Follow-up by Name (In Context)**
-    - **Context:** `properties_in_context` includes a property titled "Azure Heights".
-    - **User Query:** "Tell me more about Azure Heights."
-    - **Your Action:** You see "Azure Heights" is in the context. You will extract its ID.
-    - **Your Output:** `tool_name='get_listing_details', tool_input={{'listing_id': 'id_of_azure_heights'}}`
-
-    **Scenario 2: Follow-up by Name (NOT in Context)**
-    - **Context:** "Azure Heights" is NOT in `properties_in_context`.
-    - **User Query:** "Tell me more about Azure Heights."
-    - **Your Action:** The property is not in your immediate context, so you must perform a new search.
-    - **Your Output:** `tool_name='full_text_property_search', tool_input={{'query': 'Azure Heights'}}`
-
-    **Scenario 3: Pagination Request**
-    - **Context:** `last_search_criteria` exists, `current_session_page` is 1.
-    - **User Query:** "show me more options"
-    - **Your Action:** This is a clear pagination request. You MUST reuse `last_search_criteria` and set the `page` to `current_session_page + 1`.
-    - **Your Output:** `tool_name='structured_property_search', tool_input={{...last_search_criteria, 'page': 2}}`
-
-    **Current Context:**
-    {context}
+async def classify_intent(state: AgentState) -> Dict[str, Any]:
     """
-    context_data = {
-        "properties_in_context": [{'id': p.get('id'), 'title': p.get('title')} for p in state.get('properties', [])],
-        "current_session_page": state.get('page', 1),
-        "last_search_criteria": state.get('last_search_criteria'),
-        "focused_property_id": state.get('focused_property_id'),
-        "focused_property_details_available": "Yes" if state.get('focused_property_details') else "No"
-    }
-    context_str = json.dumps(context_data, indent=2, default=str)
-    
-    parser = llm_router.with_structured_output(ToolChoice)
-    prompt = ChatPromptTemplate.from_messages([("system", system_template), ("user", "{history}")])
-    chain = prompt | parser
-    
-    history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
-    tool_choice = await chain.ainvoke({"history": history_str, "context": context_str})
-    
-    logger.info(f"LLM chose tool: {tool_choice.tool_name} with input: {tool_choice.tool_input}")
-    
-    focused_id = state.get("focused_property_id")
-    if tool_choice.tool_name == "get_listing_details" and tool_choice.tool_input:
-        new_focused_id = tool_choice.tool_input.get("listing_id")
-        if new_focused_id:
-            focused_id = new_focused_id
+    Node 1: Classifies the user's intent based on the conversation history.
+    V7: Added FOLLOW_UP_QUESTION
+    """
+    logger.info("--- NODE: 1. Classify Intent ---")
+    history = state["messages"]
 
-    return {"tool_choice": tool_choice, "focused_property_id": focused_id}
+    class IntentClassifier(BaseModel):
+        intent: UserIntent = Field(
+            description="The single, most likely intent of the user's *last* message."
+        )
+
+    parser = PydanticOutputParser(pydantic_object=IntentClassifier)
+
+    # V7: Updated system prompt to include the new intent
+    system_template = """You are an expert at classifying user intent within a real estate conversation.
+    Analyze the final user message in the context of the conversation history.
+    Classify the user's intent into ONE of the following categories:
+    
+    - NEW_SEARCH: The user is starting a new search for properties with specific criteria. (e.g., "find 3 bhk in gurgaon", "show me plots for sale")
+    - REFINE_SEARCH: The user is adding, removing, or changing criteria for an *existing search*. (e.g., "only show me ones with a pool", "what about in a lower price range?")
+    - REQUEST_DETAILS: The user is asking for more information about a *specific property from a list* for the *first time*. (e.g., "tell me more about the second one", "what is the exact price of Azure Heights?")
+    - FOLLOW_UP_QUESTION: The user is asking a *specific question* about a property whose details are *already being discussed*. (e.g., "What is the payment plan for it?", "does it have parking?", "tell me more about the amenities.")
+    - PAGINATION: The user wants to see more results from the previous search. (e.g., "show me more", "next page", "what else do you have?")
+    - CLARIFICATION_RESPONSE: The user is *answering a direct question* you previously asked. (e.g., Your last message: "Which city?", User's message: "New Delhi" / "yes" / "correct")
+    - META_COMMAND_RESET: The user is giving a command to restart the conversation. (e.g., "start over", "forget that", "reset")
+    - GENERAL_QUERY: The user is asking a general real estate question not related to a specific listing. (e.g., "what is stamp duty?", "how do I get a home loan?")
+    
+    **Context is CRITICAL:**
+    - If the bot just showed details for "Property A" and the user asks "does it have a pool?", the intent is **FOLLOW_UP_QUESTION**.
+    - If the bot just showed a *list* of properties and the user asks "does the first one have a pool?", the intent is **REQUEST_DETAILS**.
+    - If the user asks "show me places with a pool", the intent is **REFINE_SEARCH**.
+    
+    {format_instructions}
+    """
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+        ("human", "Conversation History:\n{history}\n\nUser's final message: '{last_message}'\n\nClassification:")
+    ])
+
+    chain = prompt | llm_router | parser
+
+    history_str = "\n".join([f"{m.type}: {m.content}" for m in history])
+    last_message = history[-1].content
+
+    try:
+        result = await chain.ainvoke({
+            "history": history_str,
+            "last_message": last_message,
+            "format_instructions": parser.get_format_instructions()
+        })
+        logger.info(f"Intent classified as: {result.intent}")
+        return {"user_intent": result.intent}
+    except Exception as e:
+        logger.error(f"Error during intent classification: {e}")
+        return {"user_intent": "GENERAL_QUERY"} # Fallback
+
+async def _extract_and_merge_criteria(
+    history: List[BaseMessage],
+    current_criteria: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Runs a dedicated LLM chain to extract structured parameters from the
+    latest user message *in context* and merge them with the existing criteria.
+    """
+    logger.info("--- Helper: _extract_and_merge_criteria (Context-Aware) ---")
+
+    parser = PydanticOutputParser(pydantic_object=ExtractedSearchCriteria)
+
+    system_template = """You are an expert at extracting structured real estate data from a conversation.
+    Your goal is to update search parameters based on the *User's final message*.
+
+    1.  Analyze the "Conversation History" to understand the context.
+    2.  Pay close attention to the *Bot's last question* (if any).
+    3.  Analyze the "User's final message" as the *answer* to that question.
+
+    **CRITICAL RULES:**
+    1.  If the bot asked a question (e.g., "Which location?") and the user answers ("Dubai Marina"), extract that as the parameter.
+    2.  If the bot *suggested* a parameter (e.g., "Did you mean 2 bedrooms?") and the user confirms ("yes", "correct", "that's right"), you MUST extract that suggested parameter.
+    3.  Convert text to the correct data type.
+    4.  `bedrooms`: '2bhk', '2 bedroom', 'two bed' -> `bedrooms: 2`
+    5.  `price`:
+        - 'under 1 million', 'less than 10 lakhs' -> `max_price: 1000000`
+        - 'over 50 lakhs', 'more than 5 million' -> `min_price: 5000000`
+        - 'between 80 lakhs and 1 crore' -> `min_price: 8000000`, `max_price: 10000000`
+        - 'around 1.5 cr' -> `min_price: 14000000`, `max_price: 16000000`
+    6.  If a value is not mentioned or implied by context, omit the key.
+
+    {format_instructions}
+    """
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+        ("human", "Conversation History (Bot's last message is most important):\n{history}\n\nUser's final message: '{last_message}'\n\nExtracted Parameters:")
+    ])
+
+    chain = prompt | llm_router | parser
+
+    history_str = "\n".join([f"{m.type}: {m.content}" for m in history])
+    last_message = history[-1].content
+
+    try:
+        extracted_data = await chain.ainvoke({
+            "history": history_str,
+            "last_message": last_message,
+            "format_instructions": parser.get_format_instructions()
+        })
+
+        # Smartly merge criteria
+        new_criteria = extracted_data.model_dump()
+        merged_criteria = current_criteria.copy()
+
+        update_count = 0
+        for key, value in new_criteria.items():
+            if value is not None:
+                merged_criteria[key] = value
+                update_count += 1
+
+        logger.info(f"Extracted criteria: {new_criteria}")
+        logger.info(f"Merged {update_count} new values. Final criteria: {merged_criteria}")
+        return merged_criteria
+
+    except Exception as e:
+        logger.error(f"Error during parameter extraction: {e}")
+        return current_criteria # Return old criteria on failure
+
+async def _find_property_id_from_context(
+    user_message: str,
+    properties_in_context: List[Dict[str, Any]]
+) -> Optional[str]:
+    """
+    Uses an LLM to find the specific property ID the user is referring to.
+    """
+    logger.info("--- Helper: _find_property_id_from_context ---")
+    if not properties_in_context:
+        logger.warning("No properties in context to search for details.")
+        return None
+
+    property_summary = format_property_summary(properties_in_context)
+
+    class PropertyIDMatcher(BaseModel):
+        property_id: Optional[str] = Field(
+            default=None,
+            description="The single property ID (e.g., 'p-1a2b3c') the user is referring to."
+        )
+
+    parser = PydanticOutputParser(pydantic_object=PropertyIDMatcher)
+
+    system_template = """You are an expert at matching a user's request to a list of properties.
+    Analyze the "User's Request" and find the matching property ID from the "Property List".
+
+    **CRITICAL RULES:**
+    1.  "first one", "the first property" -> Corresponds to `Index: 1`
+    2.  "second one", "number 2" -> Corresponds to `Index: 2`
+    3.  If the user mentions a name (e.g., "Azure Heights"), find the property with that title.
+    4.  You MUST respond with the `ID` (e.g., 'p-1a2b3c'), NOT the `Index` (e.g., 1).
+    5.  If no match is found, respond with `null`.
+
+    {format_instructions}
+    """
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+        ("human", "Property List:\n{property_list}\n\nUser's Request: '{user_message}'\n\nMatched ID:")
+    ])
+
+    chain = prompt | llm_router | parser
+
+    try:
+        result = await chain.ainvoke({
+            "property_list": property_summary,
+            "user_message": user_message,
+            "format_instructions": parser.get_format_instructions()
+        })
+
+        if result.property_id:
+            logger.info(f"LLM matched user request to property ID: {result.property_id}")
+            return result.property_id
+        else:
+            logger.warning("LLM could not match user request to any property in context.")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error during property ID matching: {e}")
+        return None
+
+
+async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
+    """
+    Node 2: Selects the correct tool AND parameters.
+    V7: Added logic for FOLLOW_UP_QUESTION
+    """
+    logger.info(f"--- NODE: 2. Tool Orchestrator (Intent: {state.get('user_intent')}) ---")
+    user_intent = state.get("user_intent")
+
+    # Get current state
+    current_criteria = state.get("search_criteria", {})
+    last_search = state.get("last_successful_search", {})
+    current_page = state.get("page", 1)
+
+    # Handle meta-command
+    if user_intent == "META_COMMAND_RESET":
+        logger.info("Handling META_COMMAND_RESET: Clearing state.")
+        return {
+            "search_criteria": {},
+            "last_successful_search": None,
+            "page": 1,
+            "properties_in_context": [],
+            "focused_property_id": None,
+            "focused_property_details": None,
+            "tool_choice": None,
+            "tool_output": "Okay, let's start fresh. What are you looking for today?"
+        }
+
+    # Handle search-related intents
+    if user_intent in ["NEW_SEARCH", "REFINE_SEARCH", "CLARIFICATION_RESPONSE"]:
+
+        # Step 1: Extract and merge parameters
+        merged_criteria = await _extract_and_merge_criteria(state["messages"], current_criteria)
+
+        # Step 2: Validate merged criteria (Essential fields only: location)
+        if not merged_criteria.get("location"):
+            logger.warning("Validation FAILED: Location is missing after extraction.")
+            return {
+                "search_criteria": merged_criteria, # Save partial criteria
+                "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+                "tool_output": "I can certainly help with that. Could you please let me know the city or area you're interested in?"
+            }
+
+        # Step 3: Validation Success. Proceed with search.
+        logger.info(f"Validation SUCCESS. Proceeding with tool: structured_property_search")
+        return {
+            "tool_choice": ToolChoice(
+                tool_name="structured_property_search",
+                tool_input=merged_criteria
+            ),
+            "search_criteria": merged_criteria,
+            "last_successful_search": merged_criteria,
+            "page": 1,
+        }
+
+    # Handle Pagination
+    if user_intent == "PAGINATION":
+        if not last_search:
+            logger.warning("PAGINATION intent, but no 'last_successful_search' in state.")
+            return {
+                "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+                "tool_output": "I'm not sure what search you'd like to see more of. Could you please start a new search?"
+            }
+
+        logger.info(f"Handling PAGINATION. Re-using last search for page {current_page + 1}")
+        return {
+            "tool_choice": ToolChoice(
+                tool_name="structured_property_search",
+                tool_input=last_search
+            ),
+            "page": current_page + 1,
+        }
+
+    # Handle Details Request
+    if user_intent == "REQUEST_DETAILS":
+        logger.info("Handling REQUEST_DETAILS. Attempting to find property ID from context.")
+
+        property_id = await _find_property_id_from_context(
+            user_message=state["messages"][-1].content,
+            properties_in_context=state.get("properties_in_context", [])
+        )
+
+        if property_id:
+            logger.info(f"Found property ID {property_id}. Calling get_listing_details.")
+            return {
+                "tool_choice": ToolChoice(
+                    tool_name="get_listing_details",
+                    tool_input={"listing_id": property_id}
+                ),
+                "focused_property_id": property_id
+            }
+        else:
+            logger.warning("Could not find matching property ID. Asking user to clarify.")
+            return {
+                "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+                "tool_output": "I'm sorry, I'm not sure which property you're referring to. Could you please be more specific?"
+            }
+
+    # V7: Handle Follow-up Question
+    if user_intent == "FOLLOW_UP_QUESTION":
+        logger.info("Handling FOLLOW_UP_QUESTION.")
+        focused_details = state.get("focused_property_details")
+        
+        if not focused_details:
+            logger.warning("FOLLOW_UP_QUESTION intent, but no 'focused_property_details' in state.")
+            # Check if properties_in_context exists, maybe they meant to ask for details first
+            if state.get("properties_in_context"):
+                 return {
+                    "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+                    "tool_output": "I'm not sure which of those properties you're asking about. Could you ask me to get details for one of them first? For example, 'Tell me more about the first one'."
+                }
+            return {
+                "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+                "tool_output": "I'm sorry, I'm not sure which property you're referring to. Could you start a new search or ask for details on a property?"
+            }
+        
+        logger.info("Routing to response synthesizer with focused property details as context.")
+        # We have the details, so we just need the LLM to answer.
+        # We format the context and pass it via tool_output to the synthesizer.
+        details_summary = format_property_details(focused_details)
+        return {
+            "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+            # The synthesizer will use this as the context to answer the user's last question
+            "tool_output": f"The user is asking a follow-up question about the following property:\n\n{details_summary}"
+        }
+
+    # Handle General Query
+    if user_intent == "GENERAL_QUERY":
+        logger.info("Handling GENERAL_QUERY. Using knowledge_web_search.")
+        return {
+            "tool_choice": ToolChoice(
+                tool_name="knowledge_web_search",
+                tool_input={"query": state["messages"][-1].content}
+            )
+        }
+
+    # Fallback
+    logger.error(f"Orchestrator fallback: No matching intent logic for {user_intent}")
+    return {
+        "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
+        "tool_output": "I'm sorry, I'm not sure how to handle that. Could you rephrase?"
+    }
+
 
 async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
-    logger.info("--- NODE: Tool Executor ---")
+    """
+    Node 3: Executes the tool selected by the orchestrator.
+    V7: Reverted to ainvoke(tool_input) for ALL tools.
+    """
+    logger.info("--- NODE: 3. Tool Executor ---")
     tool_choice = state.get("tool_choice")
-    if not tool_choice: return {"tool_output": "Error: No tool was chosen."}
+    if not tool_choice or tool_choice.tool_name == "respond_to_user":
+        logger.info("No tool to execute, or 'respond_to_user' was chosen.")
+        return {"tool_output": state.get("tool_output")}
+
     tool_to_call = tools.get(tool_choice.tool_name)
-    if not tool_to_call: return {"tool_output": f"Error: Invalid tool '{tool_choice.tool_name}' chosen."}
+    if not tool_to_call:
+        logger.error(f"Invalid tool '{tool_choice.tool_name}' chosen.")
+        return {"tool_output": f"Error: Invalid tool '{tool_choice.tool_name}' chosen."}
 
     tool_input = tool_choice.tool_input or {}
-    output = await tool_to_call.ainvoke(tool_input)
-    update: Dict[str, Any] = {"tool_output": output}
-    
+
+    # V7: Map internal state keys to the tool's *actual* argument names
+    # These names MUST match the Pydantic models in tools.py
     if tool_choice.tool_name == "structured_property_search":
-        update["last_search_criteria"] = {k:v for k,v in tool_input.items() if k != 'page'}
-        update["page"] = tool_input.get('page', 1)
-    
-    if tool_choice.tool_name == "get_listing_details" and not output.startswith("Error"):
-        try:
-            update["focused_property_details"] = json.loads(output)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse details from get_listing_details output.")
-    return update
+        rpc_params = {
+            "location": tool_input.get("location"),
+            "property_type": tool_input.get("property_type"),
+            "min_price": tool_input.get("min_price"),
+            "max_price": tool_input.get("max_price"),
+            "bedrooms": tool_input.get("bedrooms"),
+            "amenities": tool_input.get("amenities"),
+            "page": state.get("page", 1), # Page comes from state
+            "limit": 5
+        }
+        # Filter out None values
+        rpc_params = {k: v for k, v in rpc_params.items() if v is not None}
+        tool_input = rpc_params # This dict will be passed as the single 'input' arg
+        logger.info(f"Prepared input dict for structured_property_search RPC: {tool_input}")
 
-async def generate_response_node(state: AgentState) -> Dict[str, Any]:
-    logger.info("--- NODE: Generate Response ---")
-    tool_choice = state.get("tool_choice")
-    tool_output = state.get('tool_output')
-    
-    properties_for_ui = []
-    persistent_properties = state.get('properties', [])
-    formatted_context = "I couldn't find any information about that. Could you please rephrase your request?"
+    elif tool_choice.tool_name == "get_listing_details":
+        logger.info(f"Calling get_listing_details with input: {tool_input}")
+        
+    elif tool_choice.tool_name == "knowledge_web_search":
+        logger.info(f"Calling knowledge_web_search with input: {tool_input}")
 
-    if tool_choice and tool_choice.tool_name == "respond_to_user" and state.get("focused_property_details"):
-        formatted_context = f"You already have the following details for the property in focus. Use them to answer the user's latest question:\n{format_property_details(state['focused_property_details'])}"
-    
-    elif tool_choice and tool_output:
-        if tool_output.startswith("Error"):
-            formatted_context = tool_output
-        else:
+    try:
+        # --- V7: CRITICAL FIX - Pass the dict directly as the 'input' argument for ALL tools ---
+        output = await tool_to_call.ainvoke(tool_input)
+            
+        logger.info(f"Tool {tool_choice.tool_name} executed successfully.")
+
+        # --- State update logic ---
+        if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]:
             try:
-                parsed_output = json.loads(tool_output)
-                is_new_search = tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]
-                
-                if is_new_search:
-                    properties_for_ui = parsed_output
-                    if tool_choice.tool_input and tool_choice.tool_input.get('page', 1) == 1:
-                        persistent_properties = parsed_output
-                    else: 
-                        persistent_properties.extend(parsed_output)
-
-                    if properties_for_ui:
-                        formatted_context = f"Found {len(properties_for_ui)} more properties:\n{format_property_summary(properties_for_ui)}"
-                    else:
-                        formatted_context = "I couldn't find any properties matching that description. Would you like to try a different search?"
-                
-                elif tool_choice.tool_name == "get_listing_details":
-                    # When getting details, format them for the LLM
-                    formatted_context = f"Here are the newly fetched details for the requested property:\n{format_property_details(parsed_output)}"
-                
-                else: # knowledge_web_search
-                    formatted_context = tool_output
+                parsed_output = json.loads(output)
+                if isinstance(parsed_output, list):
+                    # Save properties to state
+                    return {
+                        "tool_output": output,
+                        "properties_in_context": parsed_output,
+                        "properties_for_ui": parsed_output,
+                    }
             except (json.JSONDecodeError, TypeError):
-                formatted_context = tool_output # Fallback for non-JSON text from knowledge search
+                pass # Not a JSON list, just pass text
 
-    # --- INSPECTION LOGGING ---
-    # Log the exact context being sent to the final generator LLM.
-    logger.info(f"--- CONTEXT FOR GENERATOR ---\n{formatted_context}")
-    # --- END INSPECTION LOGGING ---
+        elif tool_choice.tool_name == "get_listing_details":
+            try:
+                parsed_output = json.loads(output)
+                if isinstance(parsed_output, dict):
+                    # Save details to state
+                    return {"tool_output": output, "focused_property_details": parsed_output}
+            except (json.JSONDecodeError, TypeError):
+                pass # Not a JSON dict, just pass text
+
+        return {"tool_output": output}
+
+    except Exception as e:
+        logger.error(f"Error executing tool {tool_choice.tool_name}: {e}", exc_info=True)
+        return {"tool_output": f"Error: An error occurred while using the tool: {e}"}
+
+async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Node 4: Generates the final user-facing response based on the graph's execution.
+    """
+    logger.info("--- NODE: 4. Response Synthesizer ---")
+    tool_choice = state.get("tool_choice")
+    tool_output = state.get("tool_output")
+    properties_for_ui = state.get("properties_for_ui") or []
+
+    context_for_llm = ""
+
+    # Priority 1: Handle pre-filled responses
+    if tool_output and (not tool_choice or tool_choice.tool_name == "respond_to_user"):
+        logger.info("Using pre-filled tool_output for response.")
+        context_for_llm = tool_output # This now includes context for FOLLOW_UP_QUESTION
+
+    # Priority 2: Handle successful tool output
+    elif tool_output and not tool_output.startswith("Error"):
+
+        if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]:
+            if properties_for_ui:
+                page_number = state.get("page", 1)
+                context_for_llm = f"Found {len(properties_for_ui)} properties (Page {page_number}):\n{format_property_summary(properties_for_ui)}"
+            else:
+                context_for_llm = "I couldn't find any properties matching that description. Would you like to try a different search?"
+
+        elif tool_choice.tool_name == "get_listing_details":
+            details = state.get("focused_property_details")
+            if details:
+                context_for_llm = f"Here are the details for the requested property:\n{format_property_details(details)}"
+            else:
+                context_for_llm = "I'm sorry, I couldn't retrieve the details for that property."
+
+        elif tool_choice.tool_name == "knowledge_web_search":
+            context_for_llm = tool_output 
+
+        else:
+            context_for_llm = tool_output
+
+    # Priority 3: Handle tool errors
+    elif tool_output and tool_output.startswith("Error"):
+        context_for_llm = f"I encountered an error: {tool_output}"
+
+    # Priority 4: Fallback
+    else:
+        logger.error("Response synthesizer fallback: No tool output or context found.")
+        context_for_llm = "I'm sorry, I'm not sure what to do next. Could you rephrase?"
+
+    logger.info(f"--- Context for Final Response ---\n{context_for_llm[:200]}...")
 
     system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response based on the information provided in the 'Latest Information' section.
 
-    **CRITICAL INSTRUCTION:** You MUST use the information provided in the 'Latest Information to Formulate Your Answer' section to answer the user's question. Do not rely on prior knowledge or make assumptions. If the answer exists in the provided text (like in an FAQ section), you must extract it and provide it to the user. If the information is not present, then you can say you do not have that specific detail.
+    **CRITICAL INSTRUCTION:** You MUST use the information provided in the 'Latest Information to Formulate Your Answer' section to answer the user's question.
+    - If the user asked a follow-up question (e.g., "what's the payment plan?"), and property details are provided, answer their question *directly* using those details.
+    - Do NOT just repeat the raw data.
+    - If properties were found, mention the number and the page.
+    - If details were found, summarize them.
+    - If you are asking a clarification question, just ask the question.
+    - Always end your response by proposing clear and helpful next steps (e.g., "Would you like more details on one of these?", "Should I refine this search?", "Would you like to see the next page?").
     """
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
         ("user", "Conversation History:\n{history}\n\nLatest Information to Formulate Your Answer:\n{context}")
     ])
-    chain = prompt | llm_generator
-    
+    chain = prompt | llm_generator | StrOutputParser()
+
     history_str = "\n".join([f"{m.type}: {m.content}" for m in state["messages"]])
-    response = await chain.ainvoke({"history": history_str, "context": formatted_context})
-    
-    final_messages = state["messages"] + [AIMessage(content=response.content)]
-    
+    response_content = await chain.ainvoke({"history": history_str, "context": context_for_llm})
+
+    final_messages = state["messages"] + [AIMessage(content=response_content)]
+
+    logger.info(f"Final response generated. Passing back {len(properties_for_ui or [])} properties to UI.")
+
     return {
-        "messages": final_messages, 
-        "properties": persistent_properties,
-        "properties_for_ui": properties_for_ui,
-        "last_search_criteria": state.get("last_search_criteria"),
-        "page": state.get("page"),
-        "focused_property_id": state.get("focused_property_id"),
-        "focused_property_details": state.get("focused_property_details")
+        "messages": final_messages,
+        "properties_for_ui": properties_for_ui
     }
 
-def should_call_tool(state: AgentState) -> Literal["tool_executor_node", "generate_response_node"]:
-    if state.get("tool_choice") and state["tool_choice"].tool_name != "respond_to_user":
+# --- Conditional Edges ---
+
+def should_execute_tool(state: AgentState) -> Literal["tool_executor_node", "response_synthesizer_node"]:
+    """Edge 2: Decides if a tool needs to be executed."""
+    tool_choice = state.get("tool_choice")
+    if tool_choice and tool_choice.tool_name != "respond_to_user":
+        logger.info(f"--- EDGE: Tool '{tool_choice.tool_name}' chosen, routing to Tool Executor.")
         return "tool_executor_node"
-    return "generate_response_node"
+
+    logger.info("--- EDGE: No tool chosen or 'respond_to_user', routing to Response Synthesizer.")
+    return "response_synthesizer_node"
+
 
 # --- Graph Definition ---
+from langgraph.graph import StateGraph, END
+
 def build_graph():
+    """Builds and compiles the new LangGraph agent."""
     workflow = StateGraph(AgentState)
-    workflow.add_node("agent_router_node", agent_router_node)
+
+    # Add nodes
+    workflow.add_node("classify_intent_node", classify_intent)
+    workflow.add_node("tool_orchestrator_node", tool_orchestrator)
     workflow.add_node("tool_executor_node", tool_executor_node)
-    workflow.add_node("generate_response_node", generate_response_node)
-    workflow.set_entry_point("agent_router_node")
-    workflow.add_conditional_edges("agent_router_node", should_call_tool, {"tool_executor_node": "tool_executor_node", "generate_response_node": "generate_response_node"})
-    workflow.add_edge("tool_executor_node", "generate_response_node")
-    workflow.add_edge("generate_response_node", END)
+    workflow.add_node("response_synthesizer_node", response_synthesizer_node)
+
+    # Define graph flow
+    workflow.set_entry_point("classify_intent_node")
+    workflow.add_edge("classify_intent_node", "tool_orchestrator_node")
+
+    # Edge: After orchestration, either execute a tool or go straight to response
+    workflow.add_conditional_edges(
+        "tool_orchestrator_node",
+        should_execute_tool,
+        {
+            "tool_executor_node": "tool_executor_node",
+            "response_synthesizer_node": "response_synthesizer_node"
+        }
+    )
+
+    workflow.add_edge("tool_executor_node", "response_synthesizer_node")
+    workflow.add_edge("response_synthesizer_node", END)
+
     return workflow.compile()
 
-langgraph_app = build_graph()
+# Compile the graph
+app = build_graph()
 
-# --- Main FastAPI Endpoint ---
-@router.post("/api/chat_langchain")
-async def chat_langchain_endpoint(chat_request: ChatRequest):
-    latest_query = chat_request.messages[-1].content.lower().strip()
-    if latest_query in ['close', 'exit', 'goodbye', 'bye', "that's all", "thank you"]:
-        return {"text_response": "You're welcome! Let me know if you need anything else.", "properties": [], "session_state": {}}
-        
-    messages: List[BaseMessage] = []
-    properties_from_session = chat_request.session_state.get("properties", [])
-    for msg in chat_request.messages:
-        if msg.role == 'user':
-            messages.append(HumanMessage(content=msg.content))
-        else:
-            messages.append(AIMessage(content=msg.content))
-
-    initial_state: AgentState = {
-        "messages": messages,
-        "properties": properties_from_session,
-        "properties_for_ui": None,
-        "last_search_criteria": chat_request.session_state.get("last_search_criteria"),
-        "focused_property_id": chat_request.session_state.get("focused_property_id"),
-        "focused_property_details": chat_request.session_state.get("focused_property_details"),
-        "page": chat_request.session_state.get("page", 1),
-        "tool_choice": None,
-        "tool_output": None,
-    }
-    
-    try:
-        final_state = await langgraph_app.ainvoke(initial_state, {"recursion_limit": 10})
-        final_message = final_state['messages'][-1]
-        
-        response_session_state = {
-            "page": final_state.get("page"),
-            "last_search_criteria": final_state.get("last_search_criteria"),
-            "focused_property_id": final_state.get("focused_property_id"),
-            "focused_property_details": final_state.get("focused_property_details"),
-            "properties": final_state.get("properties")
-        }
-        
-        return {
-            "text_response": final_message.content,
-            "properties": final_state.get("properties_for_ui", []),
-            "session_state": response_session_state
-        }
-    except Exception as e:
-        logger.error(f"An error occurred in the LangGraph agent orchestrator: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal server error occurred.")
-#studio Entry point
-app = langgraph_app
