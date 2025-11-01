@@ -149,7 +149,7 @@ def format_property_summary(properties: List[Dict[str, Any]]) -> str:
     summary_lines = []
     for i, prop in enumerate(properties, 1):
         price_num = prop.get('price')
-        price = f"₹{price_num:,.0f}" if isinstance(price_num, (int, float)) else "Price on request"
+        price = f"AED{price_num:,.0f}" if isinstance(price_num, (int, float)) else "Price on request"
         summary_lines.append(
             f"Index: {i}, ID: {prop.get('id')}, Title: {prop.get('title')}, Price: {price}, Location: {prop.get('location')}"
         )
@@ -701,15 +701,15 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
         logger.error("Response synthesizer fallback: No tool output or context found.")
         context_for_llm = "I'm sorry, I'm not sure what to do next. Could you rephrase?"
 
-    logger.info(f"--- Context for Final Response ---\n{context_for_llm[:200]}...")
+    logger.info(f"--- Context for Final Response ---\n{context_for_llm}...")
 
     system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response based on the information provided in the 'Latest Information' section.
 
     **CRITICAL INSTRUCTION:** You MUST use the information provided in the 'Latest Information to Formulate Your Answer' section to answer the user's question.
-    - If the user asked a follow-up question (e.g., "what's the payment plan?"), and property details are provided, answer their question *directly* using those details.
+    - If the user asked a follow-up question (e.g., "what's the payment plan?"), and property details are provided, answer their question *directly* using those details in pretty way.
     - Do NOT just repeat the raw data.
-    - If properties were found, mention the number and the page.
-    - If details were found, summarize them.
+    - When information is available, present it as a short, easy-to-read summary — neatly structured, clear, and engaging, with Light Use Of emojis to highlight key points.
+    - If details are found, summarize them in a clear, structured, and concise format. Use friendly and expressive emojis in section titles and/or headers to make the summary visually appealing and easy to scan.
     - If you are asking a clarification question, just ask the question.
     - Always end your response by proposing clear and helpful next steps (e.g., "Would you like more details on one of these?", "Should I refine this search?", "Would you like to see the next page?").
     """
@@ -779,4 +779,3 @@ def build_graph():
 
 # Compile the graph
 app = build_graph()
-
