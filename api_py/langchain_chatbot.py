@@ -489,21 +489,39 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
 
     # Handle PROJECT_NAME_SEARCH intent
     if user_intent == "PROJECT_NAME_SEARCH":
-        logger.info("Handling PROJECT_NAME_SEARCH. Routing to full_text_property_search.")
+        logger.info("Handling PROJECT_NAME_SEARCH.")
         user_query = state["messages"][-1].content
         cleaned_query = _clean_query_for_text_search(user_query)
-        # Hybrid logic: If the cleaned query is too short or unchanged (i.e., stripping failed), use LLM fallback
         if len(cleaned_query.split()) < 2 or cleaned_query == user_query.strip():
             logger.info("Manual cleaning insufficient or not confident. Using LLM to extract search phrase as fallback.")
             cleaned_query = await _llm_extract_project_name_query(state["messages"], user_query)
         else:
             logger.info(f"Manual cleaning produced: '{cleaned_query}'")
+        
+        # --- NEW: Try to match against properties_in_context first ---
+        properties = state.get("properties_in_context", [])
+        match = None
+        for prop in properties:
+            title = prop.get("title", "").lower()
+            if cleaned_query.lower() in title:
+                match = prop
+                break
+        if match:
+            logger.info(f"Property '{cleaned_query}' found in context. Returning details instead of searching again.")
+            return {
+                "tool_choice": ToolChoice(
+                    tool_name="get_listing_details",
+                    tool_input={"listing_id": match["id"]}
+                ),
+                "focused_property_id": match["id"]
+            }
+        # --- Otherwise, fallback to full text search ---
         return {
             "tool_choice": ToolChoice(
                 tool_name="full_text_property_search",
                 tool_input={"query": cleaned_query}
             ),
-            "search_criteria": {},  # Clear criteria since it is a text search
+            "search_criteria": {},
             "last_successful_search": None,
             "page": 1,
         }
