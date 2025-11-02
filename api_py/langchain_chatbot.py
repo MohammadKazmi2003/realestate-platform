@@ -1,4 +1,3 @@
-# --- api_py/langchain_chatbot.py ---
 """
 This file implements the refactored, context-first conversational agent.
 (Version 7 - Adds FOLLOW_UP_QUESTION intent to fix context-loss.
@@ -222,9 +221,10 @@ def format_property_details(details: Dict[str, Any]) -> str:
 # --- LangGraph State Definition ---
 
 UserIntent = Literal[
-    "NEW_SEARCH", "REFINE_SEARCH", "REQUEST_DETAILS", 
-    "FOLLOW_UP_QUESTION", # V7: Added new intent for context
-    "PAGINATION", "CLARIFICATION_RESPONSE", "META_COMMAND_RESET", "GENERAL_QUERY"
+    "NEW_SEARCH", "REFINE_SEARCH", "REQUEST_DETAILS",
+    "FOLLOW_UP_QUESTION",
+    "PAGINATION", "CLARIFICATION_RESPONSE", "META_COMMAND_RESET", "GENERAL_QUERY",
+    "PROJECT_NAME_SEARCH"
 ]
 
 class AgentState(TypedDict):
@@ -263,21 +263,23 @@ async def classify_intent(state: AgentState) -> Dict[str, Any]:
     system_template = """You are an expert at classifying user intent within a real estate conversation.
     Analyze the final user message in the context of the conversation history.
     Classify the user's intent into ONE of the following categories:
-    
+
     - NEW_SEARCH: The user is starting a new search for properties with specific criteria. (e.g., "find 3 bhk in gurgaon", "show me plots for sale")
     - REFINE_SEARCH: The user is adding, removing, or changing criteria for an *existing search*. (e.g., "only show me ones with a pool", "what about in a lower price range?")
     - REQUEST_DETAILS: The user is asking for more information about a *specific property from a list* for the *first time*. (e.g., "tell me more about the second one", "what is the exact price of Azure Heights?")
-    - FOLLOW_UP_QUESTION: The user is asking a *specific question* about a property whose details are *already being discussed*. (e.g., "What is the payment plan for it?", "does it have parking?", "tell me more about the amenities.")
+    - FOLLOW_UP_QUESTION: The user is asking a *specific question* about a property whose details are *already being discussed*. (e.g., "What is the payment plan for it?", "does it have parking?", "tell me about the location")
     - PAGINATION: The user wants to see more results from the previous search. (e.g., "show me more", "next page", "what else do you have?")
     - CLARIFICATION_RESPONSE: The user is *answering a direct question* you previously asked. (e.g., Your last message: "Which city?", User's message: "New Delhi" / "yes" / "correct")
     - META_COMMAND_RESET: The user is giving a command to restart the conversation. (e.g., "start over", "forget that", "reset")
     - GENERAL_QUERY: The user is asking a general real estate question not related to a specific listing. (e.g., "what is stamp duty?", "how do I get a home loan?")
-    
+    - PROJECT_NAME_SEARCH: The user mentions a property/project name or asks to show a property/project by name (e.g., "Azizi Venice 13", "Riverside Views - Royal 1", "show me Bluewaters Residences", "find Sobha Hartland Forest Villas").
+
     **Context is CRITICAL:**
     - If the bot just showed details for "Property A" and the user asks "does it have a pool?", the intent is **FOLLOW_UP_QUESTION**.
     - If the bot just showed a *list* of properties and the user asks "does the first one have a pool?", the intent is **REQUEST_DETAILS**.
     - If the user asks "show me places with a pool", the intent is **REFINE_SEARCH**.
-    
+    - If the user mentions the name of a property or project (and not a general search or criteria), use **PROJECT_NAME_SEARCH**.
+
     {format_instructions}
     """
 
@@ -458,6 +460,20 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
             "focused_property_details": None,
             "tool_choice": None,
             "tool_output": "Okay, let's start fresh. What are you looking for today?"
+        }
+
+    # Handle PROJECT_NAME_SEARCH intent
+    if user_intent == "PROJECT_NAME_SEARCH":
+        logger.info("Handling PROJECT_NAME_SEARCH. Routing to full_text_property_search.")
+        # Use the user's last message as the full text query
+        return {
+            "tool_choice": ToolChoice(
+                tool_name="full_text_property_search",
+                tool_input={"query": state["messages"][-1].content}
+            ),
+            "search_criteria": {},  # Clear criteria since it is a text search
+            "last_successful_search": None,
+            "page": 1,
         }
 
     # Handle search-related intents
@@ -779,3 +795,4 @@ def build_graph():
 
 # Compile the graph
 app = build_graph()
+    
