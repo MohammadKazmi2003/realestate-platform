@@ -218,6 +218,18 @@ def format_property_details(details: Dict[str, Any]) -> str:
     return "\n".join(output_lines)
 
 
+def _clean_query_for_text_search(query: str) -> str:
+    """Remove leading phrases like 'show me', 'find', 'search for', etc."""
+    import re
+    cleaned = re.sub(
+        r"^(show me|find|search for|look up|give me|i want|tell me about)\s+", "", 
+        query, 
+        flags=re.IGNORECASE
+    )
+    cleaned = cleaned.strip(" .,:;!?")
+    return cleaned
+
+
 # --- LangGraph State Definition ---
 
 UserIntent = Literal[
@@ -435,10 +447,23 @@ async def _find_property_id_from_context(
         return None
 
 
+async def _llm_extract_project_name_query(history: list, user_query: str) -> str:
+    """
+    Use an LLM to extract the property/project name or search phrase from the user's message.
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are an expert assistant that extracts only the property or project name from user queries for real estate searches. Remove all polite phrases, commands, and only return the search phrase to be used directly in a property database search. Examples:\n- Input: 'Show me Riverside Views - Royal 1 by Damac Properties' => Output: 'Riverside Views - Royal 1 by Damac Properties'\n- Input: 'Find Azizi Venice 13' => Output: 'Azizi Venice 13'\n- Input: 'Search for Bluewaters Residences' => Output: 'Bluewaters Residences'\n- Input: 'Give me Sobha Hartland Forest Villas' => Output: 'Sobha Hartland Forest Villas'\nIf the input is already just a project or property name, return it as is. Do not add any extra words or formatting."),
+        ("human", "Conversation History:\n{history}\n\nUser's final message: '{user_query}'\n\nExtracted Search Phrase:")
+    ])
+    chain = prompt | llm_router | StrOutputParser()
+    history_str = "\n".join([f"{m.type}: {m.content}" for m in history])
+    response = await chain.ainvoke({"history": history_str, "user_query": user_query})
+    return response.strip(" \n.:;!?\"'")
+
+
 async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
     """
     Node 2: Selects the correct tool AND parameters.
-    V7: Added logic for FOLLOW_UP_QUESTION
     """
     logger.info(f"--- NODE: 2. Tool Orchestrator (Intent: {state.get('user_intent')}) ---")
     user_intent = state.get("user_intent")
@@ -465,11 +490,18 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
     # Handle PROJECT_NAME_SEARCH intent
     if user_intent == "PROJECT_NAME_SEARCH":
         logger.info("Handling PROJECT_NAME_SEARCH. Routing to full_text_property_search.")
-        # Use the user's last message as the full text query
+        user_query = state["messages"][-1].content
+        cleaned_query = _clean_query_for_text_search(user_query)
+        # Hybrid logic: If the cleaned query is too short or unchanged (i.e., stripping failed), use LLM fallback
+        if len(cleaned_query.split()) < 2 or cleaned_query == user_query.strip():
+            logger.info("Manual cleaning insufficient or not confident. Using LLM to extract search phrase as fallback.")
+            cleaned_query = await _llm_extract_project_name_query(state["messages"], user_query)
+        else:
+            logger.info(f"Manual cleaning produced: '{cleaned_query}'")
         return {
             "tool_choice": ToolChoice(
                 tool_name="full_text_property_search",
-                tool_input={"query": state["messages"][-1].content}
+                tool_input={"query": cleaned_query}
             ),
             "search_criteria": {},  # Clear criteria since it is a text search
             "last_successful_search": None,
