@@ -44,7 +44,7 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is missing.")
 
 llm_router = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
-llm_generator = ChatGroq(temperature=0, model_name="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
+llm_generator = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
 
 
 # --- Pydantic Models for Frontend Data Contract ---
@@ -236,7 +236,7 @@ UserIntent = Literal[
     "NEW_SEARCH", "REFINE_SEARCH", "REQUEST_DETAILS",
     "FOLLOW_UP_QUESTION",
     "PAGINATION", "CLARIFICATION_RESPONSE", "META_COMMAND_RESET", "GENERAL_QUERY",
-    "PROJECT_NAME_SEARCH"
+    "PROJECT_NAME_SEARCH","SEMANTIC_SEARCH"
 ]
 
 class AgentState(TypedDict):
@@ -285,12 +285,16 @@ async def classify_intent(state: AgentState) -> Dict[str, Any]:
     - META_COMMAND_RESET: The user is giving a command to restart the conversation. (e.g., "start over", "forget that", "reset")
     - GENERAL_QUERY: The user is asking a general real estate question not related to a specific listing. (e.g., "what is stamp duty?", "how do I get a home loan?")
     - PROJECT_NAME_SEARCH: The user mentions a property/project name or asks to show a property/project by name (e.g., "Azizi Venice 13", "Riverside Views - Royal 1", "show me Bluewaters Residences", "find Sobha Hartland Forest Villas").
+    - SEMANTIC_SEARCH: The user query is primarily descriptive, lifestyle-based, or lacks specific structured search fields (like location, price, or bedrooms). Examples: "Show me apartments with sea views and lots of sunlight", "Homes with a modern, cozy feel", "I want something bright and airy", "Properties with mountain views", "Houses good for families and pets".
+
 
     **Context is CRITICAL:**
     - If the bot just showed details for "Property A" and the user asks "does it have a pool?", the intent is **FOLLOW_UP_QUESTION**.
     - If the bot just showed a *list* of properties and the user asks "does the first one have a pool?", the intent is **REQUEST_DETAILS**.
     - If the user asks "show me places with a pool", the intent is **REFINE_SEARCH**.
     - If the user mentions the name of a property or project (and not a general search or criteria), use **PROJECT_NAME_SEARCH**.
+    - If the user message is mainly descriptive, lifestyle-oriented, or lacks structured fields, use **SEMANTIC_SEARCH**.
+
 
     {format_instructions}
     """
@@ -520,6 +524,20 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
             "tool_choice": ToolChoice(
                 tool_name="full_text_property_search",
                 tool_input={"query": cleaned_query}
+            ),
+            "search_criteria": {},
+            "last_successful_search": None,
+            "page": 1,
+        }
+
+    # --- NEW: Handle SEMANTIC_SEARCH intent ---
+    if user_intent == "SEMANTIC_SEARCH":
+        logger.info("Handling SEMANTIC_SEARCH. Routing to semantic_property_search directly.")
+        user_query = state["messages"][-1].content
+        return {
+            "tool_choice": ToolChoice(
+                tool_name="semantic_property_search",
+                tool_input={"query": user_query}
             ),
             "search_criteria": {},
             "last_successful_search": None,
