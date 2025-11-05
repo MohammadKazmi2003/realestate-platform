@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 # --- Refactor Imports ---
 # Import the compiled graph and data models from the refactored chatbot file
+# ChatRequest model now includes `session_id`
 from api_py.langchain_chatbot import app as langgraph_app, AgentState, ChatRequest, Message
 from api_py.shared_embedding import embedding_engine
 # ------------------------
@@ -136,14 +137,15 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=500, detail="An error occurred during search.")
 
 
-# --- NEW LangGraph Chatbot Endpoint (Replaces the old router) ---
+# --- LangGraph Chatbot Endpoint ---
 @app.post("/api/chat_langchain")
 async def chat_langchain_endpoint(chat_request: ChatRequest):
     """
-    This is the new main endpoint for the conversational agent.
+    This is the main endpoint for the conversational agent.
     It takes the frontend request and invokes the compiled LangGraph app.
     """
-    logger.info(f"Invoking LangGraph agent for session...")
+    # MODIFIED: Log the session ID
+    logger.info(f"Invoking LangGraph agent for session: {chat_request.session_id}...")
     
     # 1. Handle simple "close" message
     latest_query = chat_request.messages[-1].content.lower().strip()
@@ -156,7 +158,6 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
         if msg.role == 'user':
             messages.append(HumanMessage(content=msg.content))
         else:
-            # Preserve properties on assistant messages for history
             content = f"{msg.content}"
             if msg.properties:
                 content += f"\n[Displayed {len(msg.properties)} properties to user]"
@@ -167,8 +168,8 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
     initial_state: AgentState = {
         "messages": messages,
         "user_intent": None,
-        "is_ambiguous": False,
-        "clarification_question": None,
+        # "is_ambiguous": False, # Note: These keys were in the old file but not in the new AgentState, removing them.
+        # "clarification_question": None, #
         "search_criteria": session_state.get("search_criteria", {}),
         "last_successful_search": session_state.get("last_successful_search"),
         "page": session_state.get("page", 1),
@@ -178,6 +179,10 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
         "tool_choice": None,
         "tool_output": None,
         "properties_for_ui": None,
+        # --- ADDED: Pass session_id into the graph state ---
+        "session_id": chat_request.session_id,
+        "session_memory": [], # This will be populated by the first node
+        # ----------------------------------------------------
     }
     
     try:
@@ -195,6 +200,8 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
             "properties_in_context": final_state.get("properties_in_context"),
             "focused_property_id": final_state.get("focused_property_id"),
             "focused_property_details": final_state.get("focused_property_details"),
+            # Note: We don't send back session_id or session_memory,
+            # as the frontend already knows the ID and doesn't need the memory.
         }
         
         # 7. Send the structured response to the frontend
