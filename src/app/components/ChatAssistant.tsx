@@ -1,4 +1,4 @@
-// src/app/components/ChatAssistant.tsx
+// src/app/components/ChatAssistant_Persistent.tsx
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -29,6 +29,11 @@ type ChatAssistantProps = {
   onClose: () => void;
 };
 
+/**
+ * --- PRODUCTION-GRADE PERSISTENT SESSION ---
+ * This implementation uses localStorage to persist the session ID
+ * across page loads and browser sessions, similar to ChatGPT or Claude.
+ */
 export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -37,9 +42,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   // This state holds the entire conversational context received from the backend
   const [sessionState, setSessionState] = useState<SessionState>({});
   
-  // --- MODIFICATION 1: Add state for the session ID ---
-  // This ID will be generated when the chat opens and used for this "session".
-  // It is non-persistent and will be reset if the component is unmounted.
+  // --- MODIFICATION 1: Session ID is now retrieved from localStorage ---
   const [sessionId, setSessionId] = useState<string>('');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -50,7 +53,29 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
 
   useEffect(scrollToBottom, [messages]);
 
-  // --- MODIFICATION 2: Set a new session ID when the chat is opened ---
+  // --- MODIFICATION 2: This effect now runs ONCE on mount to get/set the session ID ---
+  useEffect(() => {
+    const CHAT_SESSION_KEY = 'chat_session_id';
+    
+    // Try to get the session ID from localStorage
+    let storedSessionId = localStorage.getItem(CHAT_SESSION_KEY);
+    
+    if (storedSessionId) {
+      // If it exists, use it.
+      setSessionId(storedSessionId);
+    } else {
+      // If not, create a new one and store it.
+      const newSessionId = crypto.randomUUID();
+      localStorage.setItem(CHAT_SESSION_KEY, newSessionId);
+      setSessionId(newSessionId);
+    }
+    
+    // Note: We no longer reset the session ID when `isOpen` changes.
+    // The session is now persistent for the user's browser.
+    
+  }, []); // Empty dependency array ensures this runs only once.
+
+  // --- MODIFICATION 3: Reset chat state, but NOT session ID, when opening ---
   useEffect(() => {
     if (isOpen) {
         setMessages([
@@ -61,15 +86,13 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         ]);
         setInput('');
         setIsLoading(false);
-        // Reset session state on open
         setSessionState({});
-        // Generate a new, non-persistent session ID for this chat instance
-        setSessionId(crypto.randomUUID());
+        // We no longer generate a new ID here.
     }
   }, [isOpen]);
 
   const handleSend = useCallback(async () => {
-    // --- MODIFICATION 3: Add a check for sessionId ---
+    // Check for session ID is still important
     if (!input.trim() || isLoading || !sessionId) {
       if (!sessionId) {
         console.error("Chat Error: Attempted to send a message without a session ID.");
@@ -84,16 +107,13 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     setIsLoading(true);
 
     try {
-        // This endpoint now points to our new, unified FastAPI backend
         const response = await fetch('/api/chat_langchain', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                // Send only the necessary message info
                 messages: newMessages.map(({ role, content, properties }) => ({ role, content, properties })),
-                // Send the current session state back to the backend for context
                 session_state: sessionState,
-                // --- MODIFICATION 4: Pass the session_id at the top level ---
+                // Pass the persistent session ID
                 session_id: sessionId,
             }),
         });
@@ -110,9 +130,6 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
             properties: data.properties || [],
         };
         setMessages(prev => [...prev, assistantMessage]);
-
-        // Update the local session state with the new state from the backend
-        // This is the core of maintaining context-first behavior
         setSessionState(data.session_state || {});
 
     } catch (error: any) {
@@ -125,7 +142,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     } finally {
         setIsLoading(false);
     }
-  // --- MODIFICATION 5: Add sessionId to the dependency array ---
+  // sessionId is now stable after the first mount, but we include it.
   }, [input, isLoading, messages, sessionState, sessionId]);
   
   if (!isOpen) return null;
