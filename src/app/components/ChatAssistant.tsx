@@ -36,6 +36,12 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
   
   // This state holds the entire conversational context received from the backend
   const [sessionState, setSessionState] = useState<SessionState>({});
+  
+  // --- MODIFICATION 1: Add state for the session ID ---
+  // This ID will be generated when the chat opens and used for this "session".
+  // It is non-persistent and will be reset if the component is unmounted.
+  const [sessionId, setSessionId] = useState<string>('');
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -44,7 +50,7 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
 
   useEffect(scrollToBottom, [messages]);
 
-  // Reset state when the chat is opened
+  // --- MODIFICATION 2: Set a new session ID when the chat is opened ---
   useEffect(() => {
     if (isOpen) {
         setMessages([
@@ -57,11 +63,19 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
         setIsLoading(false);
         // Reset session state on open
         setSessionState({});
+        // Generate a new, non-persistent session ID for this chat instance
+        setSessionId(crypto.randomUUID());
     }
   }, [isOpen]);
 
   const handleSend = useCallback(async () => {
-    if (!input.trim() || isLoading) return;
+    // --- MODIFICATION 3: Add a check for sessionId ---
+    if (!input.trim() || isLoading || !sessionId) {
+      if (!sessionId) {
+        console.error("Chat Error: Attempted to send a message without a session ID.");
+      }
+      return;
+    }
 
     const userMessage: Message = { role: 'user', content: input };
     const newMessages = [...messages, userMessage];
@@ -79,6 +93,8 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
                 messages: newMessages.map(({ role, content, properties }) => ({ role, content, properties })),
                 // Send the current session state back to the backend for context
                 session_state: sessionState,
+                // --- MODIFICATION 4: Pass the session_id at the top level ---
+                session_id: sessionId,
             }),
         });
 
@@ -109,7 +125,8 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     } finally {
         setIsLoading(false);
     }
-  }, [input, isLoading, messages, sessionState]); // Add sessionState as a dependency
+  // --- MODIFICATION 5: Add sessionId to the dependency array ---
+  }, [input, isLoading, messages, sessionState, sessionId]);
   
   if (!isOpen) return null;
 
@@ -178,13 +195,13 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+              onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
               placeholder="e.g., Show Me Villas In Dubai"
               className="w-full p-3 pr-12 rounded-full border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
             />
             <button
               onClick={handleSend}
-              disabled={isLoading}
+              disabled={isLoading || !input.trim()}
               className="absolute right-2 top-1/2 -translate-y-1/2 bg-blue-600 text-white rounded-full w-9 h-9 flex items-center justify-center hover:bg-blue-700 disabled:bg-gray-400"
             >
               <Send size={18} />
