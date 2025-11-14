@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage # Import BaseMessage
 
 # --- Refactor Imports ---
 # Import the compiled graph and data models from the refactored chatbot file
@@ -137,14 +137,17 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=500, detail="An error occurred during search.")
 
 
-# --- LangGraph Chatbot Endpoint ---
+# --- LangGraph Chatbot Endpoint (UPDATED) ---
 @app.post("/api/chat_langchain")
 async def chat_langchain_endpoint(chat_request: ChatRequest):
     """
     This is the main endpoint for the conversational agent.
     It takes the frontend request and invokes the compiled LangGraph app.
+    
+    *** UPDATED ***
+    - Reads 'summary' from the incoming session_state.
+    - Writes 'summary' to the outgoing session_state.
     """
-    # MODIFIED: Log the session ID
     logger.info(f"Invoking LangGraph agent for session: {chat_request.session_id}...")
     
     # 1. Handle simple "close" message
@@ -168,8 +171,6 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
     initial_state: AgentState = {
         "messages": messages,
         "user_intent": None,
-        # "is_ambiguous": False, # Note: These keys were in the old file but not in the new AgentState, removing them.
-        # "clarification_question": None, #
         "search_criteria": session_state.get("search_criteria", {}),
         "last_successful_search": session_state.get("last_successful_search"),
         "page": session_state.get("page", 1),
@@ -179,10 +180,13 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
         "tool_choice": None,
         "tool_output": None,
         "properties_for_ui": None,
-        # --- ADDED: Pass session_id into the graph state ---
         "session_id": chat_request.session_id,
-        "session_memory": [], # This will be populated by the first node
-        # ----------------------------------------------------
+        
+        # --- UPDATED CONTEXT FIELDS ---
+        "summary": session_state.get("summary", ""), # Load summary from session
+        "recent_messages": [], # To be populated by build_context_node
+        "session_memory": [], # To be populated by build_context_node
+        # --------------------------------
     }
     
     try:
@@ -190,7 +194,8 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
         final_state = await langgraph_app.ainvoke(initial_state, {"recursion_limit": 10})
         
         # 5. Extract the final response and the new state
-        final_message = final_state['messages'][-1]
+        # The final message is now at index -1 (after save_memory_node)
+        final_message = final_state['messages'][-1] 
         
         # 6. Prepare the session state to send back to the frontend
         response_session_state = {
@@ -200,8 +205,11 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
             "properties_in_context": final_state.get("properties_in_context"),
             "focused_property_id": final_state.get("focused_property_id"),
             "focused_property_details": final_state.get("focused_property_details"),
-            # Note: We don't send back session_id or session_memory,
-            # as the frontend already knows the ID and doesn't need the memory.
+            
+            # --- ADDED ---
+            # Pass the new/updated summary back to the frontend
+            "summary": final_state.get("summary")
+            # -------------
         }
         
         # 7. Send the structured response to the frontend
