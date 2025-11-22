@@ -1,12 +1,16 @@
 """
 This file implements the refactored, context-first conversational agent.
-(Version 8 - Implements Session-Aware RAG Memory)
-** Modified to include History Trimming to prevent 429s/Tavily hallucinations **
+(Version 21 - Active Property Context Fix)
 
-This version integrates with the ChatVectorStore to:
-1.  Fetch session memory (past exchanges) in the `classify_intent` node.
-2.  Inject this memory into the `response_synthesizer_node` prompt.
-3.  Save new, meaningful exchanges to the vector store in `response_synthesizer_node`.
+This version builds on V20 and fixes the critical "Drifting Context" bug.
+
+**V21 Fix:**
+- The `classify_intent` node now receives the `focused_property_details` 
+  (Active Property) in its prompt.
+- New Priority Rule: If an Active Property exists, generic detail questions 
+  ("price?", "location?") are forced to `FOLLOW_UP_QUESTION`.
+- This prevents the bot from repeatedly trying to "find" the property in the 
+  list or asking "which property?" when the context is already established.
 """
 
 import os
@@ -66,8 +70,9 @@ except Exception as e:
 # --- Constants for "Meaningfulness Gate" and History Trimming ---
 MEANINGFUL_QUERY_WORDS = 2
 MEANINGFUL_ANSWER_WORDS = 5
-INTENT_HISTORY_LIMIT = 6    # Only use last 6 messages for classification
-RESPONSE_HISTORY_LIMIT = 10 # Only use last 10 messages for generation
+# --- ADDED: History Trimming Constants ---
+INTENT_HISTORY_LIMIT = 6    # Only use last 6 messages (3 turns) for classification
+RESPONSE_HISTORY_LIMIT = 10 # Only use last 10 messages (5 turns) for generation
 # ------------------------------------------------
 
 
@@ -102,7 +107,7 @@ class ToolChoice(BaseModel):
         description="The input parameters for the chosen tool, as a dictionary."
     )
 
-# --- Pydantic Model for Parameter Extraction (Unchanged) ---
+# --- Pydantic Model for Parameter Extraction (Unchanged from V8) ---
 class ExtractedSearchCriteria(BaseModel):
     """A schema for extracting structured search parameters from user text."""
     location: Optional[str] = Field(default=None, description="The city, neighborhood, or area.")
@@ -145,7 +150,7 @@ def _parse_price(text: str) -> Optional[float]:
     if 'thousand' in text or 'k' in text: return num * 1000
     return num
 
-# --- Helper Functions for Text Formatting (Unchanged) ---
+# --- Helper Functions for Text Formatting (Unchanged from V8) ---
 
 def strip_html(text: Optional[str]) -> str:
     if not text: return ""
@@ -222,7 +227,7 @@ def _clean_query_for_text_search(query: str) -> str:
     return cleaned
 
 
-# --- LangGraph State Definition ---
+# --- LangGraph State Definition (Unchanged from V8) ---
 
 UserIntent = Literal[
     "NEW_SEARCH", "REFINE_SEARCH", "REQUEST_DETAILS",
@@ -255,12 +260,25 @@ class AgentState(TypedDict):
 async def classify_intent(state: AgentState) -> Dict[str, Any]:
     """
     Node 1: Fetches session memory AND classifies the user's intent.
-    Includes History Trimming.
+    ** MODIFIED (V21) to inject 'Active Property' context. **
     """
     logger.info("--- NODE: 1. Fetch Memory & Classify Intent ---")
     history = state["messages"]
     
-    # --- NEW: Fetch Session Memory ---
+    # --- Get Properties on Screen ---
+    properties_in_context = state.get("properties_in_context", [])
+    properties_on_screen_str = format_property_summary(properties_in_context)
+
+    # --- (V21 FIX) Get Active/Focused Property Details ---
+    focused_details = state.get("focused_property_details")
+    if focused_details:
+        title = focused_details.get('title', 'Unknown')
+        pid = focused_details.get('id', 'Unknown')
+        active_property_str = f"Title: {title}, ID: {pid}"
+    else:
+        active_property_str = "None"
+    
+    # --- (V8 Logic) Fetch Session Memory ---
     session_id = state.get("session_id")
     last_query = history[-1].content
     
@@ -280,46 +298,68 @@ async def classify_intent(state: AgentState) -> Dict[str, Any]:
 
     parser = PydanticOutputParser(pydantic_object=IntentClassifier)
 
+    # --- V21 PROMPT UPDATE: Explicitly handle Active Property ---
     system_template = """You are an expert at classifying user intent within a real estate conversation.
-    Analyze the final user message in the context of the conversation history.
+    
+    **CONTEXT:**
+    1. **[Active Property]:** The specific property the user is currently looking at (detailed view).
+    2. **[Properties on Screen]:** The list of properties visible in the search results.
+
     Classify the user's intent into ONE of the following categories:
 
-    - NEW_SEARCH: The user is starting a new search for properties with specific criteria. (e.g., "find 3 bhk in gurgaon", "show me plots for sale")
-    - REFINE_SEARCH: The user is adding, removing, or changing criteria for an *existing search*. (e.g., "only show me ones with a pool", "what about in a lower price range?")
-    - REQUEST_DETAILS: The user is asking for more information about a *specific property from a list* for the *first time*. (e.g., "tell me more about the second one", "what is the exact price of Azure Heights?")
-    - FOLLOW_UP_QUESTION: The user is asking a *specific question* about a property whose details are *already being discussed*. (e.g., "What is the payment plan for it?", "does it have parking?", "tell me about the location")
-    - PAGINATION: The user wants to see more results from the previous search. (e.g., "show me more", "next page", "what else do you have?")
-    - CLARIFICATION_RESPONSE: The user is *answering a direct question* you previously asked. (e.g., Your last message: "Which city?", User's message: "New Delhi" / "yes" / "correct")
-    - META_COMMAND_RESET: The user is giving a command to restart the conversation. (e.g., "start over", "forget that", "reset")
-    - GENERAL_QUERY: The user is asking a general real estate question not related to a specific listing. (e.g., "what is stamp duty?", "how do I get a home loan?")
-    - PROJECT_NAME_SEARCH: The user mentions a property/project name or asks to show a property/project by name (e.g., "Azizi Venice 13", "Riverside Views - Royal 1", "show me Bluewaters Residences", "find Sobha Hartland Forest Villas").
-    - SEMANTIC_SEARCH: The user query is primarily descriptive, lifestyle-based, or lacks specific structured search fields (like location, price, or bedrooms). Examples: "Show me apartments with sea views and lots of sunlight", "Homes with a modern, cozy feel", "I want something bright and airy", "Properties with mountain views", "Houses good for families and pets".
+    - NEW_SEARCH: Starting a new search (e.g., "find 3 bhk in gurgaon").
+    - REFINE_SEARCH: Refining the *current list* (e.g., "only with pool", "sort by price").
+    - REQUEST_DETAILS: Asking to see details of a property *from the list* (e.g., "show me the first one").
+    - **FOLLOW_UP_QUESTION:** Asking a specific question about the **[Active Property]** (e.g., "price?", "location?", "parking?").
+    - PAGINATION: "show me more".
+    - CLARIFICATION_RESPONSE: Answering a bot question.
+    - META_COMMAND_RESET: "reset", "start over".
+    - GENERAL_QUERY: "what is stamp duty?".
+    - PROJECT_NAME_SEARCH: Searching for a specific project name *not* in the current context.
+    - SEMANTIC_SEARCH: Lifestyle queries ("quiet home").
 
-    **Context is CRITICAL:**
-    - If the bot just showed details for "Property A" and the user asks "does it have a pool?", the intent is **FOLLOW_UP_QUESTION**.
-    - If the bot just showed a *list* of properties and the user asks "does the first one have a pool?", the intent is **REQUEST_DETAILS**.
-    - If the user asks "show me places with a pool", the intent is **REFINE_SEARCH**.
-    - If the user mentions the name of a property or project (and not a general search or criteria), use **PROJECT_NAME_SEARCH**.
-    - If the user message is mainly descriptive, lifestyle-oriented, or lacks structured fields, use **SEMANTIC_SEARCH**.
+    **CRITICAL PRIORITY RULES:**
+    1.  **CHECK [Active Property] FIRST:**
+        - If [Active Property] is NOT "None", and the user asks a detail question (e.g., "how much?", "where is it?", "amenities?"), it is **FOLLOW_UP_QUESTION**.
+        - Even if the query is short ("price"), if an Active Property exists, it refers to that property.
+    
+    2.  **CHECK [Properties on Screen] SECOND:**
+        - If the user refers to an item in the list (e.g., "the second one", "Sobha One"), it is **REQUEST_DETAILS**.
 
+    3.  **DEFAULT:**
+        - "show me apartments in Dubai" -> **NEW_SEARCH**.
+        - "under 1M" -> **REFINE_SEARCH**.
+    
     {format_instructions}
     """
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
-        ("human", "Conversation History:\n{history}\n\nUser's final message: '{last_message}'\n\nClassification:")
+        ("human", """[Active Property]:
+{active_property}
+
+[Properties on Screen]:
+{properties_on_screen}
+
+Conversation History:
+{history}
+
+User's final message: '{last_message}'
+
+Classification:""")
     ])
 
     chain = prompt | llm_router | parser
 
     # --- TRIMMING FIX: Use only the last N messages for classification ---
-    # This prevents confusion from old context triggering "GENERAL_QUERY"
     recent_history = history[-INTENT_HISTORY_LIMIT:] 
     history_str = "\n".join([f"{m.type}: {m.content}" for m in recent_history])
     last_message = history[-1].content
 
     try:
         result = await chain.ainvoke({
+            "active_property": active_property_str,
+            "properties_on_screen": properties_on_screen_str,
             "history": history_str,
             "last_message": last_message,
             "format_instructions": parser.get_format_instructions()
@@ -336,9 +376,10 @@ async def _extract_and_merge_criteria(
     current_criteria: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
+    (V8 Logic)
     Runs a dedicated LLM chain to extract structured parameters from the
     latest user message *in context* and merge them with the existing criteria.
-    (Includes history trimming)
+    ** MODIFIED to include History Trimming. **
     """
     logger.info("--- Helper: _extract_and_merge_criteria (Context-Aware) ---")
 
@@ -403,29 +444,35 @@ async def _find_property_id_from_context(
     properties_in_context: List[Dict[str, Any]]
 ) -> Optional[str]:
     """
+    (V8 Logic + V19 JSON Jailing Fix)
     Uses an LLM to find the specific property ID the user is referring to.
-    (This function is unchanged)
     """
     logger.info("--- Helper: _find_property_id_from_context ---")
     if not properties_in_context:
         logger.warning("No properties in context to search for details.")
         return None
     property_summary = format_property_summary(properties_in_context)
+    
     class PropertyIDMatcher(BaseModel):
         property_id: Optional[str] = Field(
             default=None,
             description="The single property ID (e.g., 'p-1a2b3c') the user is referring to."
         )
+        
     parser = PydanticOutputParser(pydantic_object=PropertyIDMatcher)
+    
+    # --- MINIMAL FIX (V19): Simplified V8 prompt + JSON instruction ---
     system_template = """You are an expert at matching a user's request to a list of properties.
     Analyze the "User's Request" and find the matching property ID from the "Property List".
 
     **CRITICAL RULES:**
     1.  "first one", "the first property" -> Corresponds to `Index: 1`
     2.  "second one", "number 2" -> Corresponds to `Index: 2`
-    3.  If the user mentions a name (e.g., "Azure Heights"), find the property with that title.
-    4.  You MUST respond with the `ID` (e.g., 'p-1a2b3c'), NOT the `Index` (e.g., 1).
+    3.  If the user mentions a name (e.g., "Azure Heights"), find the title match.
+    4.  You MUST return the `ID` (e.g., 'p-1a2b3c'), NOT the `Index`.
     5.  If no match is found, respond with `null`.
+    
+    **Respond in JSON format.**
 
     {format_instructions}
     """
@@ -433,6 +480,8 @@ async def _find_property_id_from_context(
         ("system", system_template),
         ("human", "Property List:\n{property_list}\n\nUser's Request: '{user_message}'\n\nMatched ID:")
     ])
+    # --- END OF FIX ---
+    
     chain = prompt | llm_router | parser
     try:
         result = await chain.ainvoke({
@@ -447,14 +496,15 @@ async def _find_property_id_from_context(
             logger.warning("LLM could not match user request to any property in context.")
             return None
     except Exception as e:
-        logger.error(f"Error during property ID matching: {e}")
+        logger.error(f"Error during property ID matching: {e}", exc_info=True)
         return None
 
 
 async def _llm_extract_project_name_query(history: list, user_query: str) -> str:
     """
-    Use an LLM to extract the property/project name or search phrase from the user's message.
-    (Includes history trimming)
+    (V8 Logic)
+    Use an LLM to extract the property/project name.
+    ** MODIFIED to include History Trimming. **
     """
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are an expert assistant that extracts only the property or project name from user queries for real estate searches. Remove all polite phrases, commands, and only return the search phrase to be used directly in a property database search. Examples:\n- Input: 'Show me Riverside Views - Royal 1 by Damac Properties' => Output: 'Riverside Views - Royal 1 by Damac Properties'\n- Input: 'Find Azizi Venice 13' => Output: 'Azizi Venice 13'\n- Input: 'Search for Bluewaters Residences' => Output: 'Bluewaters Residences'\n- Input: 'Give me Sobha Hartland Forest Villas' => Output: 'Sobha Hartland Forest Villas'\nIf the input is already just a project or property name, return it as is. Do not add any extra words or formatting."),
@@ -473,7 +523,7 @@ async def _llm_extract_project_name_query(history: list, user_query: str) -> str
 async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
     """
     Node 2: Selects the correct tool AND parameters.
-    (This node is unchanged logic-wise)
+    (V8 Logic + V18 Fix for Follow-ups)
     """
     logger.info(f"--- NODE: 2. Tool Orchestrator (Intent: {state.get('user_intent')}) ---")
     user_intent = state.get("user_intent")
@@ -587,11 +637,15 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
                 "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
                 "tool_output": "I'm sorry, I'm not sure which property you're referring to. Could you start a new search or ask for details on a property?"
             }
-        logger.info("Routing to synthesizer with focused property details as context.")
+        
+        # *** MINIMAL FIX (V18) ***
+        # Pass the RAW details, not a meta-prompt.
+        # This lets the synthesizer's follow-up logic work.
+        logger.info("Routing to synthesizer with raw property details as context.")
         details_summary = format_property_details(focused_details)
         return {
             "tool_choice": ToolChoice(tool_name="respond_to_user", tool_input=None),
-            "tool_output": f"The user is asking a follow-up question about the following property:\n\n{details_summary}"
+            "tool_output": details_summary  # <-- THE FIX
         }
 
     if user_intent == "GENERAL_QUERY":
@@ -613,7 +667,7 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
 async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     """
     Node 3: Executes the tool selected by the orchestrator.
-    (This node is unchanged)
+    (V8 Logic - Unchanged)
     """
     logger.info("--- NODE: 3. Tool Executor ---")
     tool_choice = state.get("tool_choice")
@@ -678,21 +732,33 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
     """
     Node 4: Generates the final response AND saves memory.
-    Includes History Trimming.
+    ** MODIFIED (V20): Comprehensive Summary Fix. **
     """
     logger.info("--- NODE: 4. Response Synthesizer ---")
     tool_choice = state.get("tool_choice")
     tool_output = state.get("tool_output")
     properties_for_ui = state.get("properties_for_ui") or []
+    user_intent = state.get("user_intent")
+
+    # --- TRIMMING FIX: Use only the last N messages for generation ---
+    recent_messages = state["messages"][-RESPONSE_HISTORY_LIMIT:]
+    history_str = "\n".join([f"{m.type}: {m.content}" for m in recent_messages])
     
-    # --- NEW: Format session memory for the prompt ---
+    # --- (V8 Logic) Format session memory for the prompt ---
     session_memory_str = "\n".join(state.get("session_memory", []))
-    if session_memory_str:
+    
+    # --- (V19) CONDITIONAL CONTEXT FIX ---
+    # This is the fix for the "Context Pollution" bug.
+    # We only include noisy RAG/Summary if it's a relevant intent.
+    if user_intent == "FOLLOW_UP_QUESTION":
+        logger.info("Follow-up intent: Using LEAN context (No RAG/Summary).")
+        session_memory_context = "" # OMIT RAG
+    elif session_memory_str:
         logger.info(f"Injecting {len(state.get('session_memory', []))} memories into prompt.")
         session_memory_context = f"Relevant past exchanges from this session:\n{session_memory_str}\n\n"
     else:
         session_memory_context = ""
-    # ------------------------------------------------
+    # --- END OF FIX ---
 
     context_for_llm = ""
 
@@ -724,40 +790,70 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
 
     logger.info(f"--- Context for Final Response ---\n{context_for_llm}...")
 
-    # --- UPDATED: System prompt now includes session_memory ---
+    #
+    # *** V20 PROMPT UPDATE (Strict Differentiation) ***
+    # Explicitly handles REQUEST_DETAILS (Detailed) vs FOLLOW_UP_QUESTION (Concise)
+    #
     system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response based on the information provided.
 
     **CRITICAL INSTRUCTION:** You MUST use the information provided in the 'Latest Information' section to answer the user's question.
-    - If 'Relevant past exchanges' are provided, use them as context for your answer.
-    - If the user asked a follow-up question (e.g., "what's the payment plan?"), and property details are provided, answer their question *directly* using those details in a structured and pretty way.
-    - Do NOT just repeat the raw data.
-    - When information is available, present it as a short, easy-to-read summary — neatly structured, clear, and engaging, with Light Use Of emojis to highlight key points.
-    - If details are found, summarize them in a clear, structured, and concise format. Use friendly and expressive emojis in section titles and/or headers to make the summary visually appealing and easy to scan.
-    - If you are asking a clarification question, just ask the question.
-    - Always end your response by proposing clear and helpful next steps (e.g., "Would you like more details on one of these?", "Should I refine this search?", "Would you like to see the next page?").
+    - Use the 'Relevant past exchanges' as context.
+    
+    **RESPONSE TONE AND FORMAT:**
+
+    - **If the user's intent was 'REQUEST_DETAILS' (First-time Property View):**
+        - You MUST provide a **COMPREHENSIVE, DETAILED SUMMARY** of the property.
+        - Include: Overview, Location, Amenities, Developer, Price, Payment Plan (if available), and Delivery Date.
+        - Use friendly emojis like (📍, 💰, 🛏️, 🏢, 📅) to structure the sections.
+        - Make it sound inviting and professional.
+        - **DO NOT** be brief. Show the value of the property.
+
+    - **If the user's intent was 'FOLLOW_UP_QUESTION':**
+        - The 'Latest Information' is the FULL DETAILS of the property.
+        - Read the 'Recent Conversation' to find the user's *specific question*.
+        - Answer **ONLY** that question.
+        - Use light, minimal emojis to highlight key points while keeping the response neatly structured, clear, and engaging.
+        - **DO NOT** summarize the whole property again.
+        - **Examples:**
+            - User: "What is the price?" -> Response: "The price is 1.5M AED 💰."
+            - User: "How far is it from Downtown?" -> Response: "It is 15 minutes from Downtown 🚗."
+
+    - **If the intent was 'structured_property_search' or 'semantic_property_search':**
+        - Summarize the list of properties found concisely.
+        - Mention key details like Price and Location for each.
+
+    - Always end your response by proposing clear and helpful next steps (e.g., "Would you like more details on one of these?", "Should I refine this search?").
     """
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
-        ("user", "Conversation History:\n{history}\n\n{session_memory}Latest Information to Formulate Your Answer:\n{context}")
+        ("user", """[Relevant Past Exchanges]:
+{session_memory}
+
+[Recent Conversation]:
+{recent_messages}
+
+[Latest Information to Formulate Your Answer]:
+{context}
+
+[User's Intent]:
+{user_intent}
+""")
     ])
     # -------------------------------------------------------
     
     chain = prompt | llm_generator | StrOutputParser()
-
-    # --- TRIMMING FIX: Use only the last N messages for generation ---
-    recent_messages = state["messages"][-RESPONSE_HISTORY_LIMIT:]
-    history_str = "\n".join([f"{m.type}: {m.content}" for m in recent_messages])
     
     response_content = await chain.ainvoke({
-        "history": history_str,
+        "session_memory": session_memory_context or "None",
+        "recent_messages": history_str,
         "context": context_for_llm,
-        "session_memory": session_memory_context  # Pass in the formatted memory
+        "user_intent": state.get("user_intent", "None") # Pass intent to help prompt
     })
 
     final_messages = state["messages"] + [AIMessage(content=response_content)]
 
-    # --- NEW: "Meaningfulness Gate" and Save Memory Logic ---
+    # --- (V8 Logic) "Meaningfulness Gate" and Save Memory Logic ---
     try:
         session_id = state.get("session_id")
         query = state["messages"][-1].content
@@ -783,7 +879,7 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
         "properties_for_ui": properties_for_ui
     }
 
-# --- Conditional Edges (Unchanged) ---
+# --- Conditional Edges (Unchanged from V8) ---
 
 def should_execute_tool(state: AgentState) -> Literal["tool_executor_node", "response_synthesizer_node"]:
     """Edge 2: Decides if a tool needs to be executed."""
@@ -796,7 +892,7 @@ def should_execute_tool(state: AgentState) -> Literal["tool_executor_node", "res
     return "response_synthesizer_node"
 
 
-# --- Graph Definition (Unchanged) ---
+# --- Graph Definition (Unchanged from V8) ---
 from langgraph.graph import StateGraph, END
 
 def build_graph():
