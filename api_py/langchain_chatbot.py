@@ -1,16 +1,15 @@
 """
 This file implements the refactored, context-first conversational agent.
-(Version 21 - Active Property Context Fix)
+(Version 22 - Fix for Verbose List Response)
 
-This version builds on V20 and fixes the critical "Drifting Context" bug.
+This version builds on V21 and fixes the "Full Detail Format for Search" bug.
 
-**V21 Fix:**
-- The `classify_intent` node now receives the `focused_property_details` 
-  (Active Property) in its prompt.
-- New Priority Rule: If an Active Property exists, generic detail questions 
-  ("price?", "location?") are forced to `FOLLOW_UP_QUESTION`.
-- This prevents the bot from repeatedly trying to "find" the property in the 
-  list or asking "which property?" when the context is already established.
+**V22 Fix:**
+- **Response Synthesizer Prompt Update:** Explicitly instructs the LLM *NOT* to 
+  list property details in the text response for search intents (`NEW_SEARCH`, 
+  `structured_property_search`). It forces a concise "UI-first" confirmation.
+- **Intent Classification:** Minor reinforcement to ensure broad "show me" 
+  queries stick to `NEW_SEARCH`.
 """
 
 import os
@@ -307,10 +306,10 @@ async def classify_intent(state: AgentState) -> Dict[str, Any]:
 
     Classify the user's intent into ONE of the following categories:
 
-    - NEW_SEARCH: Starting a new search (e.g., "find 3 bhk in gurgaon").
-    - REFINE_SEARCH: Refining the *current list* (e.g., "only with pool", "sort by price").
-    - REQUEST_DETAILS: Asking to see details of a property *from the list* (e.g., "show me the first one").
-    - **FOLLOW_UP_QUESTION:** Asking a specific question about the **[Active Property]** (e.g., "price?", "location?", "parking?").
+    - **NEW_SEARCH**: Starting a new search (e.g., "find 3 bhk in gurgaon", "show me apartments in Dubai", "I want to buy a villa").
+    - REFINE_SEARCH: Refining the *current list* (e.g., "only with pool", "sort by price", "under 1M").
+    - REQUEST_DETAILS: Asking to see details of a property *from the list* (e.g., "show me the first one", "details of Sobha One").
+    - FOLLOW_UP_QUESTION: Asking a specific question about the **[Active Property]** (e.g., "price?", "location?", "parking?").
     - PAGINATION: "show me more".
     - CLARIFICATION_RESPONSE: Answering a bot question.
     - META_COMMAND_RESET: "reset", "start over".
@@ -320,11 +319,10 @@ async def classify_intent(state: AgentState) -> Dict[str, Any]:
 
     **CRITICAL PRIORITY RULES:**
     1.  **CHECK [Active Property] FIRST:**
-        - If [Active Property] is NOT "None", and the user asks a detail question (e.g., "how much?", "where is it?", "amenities?"), it is **FOLLOW_UP_QUESTION**.
-        - Even if the query is short ("price"), if an Active Property exists, it refers to that property.
+        - If [Active Property] is NOT "None", and the user asks a detail question, it is **FOLLOW_UP_QUESTION**.
     
     2.  **CHECK [Properties on Screen] SECOND:**
-        - If the user refers to an item in the list (e.g., "the second one", "Sobha One"), it is **REQUEST_DETAILS**.
+        - If the user refers to an item in the list (e.g., "the second one"), it is **REQUEST_DETAILS**.
 
     3.  **DEFAULT:**
         - "show me apartments in Dubai" -> **NEW_SEARCH**.
@@ -732,7 +730,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
     """
     Node 4: Generates the final response AND saves memory.
-    ** MODIFIED (V20): Comprehensive Summary Fix. **
+    ** MODIFIED (V22): Force-concise list responses to support UI Cards. **
     """
     logger.info("--- NODE: 4. Response Synthesizer ---")
     tool_choice = state.get("tool_choice")
@@ -769,6 +767,7 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
         if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]:
             if properties_for_ui:
                 page_number = state.get("page", 1)
+                # V22: We pass the summary to the LLM for context, but the prompt below restricts its use in the output.
                 context_for_llm = f"Found {len(properties_for_ui)} properties (Page {page_number}):\n{format_property_summary(properties_for_ui)}"
             else:
                 context_for_llm = "I couldn't find any properties matching that description. Would you like to try a different search?"
@@ -791,15 +790,19 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"--- Context for Final Response ---\n{context_for_llm}...")
 
     #
-    # *** V20 PROMPT UPDATE (Strict Differentiation) ***
-    # Explicitly handles REQUEST_DETAILS (Detailed) vs FOLLOW_UP_QUESTION (Concise)
+    # *** V22 PROMPT UPDATE (Strict UI-First Formatting) ***
     #
     system_template = """You are a helpful and intelligent real estate assistant. Your job is to generate a final, user-facing response based on the information provided.
 
     **CRITICAL INSTRUCTION:** You MUST use the information provided in the 'Latest Information' section to answer the user's question.
-    - Use the 'Relevant past exchanges' as context.
     
     **RESPONSE TONE AND FORMAT:**
+
+    - **If the user's intent was 'structured_property_search', 'semantic_property_search', 'NEW_SEARCH', or 'REFINE_SEARCH':**
+        - **STOP! DO NOT LIST THE PROPERTIES.** - **DO NOT** provide details for each property in the text.
+        - The user will see the UI Property Cards.
+        - Just provide a short, encouraging confirmation (e.g., "I've found several properties that match your criteria. Have a look below!").
+        - Ask if they would like to see details for a specific property or refine the search.
 
     - **If the user's intent was 'REQUEST_DETAILS' (First-time Property View):**
         - You MUST provide a **COMPREHENSIVE, DETAILED SUMMARY** of the property.
@@ -812,17 +815,13 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
         - The 'Latest Information' is the FULL DETAILS of the property.
         - Read the 'Recent Conversation' to find the user's *specific question*.
         - Answer **ONLY** that question.
-        - Use light, minimal emojis to highlight key points while keeping the response neatly structured, clear, and engaging.
+        - Use light, minimal emojis to highlight key points.
         - **DO NOT** summarize the whole property again.
         - **Examples:**
             - User: "What is the price?" -> Response: "The price is 1.5M AED 💰."
             - User: "How far is it from Downtown?" -> Response: "It is 15 minutes from Downtown 🚗."
 
-    - **If the intent was 'structured_property_search' or 'semantic_property_search':**
-        - Summarize the list of properties found concisely.
-        - Mention key details like Price and Location for each.
-
-    - Always end your response by proposing clear and helpful next steps (e.g., "Would you like more details on one of these?", "Should I refine this search?").
+    - Always end your response by proposing clear and helpful next steps.
     """
 
     prompt = ChatPromptTemplate.from_messages([
