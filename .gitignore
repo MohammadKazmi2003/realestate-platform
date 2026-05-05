@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+// reduandant files 
+
+components.json
+        remote_dump.backup
+        tests/
+        updateLocal.dump
