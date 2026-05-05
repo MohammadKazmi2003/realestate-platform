@@ -5,13 +5,15 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield, Briefcase, Calendar as CalendarIcon } from 'lucide-react'
+import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield, Briefcase, Calendar as CalendarIcon, MessageCircle } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
+import { ChatAssistant } from './ChatAssistant'
 
 export default function Header() {
   const router = useRouter()
   const { user, session } = useAuth()
   const [userRole, setUserRole] = useState<number | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   useEffect(() => {
     const getProfile = async () => {
@@ -75,6 +77,13 @@ export default function Header() {
 
       <div className="flex-1 flex justify-end">
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsChatOpen(true)}
+            className="neumorphic-button flex items-center justify-center p-3 rounded-full"
+            title="AI Property Assistant"
+          >
+            <MessageCircle size={16} />
+          </button>
           {session ? (
               <>
                   <button
@@ -96,6 +105,8 @@ export default function Header() {
           </Link>
         </div>
       </div>
+
+      <ChatAssistant isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
     </header>
   )
 }
