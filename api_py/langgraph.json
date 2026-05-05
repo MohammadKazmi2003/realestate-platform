@@ -1,0 +1,15 @@
+{
+    "graphs": {
+      "chatbot": "api_py/langchain_chatbot.py:app"
+    },
+    "dependencies": [
+      "langgraph",
+      "langchain-core",
+      "langchain-community",
+      "langchain-groq",
+      "openai",
+      "fastapi",
+      "supabase"
+    ]
+  }
+  
