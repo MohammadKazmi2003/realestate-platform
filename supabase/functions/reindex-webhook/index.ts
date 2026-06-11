@@ -26,6 +26,20 @@ function parseWKBPoint(wkbHex: string): { latitude: number | null; longitude: nu
   return { latitude: null, longitude: null };
 }
 
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok) return response;
+      console.warn(`ES request failed (${response.status}), retry ${i + 1}/${retries}`);
+    } catch (err) {
+      console.warn(`ES network error (${err}), retry ${i + 1}/${retries}`);
+    }
+    if (i < retries - 1) await new Promise(r => setTimeout(r, Math.pow(2, i) * 200));
+  }
+  throw new Error(`Failed after ${retries} retries`);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -51,10 +65,7 @@ Deno.serve(async (req: Request) => {
 
     if (type === 'DELETE' || (type === 'UPDATE' && record?.status === 'deleted')) {
       const propertyId = old_record?.id || record?.id;
-      await fetch(`${ES_URL}/properties_search/_doc/${propertyId}`, {
-        method: 'DELETE',
-        headers,
-      });
+      await fetchWithRetry(`${ES_URL}/properties_search/_doc/${propertyId}`, { method: 'DELETE', headers });
       return new Response(JSON.stringify({ message: `Deleted ${propertyId}` }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -110,21 +121,15 @@ Deno.serve(async (req: Request) => {
         is_price_negotiable: property.is_price_negotiable || false,
         created_at: property.created_at,
         updated_at: property.updated_at || property.created_at,
-        suggest: [
-          property.title?.trim(),
-          property.location_text?.trim(),
-          projectRes.data?.name?.trim(),
-        ].filter(Boolean),
+        suggest: [property.title?.trim(), property.location_text?.trim(), projectRes.data?.name?.trim()].filter(Boolean),
         bathrooms: 0, balconies: 0, area_sqft: 0, area_unit: 'sqft',
         bhk_type: '', bhk_type_id: null, furnishing_status: '',
         amenities: [], furnishings: [], other_rooms: [], location_advantages: [],
         availability_status: '', ownership_type: '',
       };
 
-      await fetch(`${ES_URL}/properties_search/_doc/${property.id}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify(doc),
+      await fetchWithRetry(`${ES_URL}/properties_search/_doc/${property.id}`, {
+        method: 'PUT', headers, body: JSON.stringify(doc),
       });
 
       return new Response(JSON.stringify({ message: `Indexed ${property.id}` }), {
@@ -136,10 +141,21 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error('Reindex webhook error:', error);
+    console.error('Reindex webhook failed permanently:', error.message);
+    // Dead-letter: log failed reindex to event_logs so it can be replayed
+    try {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const payload = await req.clone().json().catch(() => ({}));
+      await supabase.from('event_logs').insert({
+        property_id: payload?.record?.id || null,
+        event_type: 'reindex_failure',
+        user_id: null,
+      });
+    } catch {}
     return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });

@@ -3,6 +3,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
+import { cacheDelete } from '@/lib/redis';
 
 // --- TYPE DEFINITIONS ---
 type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
@@ -235,10 +236,16 @@ export async function updatePropertyAndManageImages(
         await supabase.from('property_media').insert(entriesWithPropertyId).throwOnError();
     }
 
-    // 6. Log the successful update action
+    // 6. Invalidate Redis caches
+    await Promise.all([
+      cacheDelete(`property:${propertyId}`),
+      cacheDelete('lookup:*').catch(() => {}),
+    ]);
+
+    // 7. Log the successful update action
     await logAction('update_property', 'property', propertyId);
 
-    // 7. Revalidate paths
+    // 8. Revalidate paths
     revalidatePath(`/property/${propertyId}`);
     revalidatePath('/my-listings');
     revalidatePath(`/edit-property/${propertyId}`);
