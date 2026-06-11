@@ -196,7 +196,7 @@ export default function PropertyDetailClient({ property }: Props) {
                             <CarouselItem key={img.id} onClick={() => openImageViewer(index)} className="cursor-pointer pl-2 basis-full md:basis-1/2 lg:basis-1/3">
                             <div className="p-1 shadow-neumorphic-inset-sm rounded-2xl group">
                                 <div className="relative overflow-hidden rounded-xl">
-                                    <img src={img.media_url} alt={`${img.tag || 'Property Image'} - ${index + 1}`} className="w-full h-64 object-cover group-hover:scale-105 transition-transform duration-300"/>
+                                    <img src={img.media_url} alt={`${img.tag || 'Property Image'} - ${index + 1}`} loading="lazy" className="w-full h-64 object-cover group-hover:scale-105 transition-transform duration-300"/>
                                     {img.tag && <div className="absolute bottom-0 left-0 bg-black/50 text-white px-3 py-1 text-sm font-semibold rounded-tr-xl">{img.tag}</div>}
                                 </div>
                             </div>

@@ -9,6 +9,7 @@ import { FaMap, FaList, FaSpinner, FaCrosshairs } from 'react-icons/fa';
 import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 import { cn } from '@/lib/utils';
+import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from '@/lib/searchClient';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
     latitude: number | null;
@@ -44,49 +45,108 @@ export default function BrowsePage() {
   const [filters, setFilters] = useState({ location: '', minPrice: '', maxPrice: '', bhkTypeId: '', propertyTypeId: '' });
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
+  const [lookupMaps, setLookupMaps] = useState<{
+    bhkIdToLabel: Record<number, string>;
+    propTypeIdToName: Record<number, string>;
+  }>({ bhkIdToLabel: {}, propTypeIdToName: {} });
+
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const autocompleteRef = useRef<HTMLDivElement>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (autocompleteRef.current && !autocompleteRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleLocationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setFilters(prev => ({ ...prev, location: value }));
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    if (value.length >= 2) {
+      debounceTimer.current = setTimeout(async () => {
+        const result = await autocompleteSearch(value);
+        if (result?.suggestions) {
+          setSuggestions(result.suggestions);
+          setShowSuggestions(result.suggestions.length > 0);
+        }
+      }, 300);
+    } else {
+      setShowSuggestions(false);
+      setSuggestions([]);
+    }
+  };
+
+  const selectSuggestion = (suggestion: string) => {
+    setFilters(prev => ({ ...prev, location: suggestion }));
+    setShowSuggestions(false);
+    setSuggestions([]);
+    handleApplyFiltersWithLocation(suggestion);
+  };
 
   const fetchProperties = useCallback(async (bounds: LngLatBounds | null) => {
     setLoading(true);
-    let params: any = {
-      p_location_text: filters.location || null,
-      p_min_price: filters.minPrice ? Number(filters.minPrice) : null,
-      p_max_price: filters.maxPrice ? Number(filters.maxPrice) : null,
-      p_bhk_type_id: filters.bhkTypeId ? Number(filters.bhkTypeId) : null,
-      p_property_type_id: filters.propertyTypeId ? Number(filters.propertyTypeId) : null,
-    };
-    
-    if (searchAsIMove && bounds) {
-      const { _ne, _sw } = bounds;
-      params = { ...params, min_lat: _sw.lat, max_lat: _ne.lat, min_lng: _sw.lng, max_lng: _ne.lng };
+    const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
+
+    const params: any = {};
+    if (filters.location) params.location = filters.location;
+    if (filters.minPrice) params.minPrice = Number(filters.minPrice);
+    if (filters.maxPrice) params.maxPrice = Number(filters.maxPrice);
+    if (filters.bhkTypeId && bhkIdToLabel[Number(filters.bhkTypeId)]) {
+      params.bhkType = bhkIdToLabel[Number(filters.bhkTypeId)];
     }
-    
-    // Using the 'search_properties' RPC which returns a single image_url
-    const { data, error } = await supabase.rpc('search_properties', params);
-    if (error) {
-        console.error('Error fetching properties:', error);
+    if (filters.propertyTypeId && propTypeIdToName[Number(filters.propertyTypeId)]) {
+      params.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
+    }
+    params.pageSize = 100;
+
+    if (searchAsIMove && bounds) {
+      params.bounds = {
+        minLat: bounds.getSouthWest().lat,
+        maxLat: bounds.getNorthEast().lat,
+        minLng: bounds.getSouthWest().lng,
+        maxLng: bounds.getNorthEast().lng,
+      };
+    }
+
+    try {
+      const response = await searchProperties(params);
+      if (!response || !response.results) {
+        console.error('Search returned no data');
         setProperties([]);
-    } else {
-        const formattedData = (data || []).map(p => ({
-            ...p,
-            images: p.image_url ? [{ image_url: p.image_url }] : [],
+      } else {
+        const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
+        const formattedData = mapped.map(p => ({
+          ...p,
+          images: p.images.length > 0 ? p.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
         }));
         setProperties(formattedData);
+      }
+    } catch (err) {
+      console.error('Error fetching properties:', err);
+      setProperties([]);
     }
     setLoading(false);
-  }, [filters, searchAsIMove]);
+  }, [filters, lookupMaps, searchAsIMove]);
 
   const debouncedFetchProperties = useDebouncedCallback(fetchProperties, 600);
   
   const highlightMarker = useCallback((propertyId: string | null) => {
     Object.values(markersRef.current).forEach(marker => {
       const el = marker.getElement();
-      el.style.backgroundColor = '#2563eb'; // blue-600
+      el.style.backgroundColor = '#2563eb';
       el.style.zIndex = '0';
       el.style.transform = 'scale(1)';
     });
     if (propertyId && markersRef.current[propertyId]) {
       const el = markersRef.current[propertyId].getElement();
-      el.style.backgroundColor = '#ef4444'; // red-500
+      el.style.backgroundColor = '#ef4444';
       el.style.zIndex = '10';
       el.style.transform = 'scale(1.2)';
     }
@@ -133,8 +193,14 @@ export default function BrowsePage() {
       const [bhkRes, propTypeRes] = await Promise.all([
         supabase.from('bhk_types').select('*'), supabase.from('property_types').select('*'),
       ]);
-      setBhkTypes(bhkRes.data || []);
-      setPropertyTypes(propTypeRes.data || []);
+      const bhkData = bhkRes.data || [];
+      const propTypeData = propTypeRes.data || [];
+      setBhkTypes(bhkData);
+      setPropertyTypes(propTypeData);
+      setLookupMaps({
+        bhkIdToLabel: Object.fromEntries(bhkData.map((b: any) => [b.id, b.label])),
+        propTypeIdToName: Object.fromEntries(propTypeData.map((p: any) => [p.id, p.name])),
+      });
     };
     init();
 
@@ -167,10 +233,10 @@ export default function BrowsePage() {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleApplyFilters = async () => {
-    if (filters.location && process.env.NEXT_PUBLIC_MAPTILER_KEY) {
+  const handleApplyFiltersWithLocation = async (locationText: string) => {
+    if (locationText && process.env.NEXT_PUBLIC_MAPTILER_KEY) {
       setSearchAsIMove(true);
-      const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(filters.location)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN`);
+      const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(locationText)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN`);
       const data = await response.json();
       if (data.features && data.features.length > 0) {
         mapRef.current?.flyTo({ center: data.features[0].center, zoom: 13, essential: true });
@@ -178,6 +244,10 @@ export default function BrowsePage() {
     } else {
         fetchProperties(searchAsIMove && mapRef.current ? mapRef.current.getBounds() : null);
     }
+  };
+
+  const handleApplyFilters = async () => {
+    handleApplyFiltersWithLocation(filters.location);
   };
   
   const useUserLocation = () => {
@@ -190,7 +260,18 @@ export default function BrowsePage() {
       <div className="flex flex-1 overflow-hidden">
         <aside className={cn("w-full md:w-[450px] md:flex-shrink-0 p-4 bg-bg-color border-r border-shadow-dark/20 flex flex-col", "md:flex", mobileView === 'list' ? "flex" : "hidden")}>
           <div className="shadow-neumorphic-outset rounded-3xl p-4 space-y-4 mb-4">
-              <input type="text" name="location" placeholder="Search by location..." value={filters.location} onChange={handleFilterChange} className="neumorphic-input w-full"/>
+              <div className="relative" ref={autocompleteRef}>
+                <input type="text" name="location" placeholder="Search by location..." value={filters.location} onChange={handleLocationChange} className="neumorphic-input w-full"/>
+                {showSuggestions && (
+                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                    {suggestions.map((s, i) => (
+                      <div key={i} onClick={() => selectSuggestion(s)} className="px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 cursor-pointer transition-colors">
+                        {s}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <input type="number" name="minPrice" placeholder="Min Price" value={filters.minPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
                 <input type="number" name="maxPrice" placeholder="Max Price" value={filters.maxPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>

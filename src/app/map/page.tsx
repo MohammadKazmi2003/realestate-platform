@@ -3,13 +3,10 @@
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibregl from 'maplibre-gl'
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { supabase } from '@/lib/supabaseClient'
 import { useRouter } from 'next/navigation'
+import { searchProperties } from '@/lib/searchClient'
 
-// Default coordinates for Gurgaon (you can adjust these)
 const DEFAULT_CENTER = { lat: 28.4595, lng: 77.0266 }
-
-// Increased timeout for geolocation (10 seconds)
 const GEOLOCATION_TIMEOUT = 10000
 
 export default function MapPage() {
@@ -26,46 +23,135 @@ export default function MapPage() {
   const [locationError, setLocationError] = useState<string | null>(null)
 
   const fetchProperties = useCallback(async (selectedLat: number, selectedLng: number, selectedRadius: number) => {
-    const { data, error } = await supabase.rpc('get_properties_within_radius', {
-      lat: selectedLat,
-      lng: selectedLng,
-      radius_km: selectedRadius,
-    })
-
-    if (error) {
-      console.error('Error fetching properties:', error)
-      return []
+    try {
+      const response = await searchProperties({
+        lat: selectedLat,
+        lng: selectedLng,
+        radiusKm: selectedRadius,
+        pageSize: 100,
+        sort: 'newest',
+      });
+      if (!response || !response.results) {
+        console.error('Search returned no data');
+        return [];
+      }
+      return response.results.map((r: any) => {
+        const loc = r.location || {};
+        return {
+          id: r.id,
+          title: r.title || '',
+          latitude: loc.lat || r.latitude || null,
+          longitude: loc.lon || r.longitude || null,
+        };
+      });
+    } catch (err) {
+      console.error('Error fetching properties:', err);
+      return [];
     }
-
-    return data
   }, [])
 
   const clearMarkers = useCallback(() => {
     markersRef.current.forEach((marker) => marker.remove())
     markersRef.current = []
+    if (mapRef.current) {
+      ['properties-cluster', 'properties-cluster-count', 'properties-unclustered'].forEach(l => {
+        if (mapRef.current.getLayer(l)) mapRef.current.removeLayer(l)
+      })
+      if (mapRef.current.getSource('properties')) mapRef.current.removeSource('properties')
+    }
   }, [])
 
-  const addMarkers = useCallback((properties: any[]) => {
-    properties.forEach(({ id, title, latitude, longitude }) => {
-      if (latitude && longitude) {
-        const marker = new maplibregl.Marker()
-          .setLngLat([longitude, latitude])
-          .setPopup(new maplibregl.Popup().setText(title))
-          .addTo(mapRef.current!)
+  const addClusteredMarkers = useCallback((properties: any[], map: maplibregl.Map) => {
+    if (properties.length === 0) return
 
-        marker.getElement().addEventListener('click', () => {
-          router.push(`/property/${id}`)
-        })
+    const features = properties
+      .filter(p => p.latitude && p.longitude)
+      .map(p => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [p.longitude, p.latitude] },
+        properties: { id: p.id, title: p.title },
+      }))
 
-        markersRef.current.push(marker)
+    if (features.length === 0) return
+
+    map.addSource('properties', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features },
+      cluster: true,
+      clusterMaxZoom: 14,
+      clusterRadius: 50,
+    })
+
+    map.addLayer({
+      id: 'properties-cluster',
+      type: 'circle',
+      source: 'properties',
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-color': ['step', ['get', 'point_count'], '#3B82F6', 10, '#2563EB', 50, '#1D4ED8'],
+        'circle-radius': ['step', ['get', 'point_count'], 20, 10, 30, 50, 40],
+        'circle-opacity': 0.8,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#fff',
+      },
+    })
+
+    map.addLayer({
+      id: 'properties-cluster-count',
+      type: 'symbol',
+      source: 'properties',
+      filter: ['has', 'point_count'],
+      layout: {
+        'text-field': ['get', 'point_count_abbreviated'],
+        'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+        'text-size': 12,
+      },
+      paint: { 'text-color': '#ffffff' },
+    })
+
+    map.addLayer({
+      id: 'properties-unclustered',
+      type: 'circle',
+      source: 'properties',
+      filter: ['!', ['has', 'point_count']],
+      paint: {
+        'circle-color': '#3B82F6',
+        'circle-radius': 8,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#fff',
+      },
+    })
+
+    map.on('click', 'properties-cluster', (e) => {
+      const feature = e.features?.[0]
+      if (!feature) return
+      const clusterId = feature.properties?.cluster_id
+      const source = map.getSource('properties') as maplibregl.GeoJSONSource
+      source.getClusterExpansionZoom(clusterId, (err, zoom) => {
+        if (err || zoom == null) return
+        map.flyTo({ center: (feature.geometry as any).coordinates as [number, number], zoom: zoom + 1 })
+      })
+    })
+
+    map.on('click', 'properties-unclustered', (e) => {
+      const feature = e.features?.[0]
+      if (feature?.properties?.id) {
+        router.push(`/property/${feature.properties.id}`)
       }
+    })
+
+    map.on('mouseenter', ['properties-cluster', 'properties-unclustered'], () => {
+      map.getCanvas().style.cursor = 'pointer'
+    })
+    map.on('mouseleave', ['properties-cluster', 'properties-unclustered'], () => {
+      map.getCanvas().style.cursor = ''
     })
   }, [router])
 
   const drawCircle = useCallback((center: { lat: number; lng: number }, radiusInKm: number) => {
     if (!mapRef.current || !mapRef.current.isStyleLoaded()) return
 
-    const R = 6371 // Earth radius in km
+    const R = 6371
     const points: [number, number][] = []
     const numSides = 64
     const centerLat = center.lat * Math.PI / 180
@@ -76,48 +162,30 @@ export default function MapPage() {
       const angle = (i * 2 * Math.PI) / numSides
       const lat = Math.asin(Math.sin(centerLat) * Math.cos(d) + Math.cos(centerLat) * Math.sin(d) * Math.cos(angle))
       const lng = centerLng + Math.atan2(Math.sin(angle) * Math.sin(d) * Math.cos(centerLat), Math.cos(d) - Math.sin(centerLat) * Math.sin(lat))
-
       points.push([lng * 180 / Math.PI, lat * 180 / Math.PI])
     }
 
     const circleGeoJSON = {
       type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          geometry: {
-            type: 'Polygon',
-            coordinates: [points],
-          },
-          properties: {},
-        },
-      ],
+      features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [points] }, properties: {} }],
     }
 
     if (circleRef.current) {
       circleRef.current.setData(circleGeoJSON)
     } else {
-      mapRef.current.addSource('radius-circle', {
-        type: 'geojson',
-        data: circleGeoJSON,
-      })
+      mapRef.current.addSource('radius-circle', { type: 'geojson', data: circleGeoJSON })
       circleRef.current = mapRef.current.getSource('radius-circle') as maplibregl.GeoJSONSource
-
       mapRef.current.addLayer({
         id: 'radius-circle-layer',
         type: 'fill',
         source: 'radius-circle',
-        paint: {
-          'fill-color': '#00aaff',
-          'fill-opacity': 0.2,
-        },
+        paint: { 'fill-color': '#00aaff', 'fill-opacity': 0.2 },
       })
     }
   }, [])
 
   const addCenterMarker = useCallback((center: { lat: number; lng: number }) => {
     if (!mapRef.current) return
-
     if (centerMarkerRef.current) {
       centerMarkerRef.current.setLngLat([center.lng, center.lat])
     } else {
@@ -129,14 +197,14 @@ export default function MapPage() {
 
   const updateMap = useCallback(async (newCenter: { lat: number; lng: number }, newRadius: number) => {
     if (mapRef.current && mapRef.current.isStyleLoaded()) {
-      await mapRef.current.flyTo({ center: [newCenter.lng, newCenter.lat], zoom: 10, essential: true })
+      await mapRef.current.flyTo({ center: [newCenter.lng, newCenter.lat], zoom: Math.max(9, mapRef.current.getZoom()), essential: true })
       const properties = await fetchProperties(newCenter.lat, newCenter.lng, newRadius)
       clearMarkers()
-      addMarkers(properties)
+      addClusteredMarkers(properties, mapRef.current)
       drawCircle(newCenter, newRadius)
       addCenterMarker(newCenter)
     }
-  }, [fetchProperties, clearMarkers, addMarkers, drawCircle, addCenterMarker])
+  }, [fetchProperties, clearMarkers, addClusteredMarkers, drawCircle, addCenterMarker])
 
   const initMap = useCallback(() => {
     mapRef.current = new maplibregl.Map({
@@ -151,7 +219,7 @@ export default function MapPage() {
     mapRef.current.on('load', async () => {
       const properties = await fetchProperties(centerCoords.lat, centerCoords.lng, radius)
       clearMarkers()
-      addMarkers(properties)
+      addClusteredMarkers(properties, mapRef.current!)
       drawCircle(centerCoords, radius)
       addCenterMarker(centerCoords)
     })
@@ -162,7 +230,6 @@ export default function MapPage() {
       updateMap(newCenter, radius)
     })
 
-    // Try to get user's location on initial load
     if (!navigator.geolocation) {
       console.log('Geolocation is not supported by your browser.')
       setLocationError('Geolocation not supported.')
@@ -184,13 +251,9 @@ export default function MapPage() {
         setLocationError(`Location error (${error.code}): ${error.message}`)
         setLocationLoading(false)
       },
-      {
-        enableHighAccuracy: true, // TEMPORARILY TRUE FOR TESTING
-        timeout: GEOLOCATION_TIMEOUT,
-        maximumAge: 0,
-      }
+      { enableHighAccuracy: true, timeout: GEOLOCATION_TIMEOUT, maximumAge: 0 }
     )
-  }, [centerCoords, radius, fetchProperties, clearMarkers, addMarkers, drawCircle, addCenterMarker, updateMap])
+  }, [centerCoords, radius, fetchProperties, clearMarkers, addClusteredMarkers, drawCircle, addCenterMarker, updateMap])
 
   useEffect(() => {
     if (!mapRef.current) {
@@ -214,18 +277,14 @@ export default function MapPage() {
           setUserLocationAvailable(true)
           updateMap(newCenter, radius)
           setLocationLoading(false)
-          setLocationError(null) // Clear any previous error
+          setLocationError(null)
         },
         (error) => {
           console.error('Error getting location:', error)
           setLocationError(`Location error (${error.code}): ${error.message}`)
           setLocationLoading(false)
         },
-        {
-          enableHighAccuracy: true, // TEMPORARILY TRUE FOR TESTING
-          timeout: GEOLOCATION_TIMEOUT,
-          maximumAge: 0,
-        }
+        { enableHighAccuracy: true, timeout: GEOLOCATION_TIMEOUT, maximumAge: 0 }
       )
     } else {
       setLocationError('Geolocation not supported by your browser.')
@@ -235,21 +294,14 @@ export default function MapPage() {
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          console.log('Basic Geolocation Success:', position.coords)
-        },
-        (error) => {
-          console.error('Basic Geolocation Error:', error)
-        }
+        (position) => { console.log('Basic Geolocation Success:', position.coords) },
+        (error) => { console.error('Basic Geolocation Error:', error) }
       )
-    } else {
-      console.log('Basic Geolocation not supported.')
     }
   }, [])
 
   return (
     <div className="relative w-full h-screen">
-      {/* Controls */}
       <div className="absolute z-10 top-4 left-4 bg-white rounded shadow p-2 flex flex-col gap-2">
         <div>
           <button
@@ -283,8 +335,6 @@ export default function MapPage() {
           />
         </div>
       </div>
-
-      {/* Map Container */}
       <div ref={mapContainer} className="w-full h-full" />
     </div>
   )

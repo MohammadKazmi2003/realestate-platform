@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { Loader2 } from 'lucide-react';
 import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
+import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient';
 
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
@@ -16,61 +17,87 @@ export default function ListPage() {
   
   const [filters, setFilters] = useState({ location: '', bhkTypeId: '', propertyTypeId: '' });
   const [sort, setSort] = useState<SortOption>('created_at');
-  const [page, setPage] = useState(1);
+  const [nextCursor, setNextCursor] = useState<any[] | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
+  const [lookupMaps, setLookupMaps] = useState<{
+    bhkIdToLabel: Record<number, string>;
+    propTypeIdToName: Record<number, string>;
+  }>({ bhkIdToLabel: {}, propTypeIdToName: {} });
   
   const itemsPerPage = 12;
 
-  const fetchProperties = useCallback(async (pageToFetch: number, shouldReset: boolean = false) => {
+  const fetchProperties = useCallback(async (cursor: any[] | null, shouldReset: boolean = false) => {
     setLoading(true);
+    const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
 
-    const { data, error } = await supabase.rpc('get_all_listings_paginated', {
-        p_location_text: filters.location || null,
-        p_bhk_type_id: filters.bhkTypeId ? Number(filters.bhkTypeId) : null,
-        p_property_type_id: filters.propertyTypeId ? Number(filters.propertyTypeId) : null,
-        p_sort_by: sort,
-        p_page_num: pageToFetch,
-        p_items_per_page: itemsPerPage,
-    });
-    
-    if (error) {
-      console.error('Error fetching properties:', error);
+    const params: any = { pageSize: itemsPerPage };
+    if (filters.location) params.location = filters.location;
+    if (filters.bhkTypeId && bhkIdToLabel[Number(filters.bhkTypeId)]) {
+      params.bhkType = bhkIdToLabel[Number(filters.bhkTypeId)];
+    }
+    if (filters.propertyTypeId && propTypeIdToName[Number(filters.propertyTypeId)]) {
+      params.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
+    }
+
+    const sortMap: Record<string, string> = {
+      created_at: 'newest',
+      price_asc: 'price_asc',
+      price_desc: 'price_desc',
+    };
+    params.sort = sortMap[sort] || 'newest';
+
+    if (cursor) params.cursor = cursor;
+
+    try {
+      const response = await searchProperties(params);
+      if (!response || !response.results) {
+        setProperties([]);
+        setHasMore(false);
+      } else {
+        const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
+        setProperties(shouldReset ? mapped : prev => [...prev, ...mapped]);
+        setNextCursor(response.nextCursor);
+        setHasMore(!!response.nextCursor);
+      }
+    } catch (err) {
+      console.error('Error fetching properties:', err);
       setProperties([]);
       setHasMore(false);
-    } else {
-      const formattedData = (data || []) as PropertyCardProps['property'][];
-      setProperties(shouldReset ? formattedData : prev => [...prev, ...formattedData]);
-      setHasMore(formattedData.length === itemsPerPage);
     }
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.location, filters.bhkTypeId, filters.propertyTypeId, sort]);
+  }, [filters.location, filters.bhkTypeId, filters.propertyTypeId, sort, lookupMaps]);
 
   // Effect to fetch on filter/sort change (resets properties)
   useEffect(() => {
-    setPage(1); 
-    fetchProperties(1, true); 
-  }, [filters, sort, fetchProperties]);
-  
+    setNextCursor(null);
+    fetchProperties(null, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, sort]);
+
   // Effect for infinite scroll (appends properties)
   const handleLoadMore = () => {
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchProperties(nextPage, false);
+    fetchProperties(nextCursor, false);
   }
 
-  // Effect to fetch dropdown data
+  // Effect to fetch dropdown data and build lookup maps
   useEffect(() => {
     const fetchDropdowns = async () => {
       const [bhkRes, propTypeRes] = await Promise.all([
         supabase.from('bhk_types').select('*'),
         supabase.from('property_types').select('*'),
       ]);
-      setBhkTypes(bhkRes.data || []);
-      setPropertyTypes(propTypeRes.data || []);
+      const bhkData = bhkRes.data || [];
+      const propTypeData = propTypeRes.data || [];
+      setBhkTypes(bhkData);
+      setPropertyTypes(propTypeData);
+      setLookupMaps({
+        bhkIdToLabel: Object.fromEntries(bhkData.map((b: any) => [b.id, b.label])),
+        propTypeIdToName: Object.fromEntries(propTypeData.map((p: any) => [p.id, p.name])),
+      });
     };
     fetchDropdowns();
   }, []);
@@ -100,7 +127,7 @@ export default function ListPage() {
             </div>
         </div>
 
-        {loading && page === 1 ? (
+        {loading && !properties.length ? (
           <div className="flex justify-center py-20"><Loader2 className="animate-spin text-4xl text-text-color-light" /></div>
         ) : properties.length > 0 ? (
           <>

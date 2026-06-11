@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getElasticsearchClient, ES_INDEX_ALIAS } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
+import { searchQuerySchema } from '@/lib/validation';
+import { logger } from '@/lib/logger';
 
 export async function POST(req: NextRequest) {
   const identifier = getRateLimitIdentifier(req);
@@ -12,25 +14,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const {
-      query,
-      location,
-      minPrice,
-      maxPrice,
-      propertyType,
-      bhkType,
-      listingPurpose,
-      amenities = [],
-      furnishings = [],
-      lat,
-      lng,
-      radiusKm,
-      cursor,
-      pageSize = 24,
-      sort = 'relevance',
-    } = body;
+    const parsed = searchQuerySchema.safeParse(body);
+    if (!parsed.success) {
+      logger.warn('Search API validation failed', parsed.error.issues.map(i => i.message).join(', '));
+      return NextResponse.json({ error: 'Invalid search parameters', details: parsed.error.issues }, { status: 400 });
+    }
 
-    const cacheKey = `search:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, lat, lng, radiusKm, cursor, pageSize, sort })}`;
+    const {
+      query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
+      amenities = [], furnishings = [], lat, lng, radiusKm, bounds,
+      cursor, pageSize = 24, sort = 'relevance',
+    } = parsed.data;
+
+    const cacheKey = `search:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, lat, lng, radiusKm, bounds, cursor, pageSize, sort })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {
@@ -101,6 +97,20 @@ export async function POST(req: NextRequest) {
       ];
     }
 
+    if (bounds) {
+      const { minLat, maxLat, minLng, maxLng } = bounds;
+      if (minLat != null && maxLat != null && minLng != null && maxLng != null) {
+        filters.push({
+          geo_bounding_box: {
+            location: {
+              top_left: { lat: maxLat, lon: minLng },
+              bottom_right: { lat: minLat, lon: maxLng },
+            },
+          },
+        });
+      }
+    }
+
     if (sort === 'price_asc') sortClause = [{ price: { order: 'asc' } }];
     if (sort === 'price_desc') sortClause = [{ price: { order: 'desc' } }];
     if (sort === 'newest') sortClause = [{ created_at: { order: 'desc' } }];
@@ -159,9 +169,11 @@ export async function POST(req: NextRequest) {
 
     await cacheSet(cacheKey, response, 60);
 
+    logger.searchAnalytics(query || location || '', response.total, 0);
+
     return NextResponse.json(response);
   } catch (error: any) {
-    console.error('Search API error:', error);
+    logger.error('Search API error', error.message);
     return NextResponse.json({ error: 'Search failed', message: error.message }, { status: 500 });
   }
 }

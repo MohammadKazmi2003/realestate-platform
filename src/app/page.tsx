@@ -1,12 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabaseClient'
 import Header from '@/app/components/Header'
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard'
 import { Loader2 } from 'lucide-react'
+import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient'
 
-// The data from the updated RPC function will now match this type perfectly.
 type PropertyWithImages = PropertyCardProps['property'];
 
 export default function Home() {
@@ -18,17 +17,20 @@ export default function Home() {
     const fetchProperties = async () => {
       setLoading(true);
       setError(null);
-      
-      // We are calling our newly updated database function.
-      const { data, error: rpcError } = await supabase.rpc('get_properties_with_all_images');
 
-      if (rpcError) {
-        console.error('Error fetching properties:', rpcError);
-        setError(`Failed to load properties. Please ensure the 'get_properties_with_all_images' database function is updated.`);
+      try {
+        const response = await searchProperties({ pageSize: 12, sort: 'newest' });
+        if (!response || !response.results) {
+          setError('Failed to load featured properties.');
+          setProperties([]);
+        } else {
+          const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
+          setProperties(mapped);
+        }
+      } catch (err) {
+        console.error('Error fetching properties:', err);
+        setError('Failed to load featured properties.');
         setProperties([]);
-      } else if (data) {
-        // The data now includes 'area' and 'area_unit' for all property types.
-        setProperties(data as PropertyWithImages[]);
       }
       setLoading(false);
     }
@@ -41,7 +43,7 @@ export default function Home() {
       <main className="p-4 sm:p-6 max-w-7xl mx-auto">
         <h1 className="text-3xl font-bold mb-8 text-center text-text-color-dark">Featured Properties</h1>
         {loading && <div className="flex justify-center py-20"><Loader2 className="animate-spin h-12 w-12 text-text-color-light" /></div>}
-        {error && <div className="text-lg text-danger-color text-center py-10 bg-red-100 rounded-2xl p-4"><p className="font-semibold">Database Error</p><p className="text-sm mt-1">{error}</p></div>}
+        {error && <div className="text-lg text-danger-color text-center py-10 bg-red-100 rounded-2xl p-4"><p className="font-semibold">Error</p><p className="text-sm mt-1">{error}</p></div>}
         
         {!loading && !error && properties.length === 0 && (
           <p className="text-lg text-center py-10 text-text-color-light">No featured properties found. Check back soon!</p>

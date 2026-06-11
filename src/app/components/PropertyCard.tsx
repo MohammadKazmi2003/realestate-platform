@@ -68,6 +68,7 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
                     <img
                       src={img.image_url}
                       alt={`Image ${index + 1} of ${property.title}`}
+                      loading="lazy"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       onError={(e) => {
                         e.currentTarget.src = 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=Image+Error';

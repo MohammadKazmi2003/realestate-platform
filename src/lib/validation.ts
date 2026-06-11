@@ -34,6 +34,13 @@ export const propertyUpdateSchema = z.object({
   phone_number: z.string().min(1).max(20),
 });
 
+const boundsSchema = z.object({
+  minLat: z.number().min(-90).max(90),
+  maxLat: z.number().min(-90).max(90),
+  minLng: z.number().min(-180).max(180),
+  maxLng: z.number().min(-180).max(180),
+}).optional();
+
 export const searchQuerySchema = z.object({
   query: z.string().max(500).optional(),
   location: z.string().max(500).optional(),
@@ -47,6 +54,7 @@ export const searchQuerySchema = z.object({
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
   radiusKm: z.number().min(0).max(500).optional(),
+  bounds: boundsSchema.optional(),
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(100).optional(),
   sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest']).optional(),
