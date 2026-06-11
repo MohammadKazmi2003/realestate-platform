@@ -27,7 +27,7 @@ const safeParseFloat = (val: string | null | undefined): number | null => {
 
 // --- LOGGING ACTIONS ---
 export async function logPropertyView(propertyId: string) {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
   try {
@@ -48,7 +48,7 @@ export async function logLeadStatusChange(
     fromStatus: string,
     toStatus: string
 ) {
-    const supabase = createSupabaseServerClient();
+    const supabase = await createSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     try {
@@ -68,7 +68,7 @@ export async function logAction(
   entityId: string,
   metadata?: Record<string, any>
 ) {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
   try {
@@ -84,7 +84,7 @@ export async function logAction(
 }
 
 export async function createLead(formData: LeadFormData) {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -139,7 +139,7 @@ export async function updatePropertyAndManageImages(
   selectedLocationAdvantages: number[],
   selectedLandFeatures: number[]
 ) {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
 
   try {
     // 1. Update user's phone number

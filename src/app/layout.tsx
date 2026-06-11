@@ -1,17 +1,38 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
+import { BrandingProvider, type PlatformSettings } from "@/context/BrandingContext";
+import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 
-export const metadata: Metadata = {
-  title: "Real Estate Platform",
-  description: "A soothing real estate platform built with Supabase and Next.js",
-};
+async function getPlatformSettings(): Promise<PlatformSettings | null> {
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data } = await supabase
+      .from('platform_settings')
+      .select('*')
+      .single();
+    return data;
+  } catch {
+    return null;
+  }
+}
 
-export default function RootLayout({
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await getPlatformSettings();
+  return {
+    title: settings?.meta_title || settings?.company_name || 'Real Estate Platform',
+    description: settings?.meta_description || 'Find your perfect property',
+    icons: settings?.favicon_url ? { icon: settings.favicon_url } : undefined,
+  };
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const settings = await getPlatformSettings();
+
   return (
     <html lang="en">
       <head>
@@ -20,7 +41,11 @@ export default function RootLayout({
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
       </head>
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <BrandingProvider initialSettings={settings}>
+            {children}
+          </BrandingProvider>
+        </AuthProvider>
       </body>
     </html>
   );

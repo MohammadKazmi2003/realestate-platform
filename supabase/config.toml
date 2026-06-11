@@ -31,7 +31,7 @@ shadow_port = 54320
 major_version = 17
 
 [db.pooler]
-enabled = false
+enabled = true
 # Port to use for the local connection pooler.
 port = 54329
 # Specifies when a server connection can be reused by other clients.
@@ -319,3 +319,6 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 # This block tells Supabase about our specific Edge Function.
 [functions.create-listing]
 verify_jwt = true
+
+[functions.reindex-webhook]
+verify_jwt = false

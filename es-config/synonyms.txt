@@ -1,0 +1,24 @@
+apartment, flat, condo, condominium
+independent house, villa, bungalow, standalone, individual house
+studio, studio apartment, 1rk, single room
+1bhk, 1 bhk, one bhk, one bedroom hall kitchen, 1 bedroom
+2bhk, 2 bhk, two bhk, two bedroom hall kitchen, 2 bedroom
+3bhk, 3 bhk, three bhk, three bedroom hall kitchen, 3 bedroom
+4bhk, 4 bhk, four bhk, four bedroom hall kitchen, 4 bedroom
+5bhk, 5 bhk, five bhk, 5 bedroom
+pg, paying guest, co-living, shared accommodation
+luxury, premium, high-end, upscale, deluxe
+budget, affordable, economical, low-cost, value
+near, close to, adjacent to, beside, nearby
+gated community, gated society, secured complex
+corner plot, corner property
+penthouse, rooftop, top floor
+duplex, two story, double height
+garden, lawn, landscaped, green area
+parking, car park, garage, vehicle parking
+furnished, fully furnished, ready to move
+semi furnished, semi-furnished, partly furnished
+unfurnished, unfurnished, bare shell
+multiplex, mall, shopping complex, retail space
+it park, tech park, office park, business park
+warehouse, godown, storage, industrial shed

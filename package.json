@@ -8,20 +8,29 @@
     "start": "next start",
     "lint": "next lint",
     "test": "jest --watchAll",
-    "test:ci": "jest --ci"
+    "test:ci": "jest --ci",
+    "es:setup": "node scripts/es-indexer.js setup",
+    "es:index": "node scripts/es-indexer.js full-sync",
+    "es:verify": "node scripts/es-indexer.js verify",
+    "es:index-one": "node scripts/es-indexer.js index-one",
+    "seed": "node scripts/seed-data.js",
+    "provision": "node scripts/provision-customer.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
+    "@elastic/elasticsearch": "^8.15.0",
     "@radix-ui/react-slot": "^1.2.3",
     "@supabase/auth-ui-react": "^0.4.7",
     "@supabase/auth-ui-shared": "^0.1.8",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.49.4",
+    "@upstash/ratelimit": "^2.0.8",
     "browser-image-compression": "^2.0.2",
     "class-variance-authority": "^0.7.1",
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
+    "ioredis": "^5.11.1",
     "libphonenumber-js": "^1.12.9",
     "lucide-react": "^0.511.0",
     "maplibre-gl": "^5.5.0",
@@ -31,7 +40,9 @@
     "react-dom": "^19.0.0",
     "react-icons": "^5.5.0",
     "react-markdown": "^10.1.0",
-    "recharts": "^3.1.0"
+    "recharts": "^3.1.0",
+    "sharp": "^0.34.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

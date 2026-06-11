@@ -1,10 +1,10 @@
 // src/lib/supabase/serverClient.ts
+import 'server-only';
+
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
-// ✅ Make the function async
 export async function createSupabaseServerClient() {
-  // ✅ Await the cookies() function here
   const cookieStore = await cookies();
 
   return createServerClient(
@@ -13,7 +13,6 @@ export async function createSupabaseServerClient() {
     {
       cookies: {
         get(name: string) {
-          // ✅ This is now synchronous because cookieStore is already resolved
           return cookieStore.get(name)?.value;
         },
         set(name: string, value: string, options: CookieOptions) {

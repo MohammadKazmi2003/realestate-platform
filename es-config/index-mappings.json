@@ -1,0 +1,130 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "refresh_interval": "1s",
+    "analysis": {
+      "filter": {
+        "synonym_filter": {
+          "type": "synonym",
+          "synonyms": [
+            "apartment, apartments, flat, flats, condo, condos, condominium, condominiums",
+            "independent house, villa, villas, bungalow, bungalows, standalone",
+            "studio, studios, studio apartment, 1rk",
+            "2bhk, 2 bhk, two bhk, two bedroom, 2 bedroom",
+            "3bhk, 3 bhk, three bhk, three bedroom, 3 bedroom",
+            "4bhk, 4 bhk, four bhk, 4 bedroom",
+            "pg, paying guest, co-living, shared accommodation",
+            "luxury, premium, high-end, upscale, deluxe",
+            "budget, affordable, economical, low-cost",
+            "near, close to, adjacent to, beside, nearby",
+            "furnished, fully furnished, ready to move",
+            "semi furnished, semi-furnished, partly furnished",
+            "unfurnished, bare shell",
+            "parking, car park, garage, vehicle parking"
+          ]
+        },
+        "english_stemmer": { "type": "stemmer", "language": "english" },
+        "edge_ngram_filter": {
+          "type": "edge_ngram",
+          "min_gram": 2,
+          "max_gram": 20
+        }
+      },
+      "analyzer": {
+        "property_search_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "synonym_filter", "english_stemmer"]
+        },
+        "autocomplete_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "edge_ngram_filter"]
+        },
+        "autocomplete_search_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": false,
+    "properties": {
+      "id": { "type": "keyword" },
+      "title": {
+        "type": "text",
+        "analyzer": "property_search_analyzer",
+        "fields": {
+          "keyword": { "type": "keyword" },
+          "autocomplete": {
+            "type": "text",
+            "analyzer": "autocomplete_analyzer",
+            "search_analyzer": "autocomplete_search_analyzer"
+          }
+        }
+      },
+      "description": { "type": "text", "analyzer": "property_search_analyzer" },
+      "location_text": {
+        "type": "text",
+        "analyzer": "property_search_analyzer",
+        "fields": {
+          "keyword": { "type": "keyword" },
+          "autocomplete": {
+            "type": "text",
+            "analyzer": "autocomplete_analyzer",
+            "search_analyzer": "autocomplete_search_analyzer"
+          }
+        }
+      },
+      "location": { "type": "geo_point" },
+      "price": { "type": "scaled_float", "scaling_factor": 100 },
+      "property_type": { "type": "keyword" },
+      "property_type_id": { "type": "integer" },
+      "listing_purpose": { "type": "keyword" },
+      "listing_purpose_id": { "type": "integer" },
+      "availability_status": { "type": "keyword" },
+      "ownership_type": { "type": "keyword" },
+      "bhk_type": { "type": "keyword" },
+      "bhk_type_id": { "type": "integer" },
+      "bathrooms": { "type": "integer" },
+      "balconies": { "type": "integer" },
+      "area_sqft": { "type": "float" },
+      "area_unit": { "type": "keyword" },
+      "furnishing_status": { "type": "keyword" },
+      "amenities": { "type": "keyword" },
+      "furnishings": { "type": "keyword" },
+      "other_rooms": { "type": "keyword" },
+      "location_advantages": { "type": "keyword" },
+      "is_price_negotiable": { "type": "boolean" },
+      "status": { "type": "keyword" },
+      "property_score": { "type": "integer" },
+      "image_url": { "type": "keyword", "index": false },
+      "all_images": { "type": "keyword", "index": false },
+      "owner_name": { "type": "text" },
+      "owner_phone": { "type": "keyword", "index": false },
+      "project_name": {
+        "type": "text",
+        "analyzer": "property_search_analyzer",
+        "fields": {
+          "keyword": { "type": "keyword" },
+          "autocomplete": {
+            "type": "text",
+            "analyzer": "autocomplete_analyzer",
+            "search_analyzer": "autocomplete_search_analyzer"
+          }
+        }
+      },
+      "developer_name": {
+        "type": "text",
+        "analyzer": "property_search_analyzer",
+        "fields": { "keyword": { "type": "keyword" } }
+      },
+      "created_at": { "type": "date" },
+      "updated_at": { "type": "date" },
+      "suggest": { "type": "completion" }
+    }
+  }
+}

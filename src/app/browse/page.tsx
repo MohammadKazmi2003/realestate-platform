@@ -103,9 +103,19 @@ export default function BrowsePage() {
       if (prop.latitude && prop.longitude && !markersRef.current[prop.id]) {
         const markerEl = document.createElement('div');
         markerEl.className = 'px-2 py-1 bg-blue-600 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg hover:bg-blue-700 transition-all duration-200';
-        markerEl.innerHTML = `₹${((prop.price || 0) / 100000).toFixed(0)}L`;
-        
-        const popup = new Popup({ offset: 25, closeButton: false, className: 'neumorphic-popup' }).setHTML(`<div class="p-1"><div class="font-bold text-sm text-text-color-dark">${prop.title}</div><div class="text-xs text-text-color-light">₹${prop.price?.toLocaleString()}</div></div>`);
+        markerEl.textContent = `₹${((prop.price || 0) / 100000).toFixed(0)}L`;
+
+        const popupDiv = document.createElement('div');
+        popupDiv.className = 'p-1';
+        const titleDiv = document.createElement('div');
+        titleDiv.className = 'font-bold text-sm text-text-color-dark';
+        titleDiv.textContent = prop.title || '';
+        const priceDiv = document.createElement('div');
+        priceDiv.className = 'text-xs text-text-color-light';
+        priceDiv.textContent = `₹${(prop.price || 0).toLocaleString()}`;
+        popupDiv.appendChild(titleDiv);
+        popupDiv.appendChild(priceDiv);
+        const popup = new Popup({ offset: 25, closeButton: false, className: 'neumorphic-popup' }).setDOMContent(popupDiv);
         const marker = new Marker({ element: markerEl, anchor: 'bottom' }).setLngLat([prop.longitude, prop.latitude]).addTo(mapRef.current!);
         
         marker.getElement().addEventListener('click', () => router.push(`/property/${prop.id}`));

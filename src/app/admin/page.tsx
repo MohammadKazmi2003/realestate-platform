@@ -4,10 +4,11 @@
 import { withAuth } from '@/utils/withAuth';
 import Header from '@/app/components/Header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sun, Moon, Loader2 } from 'lucide-react';
+import { Sun, Moon, Loader2, Settings } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import Link from 'next/link';
 
 type AdminStats = {
   total_listings: number;
@@ -52,9 +53,14 @@ function AdminDashboard() {
         <main className="p-6 max-w-7xl mx-auto">
           <div className="flex justify-between items-center mb-8">
             <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-            <button onClick={toggleDarkMode} className="p-2 rounded-full neumorphic-button">
-              {darkMode ? <Sun /> : <Moon />}
-            </button>
+            <div className="flex items-center gap-3">
+              <Link href="/admin/settings" className="p-2 rounded-full neumorphic-button" title="Platform Settings">
+                <Settings />
+              </Link>
+              <button onClick={toggleDarkMode} className="p-2 rounded-full neumorphic-button">
+                {darkMode ? <Sun /> : <Moon />}
+              </button>
+            </div>
           </div>
 
           {loading ? (
