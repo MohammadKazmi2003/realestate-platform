@@ -3,7 +3,7 @@ import { Client } from '@elastic/elasticsearch';
 let esClient: Client | null = null;
 let esAvailable = true;
 let lastHealthCheck = 0;
-const HEALTH_CHECK_TTL = 30000;
+const HEALTH_CHECK_TTL = 10000;
 
 export function getElasticsearchClient(): Client {
   if (esClient) return esClient;
@@ -17,6 +17,10 @@ export function getElasticsearchClient(): Client {
     maxRetries: 2,
     requestTimeout: 5000,
     sniffOnStart: false,
+    connectionPool: {
+      pingInterval: 60000,
+      resurrectStrategy: 'ping',
+    },
   });
 
   return esClient;

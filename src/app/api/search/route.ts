@@ -30,11 +30,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid search parameters', details: parsed.error.issues }, { status: 400 });
     }
 
+    // Sanitize: enforce max length and reject ReDoS-prone patterns
+    const sanitize = (s: string | undefined, maxLen = 200) => {
+      if (!s) return s;
+      if (s.length > maxLen) return s.slice(0, maxLen);
+      // Reject patterns that cause catastrophic backtracking in ES
+      if (/(.)\1{10,}/.test(s)) return s.slice(0, 50);
+      return s;
+    };
+
     const {
-      query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
+      query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
       amenities = [], furnishings = [], lat, lng, radiusKm, bounds,
       cursor, pageSize = 24, sort = 'relevance',
     } = parsed.data;
+
+    const query = sanitize(rawQuery);
+    const location = sanitize(rawLocation);
 
     // Simplify cache key: round bounds to 2 decimals so small pans hit cache
     const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;

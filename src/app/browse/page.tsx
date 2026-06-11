@@ -10,6 +10,7 @@ import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 import { cn } from '@/lib/utils';
 import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from '@/lib/searchClient';
+import { getLookup } from '@/lib/lookupCache';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
     latitude: number | null;
@@ -196,11 +197,9 @@ export default function BrowsePage() {
   // Fetch lookups once on mount
   useEffect(() => {
     const init = async () => {
-      const [bhkRes, propTypeRes] = await Promise.all([
-        supabase.from('bhk_types').select('*'), supabase.from('property_types').select('*'),
+      const [bhkData, propTypeData] = await Promise.all([
+        getLookup('bhk_types'), getLookup('property_types'),
       ]);
-      const bhkData = bhkRes.data || [];
-      const propTypeData = propTypeRes.data || [];
       setBhkTypes(bhkData);
       setPropertyTypes(propTypeData);
       setLookupMaps({

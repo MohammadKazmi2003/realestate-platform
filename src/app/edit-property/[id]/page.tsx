@@ -4,6 +4,7 @@
 import React, { useState, useEffect, FormEvent, ChangeEvent, use,useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import { getLookup } from '@/lib/lookupCache';
 import Header from '@/app/components/Header';
 import { withAuth } from '@/utils/withAuth';
 import imageCompression from 'browser-image-compression';
@@ -83,37 +84,33 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
   }, [propertyTypeName, lookupData.amenities]);
 
   // --- DATA FETCHING ---
-  useEffect(() => {
-    const fetchData = async () => { 
-        if (!propertyId) return;
-        setLoading(true);
-        try {
-            const [ propDetailsRes, bhkRes, listingRes, ownerRes, furnishRes, availRes, commSubTypeRes, commOfficeTypeRes, locAdvRes, landFeatureRes, amenityRes, furnishItemRes, otherRoomRes ] = await Promise.all([
-              supabase.rpc('get_property_details', { p_property_id: propertyId }).returns<PropertyDataType>().single(),
-              supabase.from('bhk_types').select('id, label'),
-              supabase.from('lookup_listing_purposes').select('id, name'),
-              supabase.from('lookup_ownership_types').select('id, name'),
-              supabase.from('lookup_furnishing_statuses').select('id, name'),
-              supabase.from('lookup_availability_statuses').select('id, name'),
-              supabase.from('lookup_commercial_sub_types').select('id, name'),
-              supabase.from('lookup_commercial_office_types').select('id, name'),
-              supabase.from('lookup_location_advantages').select('id, name'),
-              supabase.from('lookup_land_features').select('id, name'),
-              supabase.from('lookup_amenities').select('id, name, category, property_type_scope'),
-              supabase.from('lookup_furnishing_items').select('id, name, category'),
-              supabase.from('lookup_other_rooms').select('id, name'),
-            ]);
+    useEffect(() => {
+      const fetchData = async () => {
+          if (!propertyId) return;
+          setLoading(true);
+          try {
+              const propDetailsPromise = supabase.rpc('get_property_details', { p_property_id: propertyId }).returns<PropertyDataType>().single();
+              const lookupsPromise = Promise.all([
+                  getLookup('bhk_types'), getLookup('lookup_listing_purposes'), getLookup('lookup_ownership_types'),
+                  getLookup('lookup_furnishing_statuses'), getLookup('lookup_availability_statuses'),
+                  getLookup('lookup_commercial_sub_types'), getLookup('lookup_commercial_office_types'),
+                  getLookup('lookup_location_advantages'), getLookup('lookup_land_features'),
+                  getLookup('lookup_amenities'), getLookup('lookup_furnishing_items'), getLookup('lookup_other_rooms'),
+              ]);
+              const [propDetailsRes, [bhkData, listingData, ownerData, furnishData, availData,
+                  commSubTypeData, commOfficeTypeData, locAdvData, landFeatureData,
+                  amenityData, furnishItemData, otherRoomData]] = await Promise.all([propDetailsPromise, lookupsPromise]);
 
             if (propDetailsRes.error || !propDetailsRes.data) throw new Error(propDetailsRes.error?.message || 'Property not found.');
             const property = propDetailsRes.data;
             
             setLookupData({
-                bhkTypes: bhkRes.data || [], listingPurposes: listingRes.data || [],
-                ownershipTypes: ownerRes.data || [], furnishingStatuses: furnishRes.data || [],
-                availabilityStatuses: availRes.data || [], commercialSubTypes: commSubTypeRes.data || [],
-                commercialOfficeTypes: commOfficeTypeRes.data || [], locationAdvantages: locAdvRes.data || [],
-                landFeatures: landFeatureRes.data || [], amenities: amenityRes.data || [],
-                furnishingItems: furnishItemRes.data || [], otherRooms: otherRoomRes.data || [],
+                bhkTypes: bhkData, listingPurposes: listingData,
+                ownershipTypes: ownerData, furnishingStatuses: furnishData,
+                availabilityStatuses: availData, commercialSubTypes: commSubTypeData,
+                commercialOfficeTypes: commOfficeTypeData, locationAdvantages: locAdvData,
+                landFeatures: landFeatureData, amenities: amenityData,
+                furnishingItems: furnishItemData, otherRooms: otherRoomData,
             });
 
             const { data: { user } } = await supabase.auth.getUser();

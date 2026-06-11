@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
 import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient';
+import { getLookup } from '@/lib/lookupCache';
 
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
@@ -98,12 +99,9 @@ export default function ListPage() {
   // Effect to fetch dropdown data and build lookup maps
   useEffect(() => {
     const fetchDropdowns = async () => {
-      const [bhkRes, propTypeRes] = await Promise.all([
-        supabase.from('bhk_types').select('*'),
-        supabase.from('property_types').select('*'),
+      const [bhkData, propTypeData] = await Promise.all([
+        getLookup('bhk_types'), getLookup('property_types'),
       ]);
-      const bhkData = bhkRes.data || [];
-      const propTypeData = propTypeRes.data || [];
       setBhkTypes(bhkData);
       setPropertyTypes(propTypeData);
       setLookupMaps({

@@ -4,6 +4,7 @@
 import { useState, useEffect, FormEvent, ChangeEvent, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import { getLookup } from '@/lib/lookupCache';
 import Header from '@/app/components/Header';
 import { withAuth } from '@/utils/withAuth';
 import imageCompression from 'browser-image-compression';
@@ -68,36 +69,36 @@ function AddPropertyPage() {
             setIsLoading(true);
             try {
                 const results = await Promise.all([
-                    supabase.from('property_types').select('id, name'),
-                    supabase.from('bhk_types').select('id, label'),
-                    supabase.from('lookup_listing_purposes').select('id, name'),
-                    supabase.from('lookup_ownership_types').select('id, name'),
-                    supabase.from('lookup_availability_statuses').select('id, name'),
-                    supabase.from('lookup_furnishing_statuses').select('id, name'),
-                    supabase.from('lookup_amenities').select('id, name, category, property_type_scope').order('category'),
-                    supabase.from('lookup_furnishing_items').select('id, name, category').order('category'),
-                    supabase.from('lookup_other_rooms').select('id, name'),
-                    supabase.from('lookup_commercial_sub_types').select('id, name'),
-                    supabase.from('lookup_commercial_office_types').select('id, name'),
-                    supabase.from('lookup_location_advantages').select('id, name'),
-                    supabase.from('lookup_land_features').select('id, name')
+                    getLookup('property_types'),
+                    getLookup('bhk_types'),
+                    getLookup('lookup_listing_purposes'),
+                    getLookup('lookup_ownership_types'),
+                    getLookup('lookup_availability_statuses'),
+                    getLookup('lookup_furnishing_statuses'),
+                    getLookup('lookup_amenities'),
+                    getLookup('lookup_furnishing_items'),
+                    getLookup('lookup_other_rooms'),
+                    getLookup('lookup_commercial_sub_types'),
+                    getLookup('lookup_commercial_office_types'),
+                    getLookup('lookup_location_advantages'),
+                    getLookup('lookup_land_features'),
                 ]);
-                const [propTypeRes, bhkTypeRes, purposeRes, ownerRes, availRes, furnishStatusRes, amenityRes, furnishItemRes, otherRoomRes, commSubTypeRes, commOfficeTypeRes, locAdvRes, landFeatureRes] = results;
+                const [propTypeData, bhkTypeData, purposeData, ownerData, availData, furnishStatusData, amenityData, furnishItemData, otherRoomData, commSubTypeData, commOfficeTypeData, locAdvData, landFeatureData] = results;
 
                 setLookupData({
-                    propertyTypes: propTypeRes.data || [],
-                    bhkTypes: bhkTypeRes.data || [],
-                    listingPurposes: purposeRes.data || [],
-                    ownershipTypes: ownerRes.data || [],
-                    availabilityStatuses: availRes.data || [],
-                    furnishingStatuses: furnishStatusRes.data || [],
-                    amenities: amenityRes.data || [],
-                    furnishingItems: furnishItemRes.data || [],
-                    otherRooms: otherRoomRes.data || [],
-                    commercialSubTypes: commSubTypeRes.data || [],
-                    commercialOfficeTypes: commOfficeTypeRes.data || [],
-                    locationAdvantages: locAdvRes.data || [],
-                    landFeatures: landFeatureRes.data || []
+                    propertyTypes: propTypeData,
+                    bhkTypes: bhkTypeData,
+                    listingPurposes: purposeData,
+                    ownershipTypes: ownerData,
+                    availabilityStatuses: availData,
+                    furnishingStatuses: furnishStatusData,
+                    amenities: amenityData,
+                    furnishingItems: furnishItemData,
+                    otherRooms: otherRoomData,
+                    commercialSubTypes: commSubTypeData,
+                    commercialOfficeTypes: commOfficeTypeData,
+                    locationAdvantages: locAdvData,
+                    landFeatures: landFeatureData,
                 });
             } catch (error: any) {
                 setMessage({ type: 'error', text: `Failed to load form options: ${error.message}` });
