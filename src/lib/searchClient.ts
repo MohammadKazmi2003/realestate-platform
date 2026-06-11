@@ -58,8 +58,8 @@ export async function searchProperties(params: SearchQueryInput): Promise<any> {
     });
 
     if (!response.ok) {
-      if (response.status === 429) {
-        logger.warn('Rate limited, falling back to PG', { status: 429 });
+      if (response.status === 429 || response.status === 503) {
+        logger.warn('API unavailable, falling back to PG', { status: response.status });
         return pgFallbackSearch(params);
       }
       logger.error('Search API returned error', { status: response.status });

@@ -22,14 +22,6 @@ type PropertyType = { id: number; name: string; };
 const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
 const DEFAULT_ZOOM = 11;
 
-const useDebouncedCallback = (callback: (...args: any[]) => void, delay: number) => {
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  return useCallback((...args: any[]) => {
-    clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => callback(...args), delay);
-  }, [callback, delay]);
-};
-
 export default function BrowsePage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -54,6 +46,11 @@ export default function BrowsePage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const autocompleteRef = useRef<HTMLDivElement>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // Use refs for callback/state so event listener effect doesn't need to re-run
+  const fetchPropertiesRef = useRef<typeof fetchProperties>(() => {});
+  const searchAsIMoveRef = useRef(searchAsIMove);
+  searchAsIMoveRef.current = searchAsIMove;
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -94,7 +91,7 @@ export default function BrowsePage() {
     setLoading(true);
     const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
 
-    const params: any = {};
+    const params: any = { pageSize: 100 };
     if (filters.location) params.location = filters.location;
     if (filters.minPrice) params.minPrice = Number(filters.minPrice);
     if (filters.maxPrice) params.maxPrice = Number(filters.maxPrice);
@@ -104,7 +101,6 @@ export default function BrowsePage() {
     if (filters.propertyTypeId && propTypeIdToName[Number(filters.propertyTypeId)]) {
       params.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
     }
-    params.pageSize = 100;
 
     if (searchAsIMove && bounds) {
       params.bounds = {
@@ -135,8 +131,17 @@ export default function BrowsePage() {
     setLoading(false);
   }, [filters, lookupMaps, searchAsIMove]);
 
-  const debouncedFetchProperties = useDebouncedCallback(fetchProperties, 600);
-  
+  // Keep ref updated so stable effect always calls latest fetchProperties
+  fetchPropertiesRef.current = fetchProperties;
+
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const debouncedFetchProperties = useCallback((...args: any[]) => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      (fetchPropertiesRef.current as any)(...args);
+    }, 600);
+  }, []);
+
   const highlightMarker = useCallback((propertyId: string | null) => {
     Object.values(markersRef.current).forEach(marker => {
       const el = marker.getElement();
@@ -151,7 +156,7 @@ export default function BrowsePage() {
       el.style.transform = 'scale(1.2)';
     }
   }, []);
-  
+
   const updateMarkers = useCallback((props: PropertyBrowse[]) => {
     if (!mapRef.current) return;
     const newPropertyIds = new Set(props.map(p => p.id));
@@ -188,6 +193,7 @@ export default function BrowsePage() {
 
   useEffect(() => { updateMarkers(properties); }, [properties, updateMarkers]);
 
+  // Fetch lookups once on mount
   useEffect(() => {
     const init = async () => {
       const [bhkRes, propTypeRes] = await Promise.all([
@@ -203,31 +209,38 @@ export default function BrowsePage() {
       });
     };
     init();
+  }, []);
 
+  // Initialize map once — use refs for dynamic values so event listeners are stable
+  useEffect(() => {
     if (mapRef.current || !mapContainer.current || !process.env.NEXT_PUBLIC_MAPTILER_KEY) return;
 
-    mapRef.current = new maplibregl.Map({
-      container: mapContainer.current!,
+    const map = new maplibregl.Map({
+      container: mapContainer.current,
       style: `https://api.maptiler.com/maps/streets-v2/style.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}`,
       center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM,
     });
+    mapRef.current = map;
 
-    mapRef.current.addControl(new maplibregl.NavigationControl(), 'top-right');
-    const onMapInteraction = () => {
-      if (mapRef.current && searchAsIMove) {
-          debouncedFetchProperties(mapRef.current.getBounds());
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+    const onLoad = () => fetchPropertiesRef.current(map.getBounds());
+    const onMoveEnd = () => {
+      if (searchAsIMoveRef.current) {
+        debouncedFetchProperties(map.getBounds());
       }
     };
-    mapRef.current.on('load', () => fetchProperties(mapRef.current!.getBounds()));
-    mapRef.current.on('moveend', onMapInteraction);
-    
+
+    map.on('load', onLoad);
+    map.on('moveend', onMoveEnd);
+
     return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
+      map.off('load', onLoad);
+      map.off('moveend', onMoveEnd);
+      map.remove();
+      mapRef.current = null;
     };
-  }, [debouncedFetchProperties, fetchProperties, searchAsIMove]);
+  }, []);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));

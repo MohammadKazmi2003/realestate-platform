@@ -1,9 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getElasticsearchClient, ES_INDEX_ALIAS } from '@/lib/elasticsearch';
+import { getElasticsearchClient, isEsAvailable, ES_INDEX_ALIAS } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { searchQuerySchema } from '@/lib/validation';
 import { logger } from '@/lib/logger';
+
+function roundBounds(b: any) {
+  if (!b) return b;
+  return {
+    minLat: Math.round(b.minLat * 100) / 100,
+    maxLat: Math.round(b.maxLat * 100) / 100,
+    minLng: Math.round(b.minLng * 100) / 100,
+    maxLng: Math.round(b.maxLng * 100) / 100,
+  };
+}
 
 export async function POST(req: NextRequest) {
   const identifier = getRateLimitIdentifier(req);
@@ -26,11 +36,17 @@ export async function POST(req: NextRequest) {
       cursor, pageSize = 24, sort = 'relevance',
     } = parsed.data;
 
-    const cacheKey = `search:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, lat, lng, radiusKm, bounds, cursor, pageSize, sort })}`;
+    // Simplify cache key: round bounds to 2 decimals so small pans hit cache
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached);
+    }
+
+    const esUp = await isEsAvailable();
+    if (!esUp) {
+      return NextResponse.json({ error: 'ES unavailable', message: 'Search engine temporarily down' }, { status: 503 });
     }
 
     const es = getElasticsearchClient();
@@ -75,8 +91,6 @@ export async function POST(req: NextRequest) {
     if (amenities.length > 0) filters.push({ terms: { amenities } });
     if (furnishings.length > 0) filters.push({ terms: { furnishings } });
 
-    let sortClause: any[] = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }];
-
     if (lat != null && lng != null) {
       filters.push({
         geo_distance: {
@@ -84,17 +98,6 @@ export async function POST(req: NextRequest) {
           location: { lat, lon: lng },
         },
       });
-      sortClause = [
-        {
-          _geo_distance: {
-            location: { lat, lon: lng },
-            order: 'asc',
-            unit: 'km',
-            distance_type: 'plane',
-          },
-        },
-        ...sortClause,
-      ];
     }
 
     if (bounds) {
@@ -111,20 +114,37 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    let sortClause: any[] = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }];
     if (sort === 'price_asc') sortClause = [{ price: { order: 'asc' } }];
     if (sort === 'price_desc') sortClause = [{ price: { order: 'desc' } }];
     if (sort === 'newest') sortClause = [{ created_at: { order: 'desc' } }];
 
+    // Nearest-first sorting when geo filter is active
+    if (lat != null && lng != null) {
+      sortClause.unshift({
+        _geo_distance: {
+          location: { lat, lon: lng },
+          order: 'asc',
+          unit: 'km',
+          distance_type: 'plane',
+        },
+      });
+    }
+
+    // Single ES query with aggregations attached — no second round-trip
     const esQuery: any = {
       index: ES_INDEX_ALIAS,
       size: pageSize,
-      query: {
-        bool: {
-          must: must.length > 0 ? must : [{ match_all: {} }],
-          filter: filters,
-        },
-      },
+      query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
       sort: sortClause,
+      aggs: {
+        by_property_type: { terms: { field: 'property_type', size: 20 } },
+        by_bhk: { terms: { field: 'bhk_type', size: 10 } },
+        by_listing_purpose: { terms: { field: 'listing_purpose', size: 10 } },
+        by_furnishing: { terms: { field: 'furnishing_status', size: 10 } },
+        by_amenities: { terms: { field: 'amenities', size: 50 } },
+        price_stats: { stats: { field: 'price' } },
+      },
     };
 
     if (cursor) {
@@ -140,31 +160,11 @@ export async function POST(req: NextRequest) {
       _sort: hit.sort,
     }));
 
-    const aggregations: any = {};
-    try {
-      const aggResponse = await es.search({
-        index: ES_INDEX_ALIAS,
-        size: 0,
-        query: { bool: { must, filter: filters } },
-        aggs: {
-          by_property_type: { terms: { field: 'property_type', size: 20 } },
-          by_bhk: { terms: { field: 'bhk_type', size: 10 } },
-          by_listing_purpose: { terms: { field: 'listing_purpose', size: 10 } },
-          by_furnishing: { terms: { field: 'furnishing_status', size: 10 } },
-          by_amenities: { terms: { field: 'amenities', size: 50 } },
-          price_stats: { stats: { field: 'price' } },
-        },
-      });
-      aggregations.facets = aggResponse.aggregations;
-    } catch {
-      aggregations.facets = {};
-    }
-
     const response = {
       results,
       total: typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total,
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
-      aggregations,
+      aggregations: { facets: (esResponse as any).aggregations || {} },
     };
 
     await cacheSet(cacheKey, response, 60);

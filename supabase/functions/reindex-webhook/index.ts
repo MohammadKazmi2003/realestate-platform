@@ -6,6 +6,26 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+function parseWKBPoint(wkbHex: string): { latitude: number | null; longitude: number | null } {
+  if (!wkbHex) return { latitude: null, longitude: null };
+  try {
+    const hex = wkbHex.trim();
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    }
+    if (bytes.length >= 25) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const lng = view.getFloat64(9, true);
+      const lat = view.getFloat64(17, true);
+      return { latitude: lat, longitude: lng };
+    }
+  } catch {
+    console.error('WKB parse error:', wkbHex?.slice(0, 20));
+  }
+  return { latitude: null, longitude: null };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -47,7 +67,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: property } = await supabase
         .from('properties')
-        .select('*, ST_Y(location_point::geometry) as latitude, ST_X(location_point::geometry) as longitude')
+        .select('*')
         .eq('id', record.id)
         .single();
 
@@ -56,6 +76,8 @@ Deno.serve(async (req: Request) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
+
+      const coords = parseWKBPoint(property.location_point);
 
       const [typeRes, purposeRes, profileRes, mediaRes, projectRes] = await Promise.all([
         supabase.from('property_types').select('name').eq('id', property.property_type_id).single(),
@@ -70,8 +92,8 @@ Deno.serve(async (req: Request) => {
         title: property.title || '',
         description: property.description || '',
         location_text: property.location_text || '',
-        location: property.latitude != null && property.longitude != null
-          ? { lat: property.latitude, lon: property.longitude } : null,
+        location: coords.latitude != null && coords.longitude != null
+          ? { lat: coords.latitude, lon: coords.longitude } : null,
         price: property.price || 0,
         property_type: typeRes.data?.name || '',
         property_type_id: property.property_type_id,

@@ -27,9 +27,27 @@ const INDEX_VERSION = process.env.INDEX_VERSION || 'v1';
 
 function parseWKTPoint(wkt) {
   if (!wkt) return { latitude: null, longitude: null };
-  const match = wkt.match(/POINT\(([-\d.]+) ([-\d.]+)\)/);
-  if (match) {
-    return { latitude: parseFloat(match[2]), longitude: parseFloat(match[1]) };
+  // Try WKT format: POINT(lng lat)
+  const wktMatch = wkt.match(/POINT\(([-\d.]+) ([-\d.]+)\)/);
+  if (wktMatch) {
+    return { latitude: parseFloat(wktMatch[2]), longitude: parseFloat(wktMatch[1]) };
+  }
+  // Try WKB hex format (PostGIS extended: byteOrder(1) + type(4) + srid(4) + x(8) + y(8) = 25 bytes)
+  try {
+    const hex = wkt.replace(/\s/g, '');
+    const buf = Buffer.from(hex, 'hex');
+    if (buf.length >= 25) {
+      const byteOrder = buf.readUInt8(0); // 0=big, 1=little
+      const le = byteOrder === 1;
+      const srid = le ? buf.readUInt32LE(5) : buf.readUInt32BE(5);
+      if (srid === 4326) {
+        const lng = le ? buf.readDoubleLE(9) : buf.readDoubleBE(9);
+        const lat = le ? buf.readDoubleLE(17) : buf.readDoubleBE(17);
+        return { latitude: lat, longitude: lng };
+      }
+    }
+  } catch {
+    // fall through
   }
   return { latitude: null, longitude: null };
 }
