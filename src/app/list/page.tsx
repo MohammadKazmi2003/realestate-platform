@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { Loader2 } from 'lucide-react';
 import Header from '@/app/components/Header';
@@ -27,6 +27,7 @@ export default function ListPage() {
     propTypeIdToName: Record<number, string>;
   }>({ bhkIdToLabel: {}, propTypeIdToName: {} });
   
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const itemsPerPage = 12;
 
   const fetchProperties = useCallback(async (cursor: any[] | null, shouldReset: boolean = false) => {
@@ -78,10 +79,21 @@ export default function ListPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, sort]);
 
-  // Effect for infinite scroll (appends properties)
-  const handleLoadMore = () => {
-    fetchProperties(nextCursor, false);
-  }
+  // Infinite scroll via IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loading && hasMore && nextCursor) {
+          fetchProperties(nextCursor, false);
+        }
+      },
+      { rootMargin: '400px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loading, hasMore, nextCursor, fetchProperties]);
 
   // Effect to fetch dropdown data and build lookup maps
   useEffect(() => {
@@ -133,14 +145,18 @@ export default function ListPage() {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
               {properties.map(property => (
-                <PropertyCard key={property.id} property={property} />
+                <div key={property.id} style={{ contentVisibility: 'auto' }}>
+                  <PropertyCard property={property} />
+                </div>
               ))}
             </div>
             {hasMore && (
               <div className="text-center mt-12">
-                <button onClick={handleLoadMore} disabled={loading} className="neumorphic-button bg-cta-gradient w-48">
-                  {loading ? 'Loading...' : 'Load More'}
-                </button>
+                {loading ? (
+                  <Loader2 className="animate-spin text-3xl text-text-color-light mx-auto" />
+                ) : (
+                  <div ref={sentinelRef} className="h-4" />
+                )}
               </div>
             )}
           </>
