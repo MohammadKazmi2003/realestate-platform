@@ -239,7 +239,6 @@ export async function updatePropertyAndManageImages(
     // 6. Invalidate Redis caches
     await Promise.all([
       cacheDelete(`property:${propertyId}`),
-      cacheDelete('lookup:*').catch(() => {}),
     ]);
 
     // 7. Log the successful update action
