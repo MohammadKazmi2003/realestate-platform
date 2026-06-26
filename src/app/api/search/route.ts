@@ -4,6 +4,7 @@ import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { searchQuerySchema } from '@/lib/validation';
 import { logger } from '@/lib/logger';
+import { enqueueAnalytics } from '@/lib/events';
 
 function roundBounds(b: any) {
   if (!b) return b;
@@ -182,6 +183,16 @@ export async function POST(req: NextRequest) {
     await cacheSet(cacheKey, response, 60);
 
     logger.searchAnalytics(query || location || '', response.total, 0);
+
+    enqueueAnalytics({
+      query_text: query || location || '',
+      total_results: response.total,
+      latency_ms: 0,
+      filters: {
+        minPrice, maxPrice, propertyType, bhkType, listingPurpose,
+        lat, lng, radiusKm,
+      },
+    }).catch(() => {});
 
     return NextResponse.json(response);
   } catch (error: any) {

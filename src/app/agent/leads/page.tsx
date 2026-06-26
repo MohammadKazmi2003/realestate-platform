@@ -28,8 +28,8 @@ function AgentLeadsPage() {
               <Plus size={16} /> Add Lead
             </button>
           </div>
-          {/* Pass the refreshKey as a key to the component */}
-          <CrmKanbanBoard key={refreshKey} />
+          {/* Pass the refreshKey to trigger re-fetch without remounting */}
+          <CrmKanbanBoard refreshKey={refreshKey} />
         </main>
       </div>
       <AddLeadModal 

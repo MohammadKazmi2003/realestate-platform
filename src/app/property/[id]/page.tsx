@@ -53,7 +53,7 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
   const { data: { user } } = await supabase.auth.getUser();
 
   if (user && user.id !== property!.user_id) {
-    await logPropertyView(property!.id);
+    await logPropertyView(property!.id, property!.user_id);
   }
 
   return (

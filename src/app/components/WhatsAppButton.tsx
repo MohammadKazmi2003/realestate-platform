@@ -1,11 +1,10 @@
 // src/app/components/WhatsAppButton.tsx
 'use client';
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { FaWhatsapp } from 'react-icons/fa';
-import { supabase } from '@/lib/supabaseClient'; // Import the Supabase client
-import { useAuth } from '@/context/AuthContext';   // Import the useAuth hook
+import { useAuth } from '@/context/AuthContext';
 
 type WhatsAppButtonProps = {
   phoneNumber: string | null;
@@ -24,38 +23,34 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
   propertyId,
   ownerId,
 }) => {
-  const { user } = useAuth(); // Get the currently logged-in user
+  const { user } = useAuth();
 
-  const handleWhatsAppClick = async (e: React.MouseEvent) => {
+  const handleWhatsAppClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
 
     if (!phoneNumber) return;
 
-    // --- Start of Logging Logic ---
-    // This block sends the event to your Supabase table.
-    try {
-      const { error } = await supabase.from('event_logs').insert({
-        user_id: user?.id, // The user who clicked the button
-        property_id: propertyId,
+    // Fire-and-forget counter increment via server endpoint — never blocks the user
+    fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         event_type: 'whatsapp_click',
-      });
-
-      if (error) {
-        // Log the error to the console for debugging, but don't block the user
-        console.error('Error logging WhatsApp click:', error);
-      }
-    } catch (error) {
-      console.error('An unexpected error occurred while logging:', error);
-    }
-    // --- End of Logging Logic ---
+        user_id: user?.id,
+        property_id: propertyId,
+        owner_id: ownerId,
+      }),
+    }).catch(() => {
+      // Counter failures are non-critical; never surface to user
+    });
 
     const message = encodeURIComponent(`Hello, I'm interested in your property "${propertyTitle}". Kindly share more details regarding it.`);
     const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     const whatsappUrl = `https://wa.me/${cleanPhoneNumber}?text=${message}`;
     
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
-  };
+  }, [phoneNumber, propertyTitle, propertyId, ownerId, user?.id]);
 
   if (!phoneNumber) {
     return null;

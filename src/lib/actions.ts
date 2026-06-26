@@ -4,6 +4,8 @@
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
 import { cacheDelete } from '@/lib/redis';
+import { enqueueAction } from '@/lib/events';
+import { incrView } from '@/lib/counters';
 
 // --- TYPE DEFINITIONS ---
 type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
@@ -27,22 +29,17 @@ const safeParseFloat = (val: string | null | undefined): number | null => {
 };
 
 // --- LOGGING ACTIONS ---
-export async function logPropertyView(propertyId: string) {
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
+export async function logPropertyView(propertyId: string, ownerId: string) {
   try {
-    await supabase.from('event_logs').insert({
-        property_id: propertyId,
-        user_id: user.id,
-        event_type: 'property_view'
-    }).throwOnError();
+    const supabase = await createSupabaseServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    // Zillow-scale: Redis INCR counter, not a Postgres row
+    await incrView(propertyId, ownerId);
   } catch (error) {
     console.error('Error logging property view:', error);
   }
 }
-
-
 
 export async function logLeadStatusChange(
     leadId: string,
@@ -72,16 +69,13 @@ export async function logAction(
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
-  try {
-    await supabase.rpc('log_action', {
-      p_action: action,
-      p_entity_type: entityType,
-      p_entity_id: entityId,
-      p_metadata: metadata || null,
-    }).throwOnError();
-  } catch (error) {
-    console.error('Unexpected error in logAction server action:', error);
-  }
+  await enqueueAction({
+    action,
+    entity_type: entityType,
+    entity_id: entityId,
+    user_id: user.id,
+    metadata,
+  });
 }
 
 export async function createLead(formData: LeadFormData) {
