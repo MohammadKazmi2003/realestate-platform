@@ -1,0 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+fastapi
+uvicorn[standard]
+python-dotenv
+groq
+supabase
+sentence-transformers
+torch
+openai
+cachetools
+tavily-python
+langchain-community
+langchain-tavily
+langchain-core
+langchain-groq
+langchain-huggingface
+langgraph
+pydantic
+bs4
+lxml

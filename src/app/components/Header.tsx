@@ -61,6 +61,7 @@ export default function Header() {
         <nav className="flex items-center gap-2 bg-bg-color p-2 rounded-full shadow-neumorphic-outset">
           <NavLink href="/browse" icon={Building2}>Browse</NavLink>
           <NavLink href="/list" icon={List}>List</NavLink>
+          <NavLink href="/projects" icon={Building2}>Projects</NavLink>
           {userRole === 1 && <NavLink href="/admin" icon={Shield}>Admin</NavLink>}
           {userRole === 2 && <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>}
           {userRole === 3 && (

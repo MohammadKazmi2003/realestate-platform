@@ -85,3 +85,48 @@ export type PropertyDataType = {
   // *** FIX: Added the missing lookup_land_features property ***
   lookup_land_features: LookupItem[];
 };
+
+export type Project = {
+  id: string;
+  name: string;
+  slug: string;
+  low_price: number;
+  high_price: number;
+  construction_phase: string;
+  delivery_date: string | null;
+  developer_name: string;
+  primary_image: string | null;
+  location_name: string | null;
+  total_count?: number;
+};
+
+export type ProjectDetails = {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  description_html: string;
+  price_range: { low: number; high: number; currency: string } | null;
+  location_text: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  developer: { name: string; logo: string | null } | null;
+  status: { phase: string; progress_percent: number | null; delivery_date: string | null } | null;
+  property_types: string[];
+  project_media: { id: string; storage_path_original: string; is_primary: boolean }[];
+  project_videos: { video_storage_path: string; thumbnail_storage_path: string | null }[] | null;
+  unit_configurations: {
+    id: string;
+    property_type: string;
+    bedrooms: number | null;
+    area_from_sqft: number | null;
+    area_to_sqft: number | null;
+    starting_price: number | null;
+    floor_plan_urls: string[] | null;
+  }[];
+  amenities: { id: string; name: string }[];
+  faqs: { id: string; question: string; answer: string }[];
+  master_plan_description: string | null;
+  master_plan_storage_path: string | null;
+  brochure_storage_path: string | null;
+};

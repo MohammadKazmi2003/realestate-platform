@@ -12,8 +12,10 @@ import os
 import json
 import asyncio
 import logging
+import time
 from typing import Optional, List
 from uuid import UUID
+from threading import Lock
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -38,6 +40,37 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}")
     raise
+
+class _TTLCache:
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 500):
+        self._store: dict[str, tuple[float, any]] = {}
+        self._ttl = ttl_seconds
+        self._max_size = max_size
+        self._lock = Lock()
+
+    def get(self, key: str) -> any:
+        with self._lock:
+            entry = self._store.get(key)
+            if entry and entry[0] > time.time():
+                return entry[1]
+            if entry:
+                del self._store[key]
+            return None
+
+    def set(self, key: str, value: any):
+        with self._lock:
+            self._store[key] = (time.time() + self._ttl, value)
+            expired = [k for k, v in self._store.items() if v[0] <= time.time()]
+            for k in expired:
+                del self._store[k]
+            if len(self._store) > self._max_size:
+                oldest = sorted(self._store.keys(), key=lambda k: self._store[k][0])
+                for k in oldest[:len(oldest) // 2]:
+                    del self._store[k]
+
+_detail_cache = _TTLCache(ttl_seconds=300)
+_project_detail_cache = _TTLCache(ttl_seconds=300)
+_text_search_cache = _TTLCache(ttl_seconds=60, max_size=200)
 
 # --- Pydantic Schemas for Tool Inputs ---
 # These schemas enforce type safety and provide descriptions for the LLM.
@@ -91,6 +124,18 @@ class KnowledgeSearchInput(BaseModel):
     """Input schema for the knowledge_web_search tool."""
     query: str = Field(
         description="A general real estate question. Example: 'what is stamp duty in Gurgaon?'"
+    )
+
+class ProjectTextSearchInput(BaseModel):
+    """Input schema for the project_text_search tool."""
+    query: str = Field(
+        description="The specific name of a project to search for. Example: 'Sobha Hartland'"
+    )
+
+class ProjectSlugInput(BaseModel):
+    """Input schema for the get_project_details_by_slug tool."""
+    slug: str = Field(
+        description="The URL slug of the project to get details for. Must be retrieved from a previous project search result."
     )
 
 # --- Tool Definitions ---
@@ -200,22 +245,29 @@ async def get_listing_details(listing_id: str) -> str:
     if not listing_id:
         return "Error: A valid listing_id must be provided."
     try:
-        # Validate UUID
         UUID(listing_id)
+    except (ValueError, TypeError):
+        return f"Error: The provided ID '{listing_id}' is not a valid UUID."
+
+    cached = _detail_cache.get(listing_id)
+    if cached:
+        logger.info(f"get_listing_details cache HIT for {listing_id}")
+        return cached
+
+    try:
         response = await asyncio.to_thread(
             supabase_client.rpc('get_listing_details', {'p_listing_id': listing_id})
             .execute
         )
-        
+
         if not response.data:
             return "Error: No data found for this ID."
-        
-        # The RPC returns a list, even for a single item
-        details_object = response.data[0] if isinstance(response.data, list) else response.data
-        return json.dumps(details_object)
 
-    except (ValueError, TypeError):
-        return f"Error: The provided ID '{listing_id}' is not a valid UUID. Please find the correct ID from the context."
+        details_object = response.data[0] if isinstance(response.data, list) else response.data
+        result = json.dumps(details_object)
+        _detail_cache.set(listing_id, result)
+        return result
+
     except Exception as e:
         logger.error(f"Error in get_listing_details tool: {e}", exc_info=True)
         return f"An error occurred while fetching details. Error: {e}"
@@ -239,12 +291,74 @@ async def knowledge_web_search(query: str) -> str:
         logger.error(f"Error in knowledge_web_search: {e}")
         return f"Error: An error occurred while searching the web: {e}"
 
+@tool(args_schema=ProjectTextSearchInput)
+async def project_text_search(query: str) -> str:
+    """
+    Use this tool ONLY when the user is searching for a project / real estate development by its specific name.
+    For example, use this for queries like: 'tell me about Sobha Hartland' or 'show me Azizi Venice'.
+    This searches the dedicated projects index and returns project-level results.
+    Do NOT use this for individual property listings — use full_text_property_search for those.
+    """
+    logger.info(f"TOOL CALL: project_text_search for query: '{query}'")
+    try:
+        params = {"p_query": query, "p_exclude_ids": []}
+        response = await asyncio.to_thread(supabase_client.rpc("text_search_properties", params).execute)
+
+        if not response.data:
+            return f"No projects found for '{query}'."
+
+        projects = [item for item in response.data if item.get('listing_type') == 'project']
+        if not projects:
+            return f"No projects found for '{query}'."
+
+        return json.dumps(projects)
+
+    except Exception as e:
+        logger.error(f"Error in project_text_search: {e}")
+        return f"Error: An error occurred while searching for projects: {e}"
+
+@tool(args_schema=ProjectSlugInput)
+async def get_project_details_by_slug(slug: str) -> str:
+    """
+    Use this tool to get all detailed information about a single project using its URL slug.
+    You MUST have the 'slug' from a previous project search result to use this tool.
+    Use this when the user asks for more details about a project you have already shown them.
+    Returns complete project data including images, amenities, FAQs, unit configurations, and videos.
+    """
+    logger.info(f"TOOL CALL: get_project_details_by_slug for slug: '{slug}'")
+    if not slug:
+        return "Error: A valid slug must be provided."
+
+    cached = _project_detail_cache.get(slug)
+    if cached:
+        logger.info(f"get_project_details_by_slug cache HIT for '{slug}'")
+        return cached
+
+    try:
+        response = await asyncio.to_thread(
+            supabase_client.rpc('get_project_by_slug', {'p_slug': slug})
+            .execute
+        )
+
+        if not response.data:
+            return f"Error: No project found with slug '{slug}'."
+
+        details = response.data[0] if isinstance(response.data, list) else response.data
+        result = json.dumps(details)
+        _project_detail_cache.set(slug, result)
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in get_project_details_by_slug: {e}", exc_info=True)
+        return f"An error occurred while fetching project details. Error: {e}"
+
 # --- Tool Registry ---
-# A dictionary to map tool names to their callable functions
 tools = {
     "structured_property_search": structured_property_search,
     "full_text_property_search": full_text_property_search,
     "semantic_property_search": semantic_property_search,
     "get_listing_details": get_listing_details,
     "knowledge_web_search": knowledge_web_search,
+    "project_text_search": project_text_search,
+    "get_project_details_by_slug": get_project_details_by_slug,
 }

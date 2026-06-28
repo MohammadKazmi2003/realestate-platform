@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage # Impor
 # ChatRequest model now includes `session_id`
 from api_py.langchain_chatbot import app as langgraph_app, AgentState, ChatRequest, Message
 from api_py.shared_embedding import embedding_engine
+from api_py.rate_limit import chat_rate_limiter
 # ------------------------
 
 
@@ -104,7 +105,7 @@ async def search(request: SearchRequest):
 
     logger.info("Falling back to semantic search.")
     try:
-        embedding = embedding_engine.embed_query(request.query)
+        embedding = await asyncio.to_thread(embedding_engine.embed_query, request.query)
         semantic_query = supabase_client.rpc(
             "match_property_chunks",
             {"query_embedding": embedding, "match_threshold": 0.75, "match_count": 10}
@@ -149,7 +150,10 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
     - Writes 'summary' to the outgoing session_state.
     """
     logger.info(f"Invoking LangGraph agent for session: {chat_request.session_id}...")
-    
+
+    if not chat_rate_limiter.is_allowed(chat_request.session_id):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a moment.")
+
     # 1. Handle simple "close" message
     latest_query = chat_request.messages[-1].content.lower().strip()
     if latest_query in ['close', 'exit', 'goodbye', 'bye', "that's all", "thank you"]:
@@ -175,6 +179,7 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
         "last_successful_search": session_state.get("last_successful_search"),
         "page": session_state.get("page", 1),
         "properties_in_context": session_state.get("properties_in_context", []),
+        "projects_in_context": session_state.get("projects_in_context", []),
         "focused_property_id": session_state.get("focused_property_id"),
         "focused_property_details": session_state.get("focused_property_details"),
         "tool_choice": None,
@@ -203,6 +208,7 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
             "last_successful_search": final_state.get("last_successful_search"),
             "page": final_state.get("page"),
             "properties_in_context": final_state.get("properties_in_context"),
+            "projects_in_context": final_state.get("projects_in_context"),
             "focused_property_id": final_state.get("focused_property_id"),
             "focused_property_details": final_state.get("focused_property_details"),
             

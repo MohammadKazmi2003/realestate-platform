@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getElasticsearchClient, isEsAvailable, ES_INDEX_ALIAS } from '@/lib/elasticsearch';
+import { getElasticsearchClient, isEsAvailable, ES_INDEX_ALIAS, recordEsSuccess, recordEsFailure } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { searchQuerySchema } from '@/lib/validation';
@@ -165,6 +165,7 @@ export async function POST(req: NextRequest) {
     }
 
     const esResponse = await es.search(esQuery);
+    recordEsSuccess();
     const hits = esResponse.hits.hits;
 
     const results = hits.map((hit: any) => ({
@@ -197,6 +198,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(response);
   } catch (error: any) {
     logger.error('Search API error', error.message);
+    recordEsFailure();
     return NextResponse.json({ error: 'Search failed', message: error.message }, { status: 500 });
   }
 }

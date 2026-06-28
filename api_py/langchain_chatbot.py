@@ -99,6 +99,8 @@ class ToolChoice(BaseModel):
         "semantic_property_search",
         "get_listing_details",
         "knowledge_web_search",
+        "project_text_search",
+        "get_project_details_by_slug",
         "respond_to_user"
     ] = Field(description="The name of the tool to execute.")
     tool_input: Optional[Dict[str, Any]] = Field(
@@ -243,6 +245,7 @@ class AgentState(TypedDict):
     last_successful_search: Optional[Dict[str, Any]]
     page: int
     properties_in_context: List[Dict[str, Any]]
+    projects_in_context: List[Dict[str, Any]]
     focused_property_id: Optional[str]
     focused_property_details: Optional[Dict[str, Any]]
     tool_choice: Optional[ToolChoice]
@@ -548,21 +551,20 @@ async def tool_orchestrator(state: AgentState) -> Dict[str, Any]:
         else:
             logger.info(f"Manual cleaning produced: '{cleaned_query}'")
         
-        properties = state.get("properties_in_context", [])
+        projects_in_context = state.get("projects_in_context", [])
         match = None
-        for prop in properties:
-            title = prop.get("title", "").lower()
-            if cleaned_query.lower() in title:
-                match = prop
+        for proj in projects_in_context:
+            name = proj.get("name", "").lower()
+            if cleaned_query.lower() in name:
+                match = proj
                 break
         if match:
-            logger.info(f"Property '{cleaned_query}' found in context. Returning details.")
+            logger.info(f"Project '{cleaned_query}' found in context. Returning details by slug.")
             return {
-                "tool_choice": ToolChoice(tool_name="get_listing_details", tool_input={"listing_id": match["id"]}),
-                "focused_property_id": match["id"]
+                "tool_choice": ToolChoice(tool_name="get_project_details_by_slug", tool_input={"slug": match["slug"]}),
             }
         return {
-            "tool_choice": ToolChoice(tool_name="full_text_property_search", tool_input={"query": cleaned_query}),
+            "tool_choice": ToolChoice(tool_name="project_text_search", tool_input={"query": cleaned_query}),
             "search_criteria": {}, "last_successful_search": None, "page": 1,
         }
 
@@ -703,18 +705,21 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         output = await tool_to_call.ainvoke(tool_input)
         logger.info(f"Tool {tool_choice.tool_name} executed successfully.")
 
-        if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]:
+        if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search", "project_text_search"]:
             try:
                 parsed_output = json.loads(output)
                 if isinstance(parsed_output, list):
-                    return {
+                    result = {
                         "tool_output": output,
                         "properties_in_context": parsed_output,
                         "properties_for_ui": parsed_output,
                     }
+                    if tool_choice.tool_name == "project_text_search":
+                        result["projects_in_context"] = parsed_output
+                    return result
             except (json.JSONDecodeError, TypeError): pass
 
-        elif tool_choice.tool_name == "get_listing_details":
+        elif tool_choice.tool_name in ["get_listing_details", "get_project_details_by_slug"]:
             try:
                 parsed_output = json.loads(output)
                 if isinstance(parsed_output, dict):
@@ -764,19 +769,18 @@ async def response_synthesizer_node(state: AgentState) -> Dict[str, Any]:
         logger.info("Using pre-filled tool_output for response.")
         context_for_llm = tool_output
     elif tool_output and not tool_output.startswith("Error"):
-        if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search"]:
+        if tool_choice.tool_name in ["structured_property_search", "full_text_property_search", "semantic_property_search", "project_text_search"]:
             if properties_for_ui:
                 page_number = state.get("page", 1)
-                # V22: We pass the summary to the LLM for context, but the prompt below restricts its use in the output.
-                context_for_llm = f"Found {len(properties_for_ui)} properties (Page {page_number}):\n{format_property_summary(properties_for_ui)}"
+                context_for_llm = f"Found {len(properties_for_ui)} results (Page {page_number}):\n{format_property_summary(properties_for_ui)}"
             else:
-                context_for_llm = "I couldn't find any properties matching that description. Would you like to try a different search?"
-        elif tool_choice.tool_name == "get_listing_details":
+                context_for_llm = "I couldn't find any results matching that. Would you like to try a different search?"
+        elif tool_choice.tool_name in ["get_listing_details", "get_project_details_by_slug"]:
             details = state.get("focused_property_details")
             if details:
-                context_for_llm = f"Here are the details for the requested property:\n{format_property_details(details)}"
+                context_for_llm = f"Here are the details for the requested item:\n{format_property_details(details)}"
             else:
-                context_for_llm = "I'm sorry, I couldn't retrieve the details for that property."
+                context_for_llm = "I'm sorry, I couldn't retrieve the details for that item."
         elif tool_choice.tool_name == "knowledge_web_search":
             context_for_llm = tool_output 
         else:
