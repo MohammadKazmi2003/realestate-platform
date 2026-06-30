@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
 
     const {
       query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
-      amenities = [], furnishings = [], lat, lng, radiusKm, bounds,
+      amenities = [], furnishings = [], bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds,
       cursor, pageSize = 24, sort = 'relevance',
     } = parsed.data;
 
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const location = sanitize(rawLocation);
 
     // Simplify cache key: round bounds to 2 decimals so small pans hit cache
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {
@@ -104,6 +104,17 @@ export async function POST(req: NextRequest) {
     if (amenities.length > 0) filters.push({ terms: { amenities } });
     if (furnishings.length > 0) filters.push({ terms: { furnishings } });
 
+    if (bathrooms != null) {
+      filters.push({ range: { bathrooms: { gte: bathrooms } } });
+    }
+
+    if (minArea || maxArea) {
+      const range: any = {};
+      if (minArea) range.gte = minArea;
+      if (maxArea) range.lte = maxArea;
+      filters.push({ range: { area_sqft: range } });
+    }
+
     if (lat != null && lng != null) {
       filters.push({
         geo_distance: {
@@ -131,6 +142,7 @@ export async function POST(req: NextRequest) {
     if (sort === 'price_asc') sortClause = [{ price: { order: 'asc' } }];
     if (sort === 'price_desc') sortClause = [{ price: { order: 'desc' } }];
     if (sort === 'newest') sortClause = [{ created_at: { order: 'desc' } }];
+    if (sort === 'popular') sortClause = [{ property_score: { order: 'desc' } }, { _score: { order: 'desc' } }];
 
     // Nearest-first sorting when geo filter is active
     if (lat != null && lng != null) {
@@ -191,6 +203,7 @@ export async function POST(req: NextRequest) {
       latency_ms: 0,
       filters: {
         minPrice, maxPrice, propertyType, bhkType, listingPurpose,
+        amenities, furnishings, bathrooms, minArea, maxArea,
         lat, lng, radiusKm,
       },
     }).catch(() => {});

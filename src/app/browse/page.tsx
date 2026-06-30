@@ -3,38 +3,73 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
 import maplibregl, { LngLatBounds, Marker, Popup } from 'maplibre-gl';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { FaMap, FaList, FaSpinner, FaCrosshairs } from 'react-icons/fa';
+import { FaMap, FaList, FaSpinner, FaCrosshairs, FaBuilding, FaHome } from 'react-icons/fa';
 import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
+import { ProjectCard } from '@/app/components/ProjectCard';
 import { cn } from '@/lib/utils';
 import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
+import type { Project } from '@/lib/types';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
-    latitude: number | null;
-    longitude: number | null;
-}
+  latitude: number | null;
+  longitude: number | null;
+};
 
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
+type SearchScope = 'properties' | 'projects' | 'both';
+type SortOption = 'relevance' | 'popular' | 'newest' | 'price_asc' | 'price_desc';
+
+type ProjectBrowse = Project & {
+  latitude: number | null;
+  longitude: number | null;
+};
 
 const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
 const DEFAULT_ZOOM = 11;
+const PROJECT_MARKER_COLOR = '#059669';
+
+async function searchProjects(params: any): Promise<{ results: any[]; total: number }> {
+  try {
+    const res = await fetch('/api/projects/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) return { results: [], total: 0 };
+    return res.json();
+  } catch {
+    return { results: [], total: 0 };
+  }
+}
 
 export default function BrowsePage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<{ [key: string]: Marker }>({});
+  const popupsRef = useRef<{ [key: string]: Popup }>({});
   const router = useRouter();
 
   const [properties, setProperties] = useState<PropertyBrowse[]>([]);
+  const [projects, setProjects] = useState<ProjectBrowse[]>([]);
+  const [projectTotal, setProjectTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [mobileView, setMobileView] = useState<'list' | 'map'>('list');
+  const [filterOpen, setFilterOpen] = useState(true);
+  const [fullScreenResults, setFullScreenResults] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'grid' | 'compact'>('list');
+  const [sortBy, setSortBy] = useState<SortOption>('relevance');
+  const [panelWidth, setPanelWidth] = useState(450);
+  const sortByRef = useRef(sortBy);
+  const resizerRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
   const [searchAsIMove, setSearchAsIMove] = useState(true);
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [searchScope, setSearchScope] = useState<SearchScope>('both');
   const [filters, setFilters] = useState({ location: '', minPrice: '', maxPrice: '', bhkTypeId: '', propertyTypeId: '' });
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
@@ -46,12 +81,18 @@ export default function BrowsePage() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const autocompleteRef = useRef<HTMLDivElement>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
+  const debounceTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Use refs for callback/state so event listener effect doesn't need to re-run
-  const fetchPropertiesRef = useRef<typeof fetchProperties>(() => {});
+  const fetchPropertiesRef = useRef<typeof fetchAllProperties>(() => Promise.resolve());
   const searchAsIMoveRef = useRef(searchAsIMove);
+  const searchScopeRef = useRef(searchScope);
+  const fetchIdRef = useRef(0);
+  const initialMoveEndRef = useRef(true);
+  const animInjectedRef = useRef(false);
+
   searchAsIMoveRef.current = searchAsIMove;
+  searchScopeRef.current = searchScope;
+  sortByRef.current = sortBy;
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -88,11 +129,14 @@ export default function BrowsePage() {
     handleApplyFiltersWithLocation(suggestion);
   };
 
-  const fetchProperties = useCallback(async (bounds: LngLatBounds | null) => {
+  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null) => {
+    const fetchId = ++fetchIdRef.current;
     setLoading(true);
-    const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
 
-    const params: any = { pageSize: 100 };
+    const scope = searchScopeRef.current;
+    const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
+    const params: any = { pageSize: 100, sort: sortByRef.current };
+
     if (filters.location) params.location = filters.location;
     if (filters.minPrice) params.minPrice = Number(filters.minPrice);
     if (filters.maxPrice) params.maxPrice = Number(filters.maxPrice);
@@ -103,7 +147,7 @@ export default function BrowsePage() {
       params.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
     }
 
-    if (searchAsIMove && bounds) {
+    if (searchAsIMoveRef.current && bounds) {
       params.bounds = {
         minLat: bounds.getSouthWest().lat,
         maxLat: bounds.getNorthEast().lat,
@@ -113,29 +157,91 @@ export default function BrowsePage() {
     }
 
     try {
-      const response = await searchProperties(params);
-      if (!response || !response.results) {
-        console.error('Search returned no data');
+      if (scope === 'projects') {
+        const response = await searchProjects({
+          query: filters.location || undefined,
+          minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
+          maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
+          pageSize: 100,
+          sort: sortBy === 'popular' || sortBy === 'newest' ? 'relevance' : sortBy,
+          bounds: params.bounds,
+        });
+        if (fetchId !== fetchIdRef.current) return;
+        const mapped: ProjectBrowse[] = (response.results || []).map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          slug: r.slug,
+          low_price: r.low_price || 0,
+          high_price: r.high_price || 0,
+          construction_phase: r.construction_phase || '',
+          delivery_date: r.delivery_date || null,
+          developer_name: r.developer_name || '',
+          primary_image: r.primary_image || null,
+          location_name: r.location_name || null,
+          latitude: r.latitude ?? null,
+          longitude: r.longitude ?? null,
+        }));
+        setProjects(mapped);
+        setProjectTotal(response.total ?? mapped.length);
         setProperties([]);
       } else {
-        const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
-        const formattedData = mapped.map(p => ({
-          ...p,
-          images: p.images.length > 0 ? p.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
-        }));
-        setProperties(formattedData);
+        const response = await searchProperties(params);
+        if (fetchId !== fetchIdRef.current) return;
+        if (!response || !response.results) {
+          setProperties([]);
+        } else {
+          const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
+          const formattedData: PropertyBrowse[] = mapped.map((p: any) => ({
+            ...p,
+            images: p.images.length > 0 ? p.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
+          }));
+          setProperties(formattedData);
+
+          if (scope === 'both') {
+            const projResponse = await searchProjects({
+              query: filters.location || undefined,
+              minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
+              maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
+              pageSize: 50,
+              sort: sortBy === 'popular' || sortBy === 'newest' ? 'relevance' : sortBy,
+              bounds: params.bounds,
+            });
+            if (fetchId !== fetchIdRef.current) return;
+            const mappedProjects: ProjectBrowse[] = (projResponse.results || []).map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              slug: r.slug,
+              low_price: r.low_price || 0,
+              high_price: r.high_price || 0,
+              construction_phase: r.construction_phase || '',
+              delivery_date: r.delivery_date || null,
+              developer_name: r.developer_name || '',
+              primary_image: r.primary_image || null,
+              location_name: r.location_name || null,
+              latitude: r.latitude ?? null,
+              longitude: r.longitude ?? null,
+            }));
+            setProjects(mappedProjects);
+            setProjectTotal(projResponse.total ?? mappedProjects.length);
+          } else {
+            setProjects([]);
+            setProjectTotal(0);
+          }
+        }
       }
-    } catch (err) {
-      console.error('Error fetching properties:', err);
-      setProperties([]);
+    } catch {
+      if (fetchId === fetchIdRef.current) {
+        setProperties([]);
+        setProjects([]);
+        setProjectTotal(0);
+      }
     }
     setLoading(false);
-  }, [filters, lookupMaps, searchAsIMove]);
+  }, [filters, lookupMaps]);
 
-  // Keep ref updated so stable effect always calls latest fetchProperties
-  fetchPropertiesRef.current = fetchProperties;
+  fetchPropertiesRef.current = fetchAllProperties;
 
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const debouncedFetchProperties = useCallback((...args: any[]) => {
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
@@ -143,32 +249,63 @@ export default function BrowsePage() {
     }, 600);
   }, []);
 
-  const highlightMarker = useCallback((propertyId: string | null) => {
-    Object.values(markersRef.current).forEach(marker => {
+  const clearMarkers = useCallback(() => {
+    Object.values(markersRef.current).forEach(marker => marker.remove());
+    Object.values(popupsRef.current).forEach(popup => popup.remove());
+    markersRef.current = {};
+    popupsRef.current = {};
+  }, []);
+
+  const highlightMarker = useCallback((id: string | null) => {
+    Object.entries(markersRef.current).forEach(([key, marker]) => {
       const el = marker.getElement();
-      el.style.backgroundColor = '#2563eb';
+      const content = el.firstElementChild as HTMLElement | null;
+      if (content) {
+        content.style.backgroundColor = content.dataset.defaultColor || '#2563eb';
+        content.style.transform = '';
+        content.style.animation = '';
+      }
       el.style.zIndex = '0';
-      el.style.transform = 'scale(1)';
+      if (popupsRef.current[key]) {
+        popupsRef.current[key].remove();
+      }
     });
-    if (propertyId && markersRef.current[propertyId]) {
-      const el = markersRef.current[propertyId].getElement();
-      el.style.backgroundColor = '#ef4444';
+    if (id && markersRef.current[id]) {
+      const el = markersRef.current[id].getElement();
+      const content = el.firstElementChild as HTMLElement | null;
+      if (content) {
+        content.style.backgroundColor = '#ef4444';
+        content.style.transform = 'scale(1.3)';
+        content.style.transformOrigin = 'bottom';
+        content.style.animation = 'marker-pulse 1.5s ease-in-out infinite';
+      }
       el.style.zIndex = '10';
-      el.style.transform = 'scale(1.2)';
+      const lngLat = markersRef.current[id].getLngLat();
+      popupsRef.current[id].setLngLat(lngLat).addTo(mapRef.current!);
     }
   }, []);
 
-  const updateMarkers = useCallback((props: PropertyBrowse[]) => {
+  const updateMarkers = useCallback((props: PropertyBrowse[], projs: ProjectBrowse[]) => {
     if (!mapRef.current) return;
+
     const newPropertyIds = new Set(props.map(p => p.id));
     Object.keys(markersRef.current).forEach(id => {
-      if (!newPropertyIds.has(id)) { markersRef.current[id].remove(); delete markersRef.current[id]; }
+      if (!newPropertyIds.has(id)) {
+        markersRef.current[id].remove();
+        delete markersRef.current[id];
+        if (popupsRef.current[id]) {
+          popupsRef.current[id].remove();
+          delete popupsRef.current[id];
+        }
+      }
     });
 
     props.forEach(prop => {
       if (prop.latitude && prop.longitude && !markersRef.current[prop.id]) {
         const markerEl = document.createElement('div');
-        markerEl.className = 'px-2 py-1 bg-blue-600 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg hover:bg-blue-700 transition-all duration-200';
+        markerEl.className = 'px-2 py-1 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg transition-all duration-200';
+        markerEl.style.backgroundColor = '#2563eb';
+        markerEl.dataset.defaultColor = '#2563eb';
         markerEl.textContent = `₹${((prop.price || 0) / 100000).toFixed(0)}L`;
 
         const popupDiv = document.createElement('div');
@@ -182,19 +319,56 @@ export default function BrowsePage() {
         popupDiv.appendChild(titleDiv);
         popupDiv.appendChild(priceDiv);
         const popup = new Popup({ offset: 25, closeButton: false, className: 'neumorphic-popup' }).setDOMContent(popupDiv);
-        const marker = new Marker({ element: markerEl, anchor: 'bottom' }).setLngLat([prop.longitude, prop.latitude]).addTo(mapRef.current!);
-        
+
+        const marker = new Marker({ element: markerEl, anchor: 'bottom' })
+          .setLngLat([prop.longitude, prop.latitude])
+          .addTo(mapRef.current!);
+
         marker.getElement().addEventListener('click', () => router.push(`/property/${prop.id}`));
         marker.getElement().addEventListener('mouseenter', () => popup.setLngLat([prop.longitude!, prop.latitude!]).addTo(mapRef.current!));
         marker.getElement().addEventListener('mouseleave', () => popup.remove());
         markersRef.current[prop.id] = marker;
+        popupsRef.current[prop.id] = popup;
+      }
+    });
+
+    projs.forEach(proj => {
+      if (proj.latitude && proj.longitude && !markersRef.current[`proj_${proj.id}`]) {
+        const markerEl = document.createElement('div');
+        markerEl.className = 'px-2 py-1 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg transition-all duration-200';
+        markerEl.style.backgroundColor = PROJECT_MARKER_COLOR;
+        markerEl.dataset.defaultColor = PROJECT_MARKER_COLOR;
+        markerEl.textContent = `${((proj.low_price || 0) / 100000).toFixed(0)}L`;
+
+        const popupDiv = document.createElement('div');
+        popupDiv.className = 'p-1';
+        const titleDiv = document.createElement('div');
+        titleDiv.className = 'font-bold text-sm text-text-color-dark';
+        titleDiv.textContent = proj.name;
+        const priceDiv = document.createElement('div');
+        priceDiv.className = 'text-xs text-text-color-light';
+        priceDiv.textContent = `${(proj.low_price || 0).toLocaleString()} - ${(proj.high_price || 0).toLocaleString()}`;
+        popupDiv.appendChild(titleDiv);
+        popupDiv.appendChild(priceDiv);
+        const popup = new Popup({ offset: 25, closeButton: false, className: 'neumorphic-popup' }).setDOMContent(popupDiv);
+
+        const marker = new Marker({ element: markerEl, anchor: 'bottom' })
+          .setLngLat([proj.longitude, proj.latitude])
+          .addTo(mapRef.current!);
+
+        marker.getElement().addEventListener('click', () => router.push(`/projects/${proj.id}`));
+        marker.getElement().addEventListener('mouseenter', () => popup.setLngLat([proj.longitude!, proj.latitude!]).addTo(mapRef.current!));
+        marker.getElement().addEventListener('mouseleave', () => popup.remove());
+        markersRef.current[`proj_${proj.id}`] = marker;
+        popupsRef.current[`proj_${proj.id}`] = popup;
       }
     });
   }, [router]);
 
-  useEffect(() => { updateMarkers(properties); }, [properties, updateMarkers]);
+  useEffect(() => {
+    updateMarkers(properties, projects);
+  }, [properties, projects, updateMarkers]);
 
-  // Fetch lookups once on mount
   useEffect(() => {
     const init = async () => {
       const [bhkData, propTypeData] = await Promise.all([
@@ -210,7 +384,6 @@ export default function BrowsePage() {
     init();
   }, []);
 
-  // Initialize map once — use refs for dynamic values so event listeners are stable
   useEffect(() => {
     if (mapRef.current || !mapContainer.current || !process.env.NEXT_PUBLIC_MAPTILER_KEY) return;
 
@@ -220,11 +393,16 @@ export default function BrowsePage() {
       center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM,
     });
     mapRef.current = map;
-
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-    const onLoad = () => fetchPropertiesRef.current(map.getBounds());
+    const onLoad = () => {
+      fetchPropertiesRef.current(map.getBounds());
+    };
     const onMoveEnd = () => {
+      if (initialMoveEndRef.current) {
+        initialMoveEndRef.current = false;
+        return;
+      }
       if (searchAsIMoveRef.current) {
         debouncedFetchProperties(map.getBounds());
       }
@@ -236,8 +414,54 @@ export default function BrowsePage() {
     return () => {
       map.off('load', onLoad);
       map.off('moveend', onMoveEnd);
+      clearMarkers();
       map.remove();
       mapRef.current = null;
+    };
+  }, [clearMarkers, debouncedFetchProperties]);
+
+  useEffect(() => {
+    if (!animInjectedRef.current) {
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes marker-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+          50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+        }
+      `;
+      document.head.appendChild(style);
+      animInjectedRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    const resizer = resizerRef.current;
+    if (!resizer) return;
+    const onMouseDown = (e: MouseEvent) => {
+      e.preventDefault();
+      isDraggingRef.current = true;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const newWidth = Math.max(320, Math.min(800, e.clientX));
+      setPanelWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    resizer.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    return () => {
+      resizer.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
     };
   }, []);
 
@@ -245,88 +469,382 @@ export default function BrowsePage() {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const handleQuickFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchPropertiesRef.current(
+        searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+      );
+    }, 500);
+  };
+
   const handleApplyFiltersWithLocation = async (locationText: string) => {
     if (locationText && process.env.NEXT_PUBLIC_MAPTILER_KEY) {
       setSearchAsIMove(true);
-      const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(locationText)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN`);
-      const data = await response.json();
-      if (data.features && data.features.length > 0) {
-        mapRef.current?.flyTo({ center: data.features[0].center, zoom: 13, essential: true });
-      }
-    } else {
-        fetchProperties(searchAsIMove && mapRef.current ? mapRef.current.getBounds() : null);
+      try {
+        const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(locationText)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN`);
+        const data = await response.json();
+        if (data.features && data.features.length > 0) {
+          mapRef.current?.flyTo({ center: data.features[0].center, zoom: 13, essential: true });
+          return;
+        }
+      } catch {}
     }
+    fetchAllProperties(searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null);
   };
 
   const handleApplyFilters = async () => {
     handleApplyFiltersWithLocation(filters.location);
   };
-  
+
   const useUserLocation = () => {
-    // This logic is correct
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation is not supported by your browser');
+      return;
+    }
+    setIsLocating(true);
+    setLocationError(null);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        mapRef.current?.flyTo({ center: [position.coords.longitude, position.coords.latitude], zoom: 14, essential: true });
+        setIsLocating(false);
+      },
+      (err) => {
+        setLocationError(err.code === 1 ? 'Location access denied. Please enable permissions.' : 'Unable to get location. Try again.');
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
   };
-  
+
+  const handleScopeChange = (scope: SearchScope) => {
+    setSearchScope(scope);
+  };
+
+  const combinedList = searchScope === 'both'
+    ? [
+        ...properties.map(p => ({ type: 'property' as const, data: p })),
+        ...projects.map(p => ({ type: 'project' as const, data: p })),
+      ]
+    : searchScope === 'projects'
+      ? projects.map(p => ({ type: 'project' as const, data: p }))
+      : properties.map(p => ({ type: 'property' as const, data: p }));
+
+  const SCOPE_OPTIONS: { value: SearchScope; label: string; icon: React.ReactNode }[] = [
+    { value: 'properties', label: 'Properties', icon: <FaHome size={12} /> },
+    { value: 'projects', label: 'Projects', icon: <FaBuilding size={12} /> },
+    { value: 'both', label: 'Both', icon: null },
+  ];
+
+  const chevronDown = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+
+  const filterIcon = (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+    </svg>
+  );
+
+  const viewListIcon = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+
+  const viewGridIcon = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+
+  const viewCompactIcon = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="5" height="5" rx="1" /><rect x="10" y="3" width="5" height="5" rx="1" /><rect x="17" y="3" width="5" height="5" rx="1" /><rect x="3" y="10" width="5" height="5" rx="1" /><rect x="10" y="10" width="5" height="5" rx="1" /><rect x="17" y="10" width="5" height="5" rx="1" />
+    </svg>
+  );
+
   return (
     <div className="flex flex-col h-screen bg-bg-color">
       <Header />
       <div className="flex flex-1 overflow-hidden">
-        <aside className={cn("w-full md:w-[450px] md:flex-shrink-0 p-4 bg-bg-color border-r border-shadow-dark/20 flex flex-col", "md:flex", mobileView === 'list' ? "flex" : "hidden")}>
-          <div className="shadow-neumorphic-outset rounded-3xl p-4 space-y-4 mb-4">
-              <div className="relative" ref={autocompleteRef}>
-                <input type="text" name="location" placeholder="Search by location..." value={filters.location} onChange={handleLocationChange} className="neumorphic-input w-full"/>
-                {showSuggestions && (
-                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                    {suggestions.map((s, i) => (
-                      <div key={i} onClick={() => selectSuggestion(s)} className="px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 cursor-pointer transition-colors">
-                        {s}
+
+        {/* LEFT PANEL: Collapsible Filters + Results */}
+        <aside className={cn(
+          "bg-bg-color border-r border-shadow-dark/20 flex flex-col transition-all duration-300 ease-in-out",
+          "md:flex",
+          mobileView === 'list' ? "flex" : "hidden"
+        )}
+          style={{ width: fullScreenResults ? '100%' : `${panelWidth}px`, maxWidth: fullScreenResults ? '100%' : `${panelWidth}px`, flex: fullScreenResults ? '1 1 auto' : '0 0 auto' }}
+        >
+
+          {/* FILTER TOGGLE HEADER */}
+          <div className="p-4 pb-2">
+            <button
+              onClick={() => setFilterOpen(!filterOpen)}
+              className="w-full flex items-center justify-between px-4 py-3 rounded-2xl shadow-neumorphic-outset text-sm font-semibold text-text-color-dark hover:bg-shadow-dark/5 transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                {filterIcon}
+                Filters
+              </span>
+              <span className={`transition-transform duration-300 ${filterOpen ? 'rotate-180' : ''}`}>
+                {chevronDown}
+              </span>
+            </button>
+          </div>
+
+          {/* FILTER CONTENT (accordion) */}
+          <div className={cn(
+            "transition-all duration-300 ease-in-out overflow-hidden",
+            filterOpen ? "max-h-[700px] opacity-100" : "max-h-0 opacity-0"
+          )}>
+            <div className="px-4 pb-2">
+              <div className="shadow-neumorphic-outset rounded-3xl p-4 space-y-4">
+
+                {/* Scope Selector */}
+                <div className="flex gap-1 p-1 rounded-2xl shadow-neumorphic-inset">
+                  {SCOPE_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => handleScopeChange(opt.value)}
+                      className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 px-3 rounded-xl transition-all ${
+                        searchScope === opt.value
+                          ? 'shadow-neumorphic-outset bg-bg-color text-text-color-dark'
+                          : 'text-text-color-light hover:text-text-color-dark'
+                      }`}
+                    >
+                      {opt.icon && opt.icon}
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Location Search */}
+                <div className="relative" ref={autocompleteRef}>
+                  <input type="text" name="location" placeholder="Search by location..." value={filters.location} onChange={handleLocationChange} className="neumorphic-input w-full"/>
+                  {showSuggestions && (
+                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                      {suggestions.map((s, i) => (
+                        <div key={i} onClick={() => selectSuggestion(s)} className="px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 cursor-pointer transition-colors">
+                          {s}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Price Range */}
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" name="minPrice" placeholder="Min Price" value={filters.minPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
+                  <input type="number" name="maxPrice" placeholder="Max Price" value={filters.maxPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
+                </div>
+
+                {/* BHK + Property Type */}
+                <div className="grid grid-cols-2 gap-2">
+                  <select name="bhkTypeId" value={filters.bhkTypeId} onChange={handleFilterChange} className="neumorphic-input w-full text-sm"><option value="">Any BHK</option>{bhkTypes.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}</select>
+                  <select name="propertyTypeId" value={filters.propertyTypeId} onChange={handleFilterChange} className="neumorphic-input w-full text-sm"><option value="">Any Type</option>{propertyTypes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                </div>
+
+                {/* Search as I Move */}
+                <div className="flex items-center justify-between p-2 rounded-2xl">
+                  <label htmlFor="search-as-i-move" className="text-sm font-medium text-text-color-dark">Search as I move</label>
+                  <input id="search-as-i-move" type="checkbox" checked={searchAsIMove} onChange={() => setSearchAsIMove(!searchAsIMove)} className="h-4 w-4 rounded shadow-neumorphic-inset appearance-none checked:bg-success-color transition"/>
+                </div>
+
+                {/* Apply */}
+                <button onClick={handleApplyFilters} className="neumorphic-button bg-cta-gradient w-full">Apply Filters</button>
+
+                {/* My Location */}
+                <div>
+                  <button onClick={useUserLocation} disabled={isLocating} className="neumorphic-button w-full flex items-center justify-center gap-2">
+                    {isLocating ? <FaSpinner className="animate-spin"/> : <FaCrosshairs/>} {isLocating ? 'Locating...' : 'Use My Location'}
+                  </button>
+                  {locationError && <p className="text-xs text-danger-color mt-1 text-center">{locationError}</p>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RESULTS LIST */}
+          <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3">
+            {combinedList.length > 0 && (
+              <>
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-xs font-semibold text-text-color-light">
+                    {searchScope === 'properties' && `Properties (${properties.length})`}
+                    {searchScope === 'projects' && `Projects (${projectTotal})`}
+                    {searchScope === 'both' && `Properties (${properties.length}) · Projects (${projectTotal})`}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {/* View mode toggles */}
+                    <div className="flex gap-0.5 p-0.5 rounded-lg bg-shadow-dark/5">
+                      {([{ key: 'list', icon: viewListIcon }, { key: 'grid', icon: viewGridIcon }, { key: 'compact', icon: viewCompactIcon }] as const).map(v => (
+                        <button
+                          key={v.key}
+                          onClick={() => setViewMode(v.key)}
+                          className={`p-1.5 rounded-md transition-all ${
+                            viewMode === v.key
+                              ? 'bg-bg-color shadow-sm text-text-color-dark'
+                              : 'text-text-color-light hover:text-text-color-dark'
+                          }`}
+                          title={`${v.key} view`}
+                        >
+                          {v.icon}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Map / List View toggle */}
+                    <div className="flex gap-0.5 p-0.5 rounded-lg bg-shadow-dark/5">
+                      <button
+                        onClick={() => setFullScreenResults(false)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                          !fullScreenResults
+                            ? 'bg-bg-color shadow-sm text-text-color-dark'
+                            : 'text-text-color-light hover:text-text-color-dark'
+                        }`}
+                        title="Map View"
+                      >
+                        <FaMap size={11} />
+                        Map
+                      </button>
+                      <button
+                        onClick={() => setFullScreenResults(true)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                          fullScreenResults
+                            ? 'bg-bg-color shadow-sm text-text-color-dark'
+                            : 'text-text-color-light hover:text-text-color-dark'
+                        }`}
+                        title="List View"
+                      >
+                        <FaList size={11} />
+                        List
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sort & Quick Filter Bar */}
+                <div className="sticky top-0 z-10 bg-bg-color/90 backdrop-blur-sm pt-0.5 pb-1.5 -mx-4 px-4 border-b border-shadow-dark/5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <select
+                      value={sortBy}
+                      onChange={e => {
+                        setSortBy(e.target.value as SortOption);
+                        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+                        debounceTimerRef.current = setTimeout(() => {
+                          fetchPropertiesRef.current(
+                            searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+                          );
+                        }, 300);
+                      }}
+                      className="neumorphic-input !w-auto !min-w-[130px] text-xs py-1.5"
+                    >
+                      <option value="relevance">Relevance</option>
+                      <option value="popular">Most Popular</option>
+                      <option value="newest">Newest</option>
+                      <option value="price_asc">Price Low → High</option>
+                      <option value="price_desc">Price High → Low</option>
+                    </select>
+
+                    {/* BHK quick filter */}
+                    <select
+                      value={filters.bhkTypeId}
+                      name="bhkTypeId"
+                      onChange={handleQuickFilterChange}
+                      className="neumorphic-input !w-auto !min-w-[70px] text-xs py-1.5"
+                    >
+                      <option value="">Any BHK</option>
+                      {bhkTypes.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {loading ? (
+              <div className="flex justify-center items-center h-40">
+                <FaSpinner className="animate-spin text-3xl text-text-color-light" />
+              </div>
+            ) : (
+              <>
+                {searchScope !== 'projects' && properties.length > 0 && (
+                  <div className={cn(
+                    viewMode === 'list' ? "space-y-3" : "",
+                    viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
+                    viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
+                  )}>
+                    {viewMode === 'list' && searchScope === 'both' && (
+                      <p className="text-xs font-semibold text-text-color-light uppercase tracking-wider col-span-full">Properties ({properties.length})</p>
+                    )}
+                    {properties.map(property => (
+                      <div key={property.id} onMouseEnter={() => highlightMarker(property.id)} onMouseLeave={() => highlightMarker(null)}>
+                        <PropertyCard property={property} />
                       </div>
                     ))}
                   </div>
                 )}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <input type="number" name="minPrice" placeholder="Min Price" value={filters.minPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
-                <input type="number" name="maxPrice" placeholder="Max Price" value={filters.maxPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                  <select name="bhkTypeId" value={filters.bhkTypeId} onChange={handleFilterChange} className="neumorphic-input w-full text-sm"><option value="">Any BHK</option>{bhkTypes.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}</select>
-                  <select name="propertyTypeId" value={filters.propertyTypeId} onChange={handleFilterChange} className="neumorphic-input w-full text-sm"><option value="">Any Type</option>{propertyTypes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded-2xl">
-                <label htmlFor="search-as-i-move" className="text-sm font-medium text-text-color-dark">Search as I move</label>
-                <input id="search-as-i-move" type="checkbox" checked={searchAsIMove} onChange={() => setSearchAsIMove(!searchAsIMove)} className="h-4 w-4 rounded shadow-neumorphic-inset appearance-none checked:bg-success-color transition"/>
-              </div>
-              <button onClick={handleApplyFilters} className="neumorphic-button bg-cta-gradient w-full">Apply Filters</button>
-              <div>
-                <button onClick={useUserLocation} disabled={isLocating} className="neumorphic-button w-full flex items-center justify-center gap-2">
-                    {isLocating ? <FaSpinner className="animate-spin"/> : <FaCrosshairs/>} {isLocating ? 'Locating...' : 'Use My Location'}
-                </button>
-                {locationError && <p className="text-xs text-danger-color mt-1 text-center">{locationError}</p>}
-              </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto pr-2 space-y-3">
-            {loading ? <div className="flex justify-center items-center h-full"><FaSpinner className="animate-spin text-3xl text-text-color-light" /></div>
-             : properties.length > 0 ? properties.map(property => (
-                <div key={property.id} onMouseEnter={() => highlightMarker(property.id)} onMouseLeave={() => highlightMarker(null)}>
-                    <PropertyCard property={property} />
-                </div>
-            )) : <p className="text-center text-text-color-light mt-10">No properties found. Try moving the map or changing filters.</p>}
+                {searchScope !== 'properties' && projects.length > 0 && (
+                  <div className={cn(
+                    viewMode === 'list' ? "space-y-3" : "",
+                    viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
+                    viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
+                  )}>
+                    {viewMode === 'list' && projects.length > 0 && properties.length > 0 && (
+                      <div className="border-t border-shadow-dark/10 pt-3 mt-3 col-span-full" />
+                    )}
+                    {viewMode === 'list' && searchScope === 'both' && (
+                      <p className="text-xs font-semibold text-text-color-light uppercase tracking-wider col-span-full">Projects ({projectTotal})</p>
+                    )}
+                    {projects.map(proj => (
+                      <div key={proj.id} onMouseEnter={() => highlightMarker(`proj_${proj.id}`)} onMouseLeave={() => highlightMarker(null)}>
+                        <ProjectCard project={proj} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {combinedList.length === 0 && !loading && (
+                  <p className="text-center text-text-color-light mt-10">No results found. Try moving the map or changing filters.</p>
+                )}
+              </>
+            )}
           </div>
         </aside>
 
-        <main className={cn("flex-1 relative", "md:flex", mobileView === 'map' ? "flex" : "hidden")}>
+        {/* RESIZE HANDLE */}
+        {!fullScreenResults && (
+          <div
+            ref={resizerRef}
+            className="w-1.5 cursor-col-resize hover:w-2 hover:bg-blue-400/40 bg-transparent transition-all duration-150 flex-shrink-0 relative z-10 group"
+          >
+            <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-shadow-dark/10 group-hover:bg-blue-400/60 transition-colors" />
+          </div>
+        )}
+
+        {/* MAP */}
+        <main className={cn(
+          "flex-1 relative transition-all duration-300 ease-in-out",
+          "md:flex",
+          fullScreenResults ? "opacity-0 pointer-events-none overflow-hidden md:w-0 md:flex-none" : "opacity-100 md:flex-1",
+          mobileView === 'map' ? "flex" : "hidden"
+        )}>
           <div ref={mapContainer} className="w-full h-full" />
-           {loading && <div className="absolute top-4 right-20 bg-bg-color p-2 rounded-full shadow-neumorphic-outset"><FaSpinner className="animate-spin text-blue-500" /></div>}
+          {loading && <div className="absolute top-4 right-4 bg-bg-color p-2 rounded-full shadow-neumorphic-outset"><FaSpinner className="animate-spin text-blue-500" /></div>}
         </main>
       </div>
 
-       <div className="md:hidden fixed bottom-6 right-6 z-20">
-            <button onClick={() => setMobileView(v => v === 'list' ? 'map' : 'list')} className="neumorphic-button flex items-center justify-center gap-2 bg-cta-gradient py-3 px-4 rounded-full">
-                {mobileView === 'list' ? <FaMap/> : <FaList/>}
-                <span>{mobileView === 'list' ? 'Map' : 'List'}</span>
-            </button>
-        </div>
+      {/* MOBILE TOGGLE */}
+      <div className="md:hidden fixed bottom-6 right-6 z-20">
+        <button onClick={() => setMobileView(v => v === 'list' ? 'map' : 'list')} className="neumorphic-button flex items-center justify-center gap-2 bg-cta-gradient py-3 px-4 rounded-full">
+          {mobileView === 'list' ? <FaMap/> : <FaList/>}
+          <span>{mobileView === 'list' ? 'Map' : 'List'}</span>
+        </button>
+      </div>
     </div>
   );
 }

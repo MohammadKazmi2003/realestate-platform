@@ -51,13 +51,16 @@ export const searchQuerySchema = z.object({
   listingPurpose: z.string().max(50).optional(),
   amenities: z.array(z.string()).optional(),
   furnishings: z.array(z.string()).optional(),
+  bathrooms: z.number().min(0).optional(),
+  minArea: z.number().min(0).optional(),
+  maxArea: z.number().min(0).optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
   radiusKm: z.number().min(0).max(500).optional(),
   bounds: boundsSchema.optional(),
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(100).optional(),
-  sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest']).optional(),
+  sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular']).optional(),
 });
 
 export type PlatformSettingsInput = z.infer<typeof platformSettingsSchema>;
