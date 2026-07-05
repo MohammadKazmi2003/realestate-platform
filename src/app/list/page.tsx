@@ -346,13 +346,29 @@ export default function ListPage() {
     return params;
   }, [filters, sort, lookupMaps]);
 
-  const fetchProperties = useCallback(async (cursor: any[] | null, shouldReset: boolean = false) => {
+  const abortRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const fetchPropertiesRef = useRef<typeof fetchPropertiesImpl>(() => Promise.resolve());
+  const buildSearchParamsRef = useRef(buildSearchParams);
+  const fetchIdRef = useRef(0);
+  buildSearchParamsRef.current = buildSearchParams;
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const fetchPropertiesImpl = useCallback(async (cursor: any[] | null, shouldReset: boolean = false) => {
+    const fetchId = ++fetchIdRef.current;
+
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const signal = controller.signal;
+
     setLoading(true);
-    const params = buildSearchParams();
+    const params = buildSearchParamsRef.current();
     if (cursor) params.cursor = cursor;
 
     try {
-      const response = await searchProperties(params);
+      const response = await searchProperties(params, signal);
+      if (fetchId !== fetchIdRef.current) return;
       if (!response || !response.results) {
         setProperties([]);
         setHasMore(false);
@@ -365,18 +381,30 @@ export default function ListPage() {
         setTotalCount(response.total || 0);
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (fetchId !== fetchIdRef.current) return;
       console.error('Error fetching properties:', err);
       setProperties([]);
       setHasMore(false);
       setTotalCount(0);
     }
-    setLoading(false);
-  }, [buildSearchParams]);
+    if (fetchId === fetchIdRef.current) setLoading(false);
+  }, []);
+
+  fetchPropertiesRef.current = fetchPropertiesImpl;
+
+  const debouncedFetchProperties = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setNextCursor(null);
+      (fetchPropertiesRef.current as any)(null, true);
+    }, 500);
+  }, []);
 
   useEffect(() => {
     setNextCursor(null);
-    fetchProperties(null, true);
-  }, [fetchProperties]);
+    fetchPropertiesImpl(null, true);
+  }, []);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -384,14 +412,14 @@ export default function ListPage() {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && !loading && hasMore && nextCursor) {
-          fetchProperties(nextCursor, false);
+          fetchPropertiesImpl(nextCursor, false);
         }
       },
       { rootMargin: '400px' }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [loading, hasMore, nextCursor, fetchProperties]);
+  }, [loading, hasMore, nextCursor, fetchPropertiesImpl]);
 
   useEffect(() => {
     const fetchDropdowns = async () => {
@@ -420,6 +448,12 @@ export default function ListPage() {
 
   const handleFilterChange = (key: keyof Filters, value: any) => {
     setFilters(prev => ({ ...prev, [key]: value }));
+    debouncedFetchProperties();
+  };
+
+  const handleSortChange = (value: SortOption) => {
+    setSort(value);
+    debouncedFetchProperties();
   };
 
   const clearFilters = () => {
@@ -439,6 +473,7 @@ export default function ListPage() {
     setSort('relevance');
     setAmenitySearchTerm('');
     setShowAllAmenities(false);
+    debouncedFetchProperties();
   };
 
   const activeFilterCount =
@@ -475,7 +510,7 @@ export default function ListPage() {
           <div className="flex items-center gap-2 sm:ml-auto">
             <select
               value={sort}
-              onChange={e => setSort(e.target.value as SortOption)}
+              onChange={e => handleSortChange(e.target.value as SortOption)}
               className="neumorphic-input !w-auto !min-w-[140px]"
             >
               <option value="relevance">Relevance</option>

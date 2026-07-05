@@ -52,9 +52,18 @@ export async function cacheDelete(key: string): Promise<void> {
 export async function cacheDeletePattern(pattern: string): Promise<void> {
   try {
     const client = getRedisClient();
-    const keys = await client.keys(pattern);
-    if (keys.length > 0) {
-      await client.del(...keys);
+    let cursor = '0';
+    const batch: string[] = [];
+    do {
+      const result = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = result[0];
+      batch.push(...result[1]);
+      if (batch.length >= 200) {
+        await client.del(...batch.splice(0, 200));
+      }
+    } while (cursor !== '0');
+    if (batch.length > 0) {
+      await client.del(...batch);
     }
   } catch {
     // cache failures are non-critical

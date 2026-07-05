@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       return s;
     };
 
-    const cleanedQuery = sanitize(query);
+    const cleanedQuery = sanitize(query)?.toLowerCase().trim();
 
     const roundBounds = (b: any) => {
       if (!b) return b;
@@ -44,7 +44,9 @@ export async function POST(req: NextRequest) {
         maxLng: Math.round(b.maxLng * 100) / 100,
       };
     };
-    const cacheKey = `ps:${JSON.stringify({ cleanedQuery, minPrice, maxPrice, constructionPhases, amenity, amenities, sort, pageSize, cursor, page, bounds: roundBounds(bounds) })}`;
+    const normalizedAmenities = (amenities || []).map((a: string) => a.toLowerCase().trim());
+    const normalizedConstructionPhases = (constructionPhases || []).map((c: string) => c.toLowerCase().trim());
+    const cacheKey = `ps:${JSON.stringify({ cleanedQuery, minPrice, maxPrice, constructionPhases: normalizedConstructionPhases, amenity: amenity?.toLowerCase().trim(), amenities: normalizedAmenities, sort, pageSize, cursor, page, bounds: roundBounds(bounds) })}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached);

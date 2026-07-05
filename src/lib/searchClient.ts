@@ -49,12 +49,13 @@ async function pgFallbackSearch(params: SearchQueryInput): Promise<any> {
   }
 }
 
-export async function searchProperties(params: SearchQueryInput): Promise<any> {
+export async function searchProperties(params: SearchQueryInput, signal?: AbortSignal): Promise<any> {
   try {
     const response = await fetch(SEARCH_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
+      signal,
     });
 
     if (!response.ok) {
@@ -68,19 +69,21 @@ export async function searchProperties(params: SearchQueryInput): Promise<any> {
 
     return response.json();
   } catch (err: any) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
     logger.error('Search API network error, falling back to PG', err.message);
     return pgFallbackSearch(params);
   }
 }
 
-export async function autocompleteSearch(query: string) {
+export async function autocompleteSearch(query: string, signal?: AbortSignal) {
   try {
-    const response = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(query)}`);
+    const response = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(query)}`, { signal });
     if (!response.ok) {
       return { suggestions: [] };
     }
     return response.json();
-  } catch {
+  } catch (err: any) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
     return { suggestions: [] };
   }
 }

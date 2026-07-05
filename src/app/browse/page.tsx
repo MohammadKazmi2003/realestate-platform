@@ -34,14 +34,17 @@ const PROJECT_MARKER_COLOR = '#059669';
 
 async function searchProjects(params: any): Promise<{ results: any[]; total: number }> {
   try {
+    const { signal, ...rest } = params;
     const res = await fetch('/api/projects/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
+      body: JSON.stringify(rest),
+      signal,
     });
     if (!res.ok) return { results: [], total: 0 };
     return res.json();
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
     return { results: [], total: 0 };
   }
 }
@@ -89,6 +92,8 @@ export default function BrowsePage() {
   const fetchIdRef = useRef(0);
   const initialMoveEndRef = useRef(true);
   const animInjectedRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const autocompleteAbortRef = useRef<AbortController | null>(null);
 
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
@@ -110,12 +115,19 @@ export default function BrowsePage() {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     if (value.length >= 2) {
       debounceTimer.current = setTimeout(async () => {
-        const result = await autocompleteSearch(value);
-        if (result?.suggestions) {
-          setSuggestions(result.suggestions);
-          setShowSuggestions(result.suggestions.length > 0);
+        if (autocompleteAbortRef.current) autocompleteAbortRef.current.abort();
+        const controller = new AbortController();
+        autocompleteAbortRef.current = controller;
+        try {
+          const result = await autocompleteSearch(value, controller.signal);
+          if (result?.suggestions) {
+            setSuggestions(result.suggestions);
+            setShowSuggestions(result.suggestions.length > 0);
+          }
+        } catch {
+          // AbortError is silently caught by autocompleteSearch
         }
-      }, 300);
+      }, 350);
     } else {
       setShowSuggestions(false);
       setSuggestions([]);
@@ -130,6 +142,11 @@ export default function BrowsePage() {
   };
 
   const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null) => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const signal = controller.signal;
+
     const fetchId = ++fetchIdRef.current;
     setLoading(true);
 
@@ -165,6 +182,7 @@ export default function BrowsePage() {
           pageSize: 100,
           sort: sortBy === 'popular' || sortBy === 'newest' ? 'relevance' : sortBy,
           bounds: params.bounds,
+          signal,
         });
         if (fetchId !== fetchIdRef.current) return;
         const mapped: ProjectBrowse[] = (response.results || []).map((r: any) => ({
@@ -185,7 +203,7 @@ export default function BrowsePage() {
         setProjectTotal(response.total ?? mapped.length);
         setProperties([]);
       } else {
-        const response = await searchProperties(params);
+        const response = await searchProperties(params, signal);
         if (fetchId !== fetchIdRef.current) return;
         if (!response || !response.results) {
           setProperties([]);
@@ -205,6 +223,7 @@ export default function BrowsePage() {
               pageSize: 50,
               sort: sortBy === 'popular' || sortBy === 'newest' ? 'relevance' : sortBy,
               bounds: params.bounds,
+              signal,
             });
             if (fetchId !== fetchIdRef.current) return;
             const mappedProjects: ProjectBrowse[] = (projResponse.results || []).map((r: any) => ({
@@ -229,7 +248,8 @@ export default function BrowsePage() {
           }
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       if (fetchId === fetchIdRef.current) {
         setProperties([]);
         setProjects([]);
@@ -246,7 +266,7 @@ export default function BrowsePage() {
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
       (fetchPropertiesRef.current as any)(...args);
-    }, 600);
+    }, 1000);
   }, []);
 
   const clearMarkers = useCallback(() => {
@@ -520,6 +540,12 @@ export default function BrowsePage() {
 
   const handleScopeChange = (scope: SearchScope) => {
     setSearchScope(scope);
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchPropertiesRef.current(
+        searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+      );
+    }, 500);
   };
 
   const combinedList = searchScope === 'both'
@@ -741,7 +767,7 @@ export default function BrowsePage() {
                           fetchPropertiesRef.current(
                             searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
                           );
-                        }, 300);
+                        }, 500);
                       }}
                       className="neumorphic-input !w-auto !min-w-[130px] text-xs py-1.5"
                     >

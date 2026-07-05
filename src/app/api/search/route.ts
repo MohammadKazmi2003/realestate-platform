@@ -46,11 +46,13 @@ export async function POST(req: NextRequest) {
       cursor, pageSize = 24, sort = 'relevance',
     } = parsed.data;
 
-    const query = sanitize(rawQuery);
-    const location = sanitize(rawLocation);
+    const query = sanitize(rawQuery)?.toLowerCase().trim();
+    const location = sanitize(rawLocation)?.toLowerCase().trim();
+    const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
+    const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
 
     // Simplify cache key: round bounds to 2 decimals so small pans hit cache
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {

@@ -168,13 +168,33 @@ export default function ProjectsPage() {
   const [amenitySearchTerm, setAmenitySearchTerm] = useState('');
   const [showAllAmenities, setShowAllAmenities] = useState(false);
 
-  const fetchProjects = useCallback(async (pageOverride?: number, filterOverride?: Filters, sortOverride?: string) => {
+  const abortRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const fetchProjectsRef = useRef<typeof fetchProjectsImpl>(() => Promise.resolve());
+  const currentPageRef = useRef(currentPage);
+  const sortByRef = useRef(sortBy);
+  const filtersRef = useRef(filters);
+  const fetchIdRef = useRef(0);
+
+  currentPageRef.current = currentPage;
+  sortByRef.current = sortBy;
+  filtersRef.current = filters;
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const fetchProjectsImpl = useCallback(async (pageOverride?: number, filterOverride?: Filters, sortOverride?: string) => {
+    const fetchId = ++fetchIdRef.current;
+
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const signal = controller.signal;
+
     setLoading(true);
     setError(null);
 
-    const page = pageOverride ?? currentPage;
-    const activeFilters = filterOverride ?? filters;
-    const activeSort = sortOverride ?? sortBy;
+    const page = pageOverride ?? currentPageRef.current;
+    const activeFilters = filterOverride ?? filtersRef.current;
+    const activeSort = sortOverride ?? sortByRef.current;
 
     const cursor = page > 1 ? cursorRef.current[page - 1] : undefined;
 
@@ -192,10 +212,12 @@ export default function ProjectsPage() {
           pageSize: ITEMS_PER_PAGE,
           cursor,
         }),
+        signal,
       });
 
       if (res.ok) {
         const data = await res.json();
+        if (fetchId !== fetchIdRef.current) return;
         const projectsData = (data.results || []) as Project[];
         setProjects(projectsData);
         setTotalCount(data.total || 0);
@@ -206,9 +228,12 @@ export default function ProjectsPage() {
         setLoading(false);
         return;
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       // ES unavailable — fall through to RPC
     }
+
+    if (fetchId !== fetchIdRef.current) return;
 
     const params: Record<string, any> = {
       p_page_num: page,
@@ -224,6 +249,8 @@ export default function ProjectsPage() {
 
     const { data, error: rpcError } = await supabase.rpc('search_projects', params);
 
+    if (fetchId !== fetchIdRef.current) return;
+
     if (rpcError) {
       console.error('Error fetching projects:', rpcError);
       setError('Failed to load projects. Please try again later.');
@@ -236,7 +263,16 @@ export default function ProjectsPage() {
       setTotalPages(Math.ceil(count / ITEMS_PER_PAGE));
     }
     setLoading(false);
-  }, [currentPage, sortBy, filters]);
+  }, []);
+
+  fetchProjectsRef.current = fetchProjectsImpl;
+
+  const debouncedFetch = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      (fetchProjectsRef.current as any)();
+    }, 500);
+  }, []);
 
   useEffect(() => {
     const fetchLookupData = async () => {
@@ -252,7 +288,7 @@ export default function ProjectsPage() {
     fetchLookupData();
   }, []);
 
-  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+  useEffect(() => { fetchProjectsImpl(); }, []);
 
   const handleFilterChange = (filterName: keyof Filters, value: any) => {
     setCurrentPage(1);
@@ -265,6 +301,7 @@ export default function ProjectsPage() {
       }
       return { ...prev, [filterName]: value };
     });
+    debouncedFetch();
   };
 
   const clearFilters = () => {
@@ -273,6 +310,7 @@ export default function ProjectsPage() {
     setFilters({ searchText: '', completionStatus: [], bedrooms: [], minPrice: '', maxPrice: '', amenityIds: [] });
     setAmenitySearchTerm('');
     setShowAllAmenities(false);
+    debouncedFetch();
   };
 
   const activeFilterCount =
@@ -301,7 +339,7 @@ export default function ProjectsPage() {
           <div className="flex items-center gap-2">
             <select
               value={sortBy}
-              onChange={e => { setCurrentPage(1); cursorRef.current = {}; setSortBy(e.target.value); }}
+              onChange={e => { setCurrentPage(1); cursorRef.current = {}; setSortBy(e.target.value); debouncedFetch(); }}
               className="neumorphic-input !w-auto !min-w-[140px]"
             >
               <option value="created_at_desc">Newest</option>
@@ -356,7 +394,7 @@ export default function ProjectsPage() {
                 <ProjectCard key={project.id} project={project} />
               ))}
             </div>
-            <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+            <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={(page) => { setCurrentPage(page); fetchProjectsImpl(page); }} />
           </>
         )}
       </main>
