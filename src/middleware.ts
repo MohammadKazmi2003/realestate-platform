@@ -39,30 +39,23 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL('/', req.url))
   }
 
-  const protectedPaths = ['/admin', '/propertyowner', '/agent'];
+  const protectedPaths = ['/admin', '/propertyowner', '/agent', '/my-listings', '/favorites', '/add-property', '/edit-property']
   if (!user && protectedPaths.some(path => req.nextUrl.pathname.startsWith(path))) {
     return NextResponse.redirect(new URL('/sign-in', req.url))
   }
 
   if (user) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role_id')
-      .eq('id', user.id)
-      .single()
-
-    const role = profile?.role_id;
+    // Role is embedded in the JWT via custom_access_token_hook — no DB query needed.
+    const role = user.app_metadata?.user_role_id as number | undefined
 
     if (req.nextUrl.pathname.startsWith('/admin') && role !== 1) {
       return NextResponse.redirect(new URL('/', req.url))
     }
 
-    // FIX: Allow both property_owner (2) and agent (3) to access this dashboard
-    if (req.nextUrl.pathname.startsWith('/propertyowner') && ![2, 3].includes(role as number)) {
+    if (req.nextUrl.pathname.startsWith('/propertyowner') && !(role === 2 || role === 3)) {
       return NextResponse.redirect(new URL('/', req.url))
     }
-    
-    // Only agents (3) can access agent-specific routes
+
     if (req.nextUrl.pathname.startsWith('/agent') && role !== 3) {
       return NextResponse.redirect(new URL('/', req.url))
     }
@@ -72,5 +65,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/sign-in', '/sign-up', '/admin/:path*', '/propertyowner/:path*', '/agent/:path*'],
+  matcher: ['/sign-in', '/sign-up', '/admin/:path*', '/propertyowner/:path*', '/agent/:path*', '/my-listings/:path*', '/favorites/:path*', '/add-property/:path*', '/edit-property/:path*'],
 }
