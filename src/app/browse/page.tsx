@@ -32,7 +32,7 @@ const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
 const DEFAULT_ZOOM = 11;
 const PROJECT_MARKER_COLOR = '#059669';
 
-async function searchProjects(params: any): Promise<{ results: any[]; total: number }> {
+async function searchProjects(params: any): Promise<{ results: any[]; total: number; nextCursor?: any[] | null }> {
   try {
     const { signal, ...rest } = params;
     const res = await fetch('/api/projects/search', {
@@ -86,9 +86,20 @@ export default function BrowsePage() {
   const autocompleteRef = useRef<HTMLDivElement>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const [propertyTotal, setPropertyTotal] = useState(0);
+  const [propertyNextCursor, setPropertyNextCursor] = useState<any[] | null>(null);
+  const [projectNextCursor, setProjectNextCursor] = useState<any[] | null>(null);
+  const [hasMoreProperties, setHasMoreProperties] = useState(false);
+  const [hasMoreProjects, setHasMoreProjects] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [sortedResultOrder, setSortedResultOrder] = useState<{ type: 'property' | 'project'; id: string }[]>([]);
+  const [combinedNextCursor, setCombinedNextCursor] = useState<any[] | null>(null);
+  const markerTickRef = useRef(0);
+
   const fetchPropertiesRef = useRef<typeof fetchAllProperties>(() => Promise.resolve());
   const searchAsIMoveRef = useRef(searchAsIMove);
   const searchScopeRef = useRef(searchScope);
+  const fullScreenResultsRef = useRef(fullScreenResults);
   const fetchIdRef = useRef(0);
   const initialMoveEndRef = useRef(true);
   const animInjectedRef = useRef(false);
@@ -98,6 +109,7 @@ export default function BrowsePage() {
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
   sortByRef.current = sortBy;
+  fullScreenResultsRef.current = fullScreenResults;
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -141,18 +153,29 @@ export default function BrowsePage() {
     handleApplyFiltersWithLocation(suggestion);
   };
 
-  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null) => {
+  const projectSortForBrowse = (sort: SortOption): string => {
+    if (sort === 'popular') return 'relevance';
+    if (sort === 'newest') return 'date_desc';
+    if (sort === 'price_asc') return 'price_asc';
+    if (sort === 'price_desc') return 'price_desc';
+    return 'relevance';
+  };
+
+  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }) => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     const signal = controller.signal;
 
     const fetchId = ++fetchIdRef.current;
-    setLoading(true);
+    const isAppend = cursorOverride?.append ?? false;
+    if (!isAppend) setLoading(true);
+    else setLoadingMore(true);
 
     const scope = searchScopeRef.current;
+    const isListView = fullScreenResultsRef.current;
     const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
-    const params: any = { pageSize: 100, sort: sortByRef.current };
+    const params: any = { pageSize: isAppend ? 24 : 100, sort: sortByRef.current };
 
     if (filters.location) params.location = filters.location;
     if (filters.minPrice) params.minPrice = Number(filters.minPrice);
@@ -164,26 +187,117 @@ export default function BrowsePage() {
       params.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
     }
 
-    if (searchAsIMoveRef.current && bounds) {
-      params.bounds = {
-        minLat: bounds.getSouthWest().lat,
-        maxLat: bounds.getNorthEast().lat,
-        minLng: bounds.getSouthWest().lng,
-        maxLng: bounds.getNorthEast().lng,
-      };
+    if (searchAsIMoveRef.current && bounds && !isListView) {
+      const minLat = bounds.getSouthWest().lat;
+      const maxLat = bounds.getNorthEast().lat;
+      const minLng = bounds.getSouthWest().lng;
+      const maxLng = bounds.getNorthEast().lng;
+      if (isFinite(minLat) && isFinite(maxLat) && isFinite(minLng) && isFinite(maxLng)) {
+        params.bounds = { minLat, maxLat, minLng, maxLng };
+      }
+    }
+
+    if (cursorOverride?.propertyCursor && (scope === 'properties' || scope === 'both')) {
+      params.cursor = cursorOverride.propertyCursor;
     }
 
     try {
-      if (scope === 'projects') {
-        const response = await searchProjects({
+      if (scope === 'both') {
+        const combinedParams: any = {
+          scope: 'both',
           query: filters.location || undefined,
           minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
           maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
-          pageSize: 100,
-          sort: sortBy === 'popular' || sortBy === 'newest' ? 'relevance' : sortBy,
-          bounds: params.bounds,
+          pageSize: isAppend ? 24 : 48,
+          sort: sortByRef.current,
+          signal,
+        };
+        if (filters.bhkTypeId && bhkIdToLabel[Number(filters.bhkTypeId)]) {
+          combinedParams.bhkType = bhkIdToLabel[Number(filters.bhkTypeId)];
+        }
+        if (filters.propertyTypeId && propTypeIdToName[Number(filters.propertyTypeId)]) {
+          combinedParams.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
+        }
+        if (params.bounds) combinedParams.bounds = params.bounds;
+        if (cursorOverride?.propertyCursor) {
+          combinedParams.cursor = cursorOverride.propertyCursor;
+        }
+
+        const res = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(combinedParams),
           signal,
         });
+        if (fetchId !== fetchIdRef.current) return;
+        if (!res.ok) {
+          if (!isAppend) { setProperties([]); setProjects([]); }
+        } else {
+          const response = await res.json();
+          if (fetchId !== fetchIdRef.current) return;
+          const props: PropertyBrowse[] = [];
+          const projs: ProjectBrowse[] = [];
+          const order: { type: 'property' | 'project'; id: string }[] = [];
+
+          for (const r of (response.results || [])) {
+            if (r.entity_type === 'property') {
+              const mapped = mapEsResultToPropertyCard(r);
+              const formatted: PropertyBrowse = {
+                ...mapped,
+                latitude: r.location?.lat ?? null,
+                longitude: r.location?.lon ?? null,
+                images: mapped.images.length > 0 ? mapped.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
+              };
+              props.push(formatted);
+              order.push({ type: 'property', id: r.id });
+            } else if (r.entity_type === 'project') {
+              const loc = r.location || {};
+              const mapped: ProjectBrowse = {
+                id: r.id,
+                name: r.name || '',
+                slug: r.slug || '',
+                low_price: r.low_price || 0,
+                high_price: r.high_price || 0,
+                construction_phase: r.construction_phase || '',
+                delivery_date: r.delivery_date || null,
+                developer_name: r.developer_name || '',
+                primary_image: r.image_url || null,
+                location_name: r.location_text || null,
+                latitude: loc.lat ?? null,
+                longitude: loc.lon ?? null,
+              };
+              projs.push(mapped);
+              order.push({ type: 'project', id: r.id });
+            }
+          }
+
+          if (isAppend) {
+            setProperties(prev => [...prev, ...props]);
+            setProjects(prev => [...prev, ...projs]);
+            setSortedResultOrder(prev => [...prev, ...order]);
+          } else {
+            setProperties(props);
+            setProjects(projs);
+            setSortedResultOrder(order);
+          }
+          setPropertyTotal(response.propertyTotal ?? 0);
+          setProjectTotal(response.projectTotal ?? 0);
+          setCombinedNextCursor(response.nextCursor ?? null);
+        }
+      } else if (scope === 'projects') {
+        const projectParams: any = {
+          query: filters.location || undefined,
+          minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
+          maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
+          pageSize: isAppend ? 12 : 100,
+          sort: projectSortForBrowse(sortByRef.current),
+          bounds: params.bounds,
+          signal,
+        };
+        if (cursorOverride?.projectCursor) {
+          projectParams.cursor = cursorOverride.projectCursor;
+        }
+        const response = await searchProjects(projectParams);
         if (fetchId !== fetchIdRef.current) return;
         const mapped: ProjectBrowse[] = (response.results || []).map((r: any) => ({
           id: r.id,
@@ -199,64 +313,64 @@ export default function BrowsePage() {
           latitude: r.latitude ?? null,
           longitude: r.longitude ?? null,
         }));
-        setProjects(mapped);
+        if (isAppend) {
+          setProjects(prev => [...prev, ...mapped]);
+        } else {
+          setProjects(mapped);
+        }
         setProjectTotal(response.total ?? mapped.length);
+        setProjectNextCursor(response.nextCursor ?? null);
+        setHasMoreProjects(!!response.nextCursor);
         setProperties([]);
+        setPropertyTotal(0);
+        setSortedResultOrder([]);
+        setCombinedNextCursor(null);
       } else {
         const response = await searchProperties(params, signal);
         if (fetchId !== fetchIdRef.current) return;
         if (!response || !response.results) {
-          setProperties([]);
+          if (!isAppend) setProperties([]);
         } else {
           const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
           const formattedData: PropertyBrowse[] = mapped.map((p: any) => ({
             ...p,
             images: p.images.length > 0 ? p.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
           }));
-          setProperties(formattedData);
-
-          if (scope === 'both') {
-            const projResponse = await searchProjects({
-              query: filters.location || undefined,
-              minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
-              maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
-              pageSize: 50,
-              sort: sortBy === 'popular' || sortBy === 'newest' ? 'relevance' : sortBy,
-              bounds: params.bounds,
-              signal,
-            });
-            if (fetchId !== fetchIdRef.current) return;
-            const mappedProjects: ProjectBrowse[] = (projResponse.results || []).map((r: any) => ({
-              id: r.id,
-              name: r.name,
-              slug: r.slug,
-              low_price: r.low_price || 0,
-              high_price: r.high_price || 0,
-              construction_phase: r.construction_phase || '',
-              delivery_date: r.delivery_date || null,
-              developer_name: r.developer_name || '',
-              primary_image: r.primary_image || null,
-              location_name: r.location_name || null,
-              latitude: r.latitude ?? null,
-              longitude: r.longitude ?? null,
-            }));
-            setProjects(mappedProjects);
-            setProjectTotal(projResponse.total ?? mappedProjects.length);
+          if (isAppend) {
+            setProperties(prev => [...prev, ...formattedData]);
           } else {
-            setProjects([]);
-            setProjectTotal(0);
+            setProperties(formattedData);
           }
+          setPropertyTotal(response.total ?? formattedData.length);
+          setPropertyNextCursor(response.nextCursor ?? null);
+          setHasMoreProperties(!!response.nextCursor);
         }
+
+        if (!isAppend) {
+          setProjects([]);
+          setProjectTotal(0);
+          setHasMoreProjects(false);
+          setProjectNextCursor(null);
+        }
+        setSortedResultOrder([]);
+        setCombinedNextCursor(null);
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       if (fetchId === fetchIdRef.current) {
-        setProperties([]);
-        setProjects([]);
-        setProjectTotal(0);
+        if (!isAppend) {
+          setProperties([]);
+          setProjects([]);
+          setProjectTotal(0);
+          setPropertyTotal(0);
+        }
       }
     }
-    setLoading(false);
+    if (fetchId === fetchIdRef.current) {
+      markerTickRef.current++;
+      if (isAppend) setLoadingMore(false);
+      else setLoading(false);
+    }
   }, [filters, lookupMaps]);
 
   fetchPropertiesRef.current = fetchAllProperties;
@@ -309,8 +423,10 @@ export default function BrowsePage() {
     if (!mapRef.current) return;
 
     const newPropertyIds = new Set(props.map(p => p.id));
+    const newProjectKeys = new Set(projs.map(p => `proj_${p.id}`));
+    const allValidKeys = new Set([...newPropertyIds, ...newProjectKeys]);
     Object.keys(markersRef.current).forEach(id => {
-      if (!newPropertyIds.has(id)) {
+      if (!allValidKeys.has(id)) {
         markersRef.current[id].remove();
         delete markersRef.current[id];
         if (popupsRef.current[id]) {
@@ -320,8 +436,10 @@ export default function BrowsePage() {
       }
     });
 
+    const isValidCoord = (v: any): boolean => v != null && typeof v === 'number' && !isNaN(v);
+
     props.forEach(prop => {
-      if (prop.latitude && prop.longitude && !markersRef.current[prop.id]) {
+      if (isValidCoord(prop.latitude) && isValidCoord(prop.longitude) && !markersRef.current[prop.id]) {
         const markerEl = document.createElement('div');
         markerEl.className = 'px-2 py-1 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg transition-all duration-200';
         markerEl.style.backgroundColor = '#2563eb';
@@ -353,7 +471,7 @@ export default function BrowsePage() {
     });
 
     projs.forEach(proj => {
-      if (proj.latitude && proj.longitude && !markersRef.current[`proj_${proj.id}`]) {
+      if (isValidCoord(proj.latitude) && isValidCoord(proj.longitude) && !markersRef.current[`proj_${proj.id}`]) {
         const markerEl = document.createElement('div');
         markerEl.className = 'px-2 py-1 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg transition-all duration-200';
         markerEl.style.backgroundColor = PROJECT_MARKER_COLOR;
@@ -387,7 +505,8 @@ export default function BrowsePage() {
 
   useEffect(() => {
     updateMarkers(properties, projects);
-  }, [properties, projects, updateMarkers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markerTickRef.current, properties, projects, updateMarkers]);
 
   useEffect(() => {
     const init = async () => {
@@ -487,10 +606,18 @@ export default function BrowsePage() {
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
   };
 
   const handleQuickFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
       fetchPropertiesRef.current(
@@ -511,12 +638,36 @@ export default function BrowsePage() {
         }
       } catch {}
     }
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setCombinedNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
     fetchAllProperties(searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null);
   };
 
   const handleApplyFilters = async () => {
     handleApplyFiltersWithLocation(filters.location);
   };
+
+  const loadMore = useCallback(() => {
+    const bounds = searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null;
+    const scope = searchScopeRef.current;
+    if (scope === 'both') {
+      if (combinedNextCursor) {
+        fetchAllProperties(bounds, {
+          propertyCursor: combinedNextCursor,
+          append: true,
+        });
+      }
+    } else {
+      fetchAllProperties(bounds, {
+        propertyCursor: (scope !== 'projects' && hasMoreProperties) ? propertyNextCursor : null,
+        projectCursor: (scope !== 'properties' && hasMoreProjects) ? projectNextCursor : null,
+        append: true,
+      });
+    }
+  }, [propertyNextCursor, projectNextCursor, hasMoreProperties, hasMoreProjects, combinedNextCursor]);
 
   const useUserLocation = () => {
     if (!navigator.geolocation) {
@@ -540,6 +691,12 @@ export default function BrowsePage() {
 
   const handleScopeChange = (scope: SearchScope) => {
     setSearchScope(scope);
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
+    setCombinedNextCursor(null);
+    setSortedResultOrder([]);
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
       fetchPropertiesRef.current(
@@ -703,9 +860,9 @@ export default function BrowsePage() {
               <>
                 <div className="flex items-center justify-between pt-2">
                   <span className="text-xs font-semibold text-text-color-light">
-                    {searchScope === 'properties' && `Properties (${properties.length})`}
+                    {searchScope === 'properties' && `Properties (${propertyTotal})`}
                     {searchScope === 'projects' && `Projects (${projectTotal})`}
-                    {searchScope === 'both' && `Properties (${properties.length}) · Projects (${projectTotal})`}
+                    {searchScope === 'both' && `Properties (${propertyTotal}) · Projects (${projectTotal})`}
                   </span>
                   <div className="flex items-center gap-1">
                     {/* View mode toggles */}
@@ -762,6 +919,10 @@ export default function BrowsePage() {
                       value={sortBy}
                       onChange={e => {
                         setSortBy(e.target.value as SortOption);
+                        setPropertyNextCursor(null);
+                        setProjectNextCursor(null);
+                        setHasMoreProperties(false);
+                        setHasMoreProjects(false);
                         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
                         debounceTimerRef.current = setTimeout(() => {
                           fetchPropertiesRef.current(
@@ -799,15 +960,40 @@ export default function BrowsePage() {
               </div>
             ) : (
               <>
+                {searchScope === 'both' ? (
+              <div className={cn(
+                viewMode === 'list' ? "space-y-3" : "",
+                viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
+                viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
+              )}>
+                {sortedResultOrder.map(entry => {
+                  if (entry.type === 'property') {
+                    const prop = properties.find(p => p.id === entry.id);
+                    if (!prop) return null;
+                    return (
+                      <div key={prop.id} onMouseEnter={() => highlightMarker(prop.id)} onMouseLeave={() => highlightMarker(null)}>
+                        <PropertyCard property={prop} />
+                      </div>
+                    );
+                  } else {
+                    const proj = projects.find(p => p.id === entry.id);
+                    if (!proj) return null;
+                    return (
+                      <div key={`proj_${proj.id}`} onMouseEnter={() => highlightMarker(`proj_${proj.id}`)} onMouseLeave={() => highlightMarker(null)}>
+                        <ProjectCard project={proj} />
+                      </div>
+                    );
+                  }
+                })}
+              </div>
+            ) : (
+              <>
                 {searchScope !== 'projects' && properties.length > 0 && (
                   <div className={cn(
                     viewMode === 'list' ? "space-y-3" : "",
                     viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
                     viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
                   )}>
-                    {viewMode === 'list' && searchScope === 'both' && (
-                      <p className="text-xs font-semibold text-text-color-light uppercase tracking-wider col-span-full">Properties ({properties.length})</p>
-                    )}
                     {properties.map(property => (
                       <div key={property.id} onMouseEnter={() => highlightMarker(property.id)} onMouseLeave={() => highlightMarker(null)}>
                         <PropertyCard property={property} />
@@ -824,14 +1010,31 @@ export default function BrowsePage() {
                     {viewMode === 'list' && projects.length > 0 && properties.length > 0 && (
                       <div className="border-t border-shadow-dark/10 pt-3 mt-3 col-span-full" />
                     )}
-                    {viewMode === 'list' && searchScope === 'both' && (
-                      <p className="text-xs font-semibold text-text-color-light uppercase tracking-wider col-span-full">Projects ({projectTotal})</p>
-                    )}
                     {projects.map(proj => (
                       <div key={proj.id} onMouseEnter={() => highlightMarker(`proj_${proj.id}`)} onMouseLeave={() => highlightMarker(null)}>
                         <ProjectCard project={proj} />
                       </div>
                     ))}
+                  </div>
+                )}
+              </>
+            )}
+                {(properties.length > 0 || projects.length > 0) && (
+                  <div className="pt-4">
+                    {(searchScope === 'both' && combinedNextCursor) ||
+                     (searchScope !== 'projects' && hasMoreProperties) ||
+                     (searchScope !== 'properties' && hasMoreProjects) ? (
+                      <button
+                        onClick={loadMore}
+                        disabled={loadingMore}
+                        className="neumorphic-button w-full flex items-center justify-center gap-2 text-sm"
+                      >
+                        {loadingMore ? <FaSpinner className="animate-spin" /> : null}
+                        {loadingMore ? 'Loading...' : 'Load More'}
+                      </button>
+                    ) : (
+                      <p className="text-center text-xs text-text-color-light">All results loaded</p>
+                    )}
                   </div>
                 )}
                 {combinedList.length === 0 && !loading && (

@@ -61,6 +61,7 @@ export const searchQuerySchema = z.object({
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(100).optional(),
   sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular']).optional(),
+  scope: z.enum(['properties', 'projects', 'both']).optional(),
 });
 
 export type PlatformSettingsInput = z.infer<typeof platformSettingsSchema>;

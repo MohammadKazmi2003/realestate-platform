@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getElasticsearchClient, isEsAvailable, ES_INDEX_ALIAS, recordEsSuccess, recordEsFailure } from '@/lib/elasticsearch';
+import { getElasticsearchClient, isEsAvailable, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS, recordEsSuccess, recordEsFailure } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { searchQuerySchema } from '@/lib/validation';
@@ -31,11 +31,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid search parameters', details: parsed.error.issues }, { status: 400 });
     }
 
-    // Sanitize: enforce max length and reject ReDoS-prone patterns
     const sanitize = (s: string | undefined, maxLen = 200) => {
       if (!s) return s;
       if (s.length > maxLen) return s.slice(0, maxLen);
-      // Reject patterns that cause catastrophic backtracking in ES
       if (/(.)\1{10,}/.test(s)) return s.slice(0, 50);
       return s;
     };
@@ -43,7 +41,7 @@ export async function POST(req: NextRequest) {
     const {
       query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
       amenities = [], furnishings = [], bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds,
-      cursor, pageSize = 24, sort = 'relevance',
+      cursor, pageSize = 24, sort = 'relevance', scope = 'properties',
     } = parsed.data;
 
     const query = sanitize(rawQuery)?.toLowerCase().trim();
@@ -51,8 +49,7 @@ export async function POST(req: NextRequest) {
     const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
     const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
 
-    // Simplify cache key: round bounds to 2 decimals so small pans hit cache
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort })}`;
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort, scope })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {
@@ -66,13 +63,16 @@ export async function POST(req: NextRequest) {
 
     const es = getElasticsearchClient();
     const must: any[] = [];
-    const filters: any[] = [];
+    const commonFilters: any[] = [];
+    const propertyFilters: any[] = [];
 
     if (query) {
       must.push({
         multi_match: {
           query,
-          fields: ['title^3', 'description^2', 'location_text^2', 'project_name^2', 'developer_name'],
+          fields: scope === 'both'
+            ? ['title^3', 'name^3', 'description^2', 'location_text^2', 'project_name^2', 'developer_name^2']
+            : ['title^3', 'description^2', 'location_text^2', 'project_name^2', 'developer_name'],
           type: 'best_fields',
           fuzziness: 'AUTO',
           operator: 'or',
@@ -84,41 +84,41 @@ export async function POST(req: NextRequest) {
       must.push({
         multi_match: {
           query: location,
-          fields: ['location_text^3', 'title^2', 'project_name^1'],
+          fields: ['location_text^3', 'title^2', 'name^2', 'project_name^1'],
           type: 'best_fields',
           fuzziness: 'AUTO',
         },
       });
     }
 
-    filters.push({ term: { status: 'available' } });
+    commonFilters.push({ term: { status: 'available' } });
 
     if (minPrice || maxPrice) {
       const range: any = {};
       if (minPrice) range.gte = minPrice;
       if (maxPrice) range.lte = maxPrice;
-      filters.push({ range: { price: range } });
+      commonFilters.push({ range: { [scope === 'both' ? 'sort_price' : 'price']: range } });
     }
 
-    if (propertyType) filters.push({ term: { property_type: propertyType } });
-    if (bhkType) filters.push({ term: { bhk_type: bhkType } });
-    if (listingPurpose) filters.push({ term: { listing_purpose: listingPurpose } });
-    if (amenities.length > 0) filters.push({ terms: { amenities } });
-    if (furnishings.length > 0) filters.push({ terms: { furnishings } });
+    if (propertyType) propertyFilters.push({ term: { property_type: propertyType } });
+    if (bhkType) propertyFilters.push({ term: { bhk_type: bhkType } });
+    if (listingPurpose) propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+    if (normalizedAmenities.length > 0) propertyFilters.push({ terms: { amenities: normalizedAmenities } });
+    if (normalizedFurnishings.length > 0) propertyFilters.push({ terms: { furnishings: normalizedFurnishings } });
 
     if (bathrooms != null) {
-      filters.push({ range: { bathrooms: { gte: bathrooms } } });
+      propertyFilters.push({ range: { bathrooms: { gte: bathrooms } } });
     }
 
     if (minArea || maxArea) {
       const range: any = {};
       if (minArea) range.gte = minArea;
       if (maxArea) range.lte = maxArea;
-      filters.push({ range: { area_sqft: range } });
+      propertyFilters.push({ range: { area_sqft: range } });
     }
 
     if (lat != null && lng != null) {
-      filters.push({
+      commonFilters.push({
         geo_distance: {
           distance: `${radiusKm || 50}km`,
           location: { lat, lon: lng },
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
     if (bounds) {
       const { minLat, maxLat, minLng, maxLng } = bounds;
       if (minLat != null && maxLat != null && minLng != null && maxLng != null) {
-        filters.push({
+        commonFilters.push({
           geo_bounding_box: {
             location: {
               top_left: { lat: maxLat, lon: minLng },
@@ -140,13 +140,63 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let sortClause: any[] = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }];
-    if (sort === 'price_asc') sortClause = [{ price: { order: 'asc' } }];
-    if (sort === 'price_desc') sortClause = [{ price: { order: 'desc' } }];
-    if (sort === 'newest') sortClause = [{ created_at: { order: 'desc' } }];
-    if (sort === 'popular') sortClause = [{ property_score: { order: 'desc' } }, { _score: { order: 'desc' } }];
+    const filters: any[] = [...commonFilters];
 
-    // Nearest-first sorting when geo filter is active
+    if (scope === 'both' && propertyFilters.length > 0) {
+      filters.push({
+        bool: {
+          should: [
+            { bool: { filter: propertyFilters } },
+            { bool: { must_not: { exists: { field: 'bhk_type' } } } },
+          ],
+          minimum_should_match: 1,
+        },
+      });
+    } else {
+      filters.push(...propertyFilters);
+    }
+
+    let sortClause: any[];
+    if (scope === 'both') {
+      if (sort === 'price_asc') {
+        sortClause = [
+          { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+          { sort_price: { order: 'asc' } },
+          { _score: { order: 'desc' } },
+        ];
+      } else if (sort === 'price_desc') {
+        sortClause = [
+          { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+          { sort_price: { order: 'desc' } },
+          { _score: { order: 'desc' } },
+        ];
+      } else if (sort === 'newest') {
+        sortClause = [{ created_at: { order: 'desc' } }];
+      } else if (sort === 'popular') {
+        sortClause = [{ _score: { order: 'desc' } }];
+      } else {
+        sortClause = [{ _score: { order: 'desc' } }];
+      }
+    } else {
+      sortClause = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }];
+      if (sort === 'price_asc') {
+        sortClause = [
+          { _script: { type: 'number', script: { source: "doc['price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+          { price: { order: 'asc' } },
+          { _score: { order: 'desc' } },
+        ];
+      }
+      if (sort === 'price_desc') {
+        sortClause = [
+          { _script: { type: 'number', script: { source: "doc['price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+          { price: { order: 'desc' } },
+          { _score: { order: 'desc' } },
+        ];
+      }
+      if (sort === 'newest') sortClause = [{ created_at: { order: 'desc' } }];
+      if (sort === 'popular') sortClause = [{ property_score: { order: 'desc' } }, { _score: { order: 'desc' } }];
+    }
+
     if (lat != null && lng != null) {
       sortClause.unshift({
         _geo_distance: {
@@ -158,21 +208,27 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Single ES query with aggregations attached — no second round-trip
     const esQuery: any = {
-      index: ES_INDEX_ALIAS,
+      index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
       size: pageSize,
       query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
       sort: sortClause,
-      aggs: {
+    };
+
+    if (scope === 'both') {
+      esQuery.aggs = {
+        by_entity_type: { terms: { field: 'entity_type', size: 2 } },
+      };
+    } else {
+      esQuery.aggs = {
         by_property_type: { terms: { field: 'property_type', size: 20 } },
         by_bhk: { terms: { field: 'bhk_type', size: 10 } },
         by_listing_purpose: { terms: { field: 'listing_purpose', size: 10 } },
         by_furnishing: { terms: { field: 'furnishing_status', size: 10 } },
         by_amenities: { terms: { field: 'amenities', size: 50 } },
         price_stats: { stats: { field: 'price' } },
-      },
-    };
+      };
+    }
 
     if (cursor) {
       esQuery.search_after = cursor;
@@ -188,12 +244,29 @@ export async function POST(req: NextRequest) {
       _sort: hit.sort,
     }));
 
-    const response = {
+    const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
+
+    let propertyTotal = 0;
+    let projectTotal = 0;
+    if (scope === 'both') {
+      const entityAgg = (esResponse as any).aggregations?.by_entity_type?.buckets || [];
+      for (const bucket of entityAgg) {
+        if (bucket.key === 'property') propertyTotal = bucket.doc_count;
+        if (bucket.key === 'project') projectTotal = bucket.doc_count;
+      }
+    }
+
+    const response: any = {
       results,
-      total: typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total,
+      total,
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
       aggregations: { facets: (esResponse as any).aggregations || {} },
     };
+
+    if (scope === 'both') {
+      response.propertyTotal = propertyTotal;
+      response.projectTotal = projectTotal;
+    }
 
     await cacheSet(cacheKey, response, 60);
 

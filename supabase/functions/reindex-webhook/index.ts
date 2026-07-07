@@ -106,6 +106,8 @@ Deno.serve(async (req: Request) => {
         location: coords.latitude != null && coords.longitude != null
           ? { lat: coords.latitude, lon: coords.longitude } : null,
         price: property.price || 0,
+        sort_price: property.price || 0,
+        entity_type: 'property',
         property_type: typeRes.data?.name || '',
         property_type_id: property.property_type_id,
         listing_purpose: purposeRes.data?.name || '',

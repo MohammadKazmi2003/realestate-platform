@@ -106,8 +106,22 @@ export async function POST(req: NextRequest) {
     }
 
     let sortClause: any[] = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }, { id: { order: 'desc' } }];
-    if (sort === 'price_asc') sortClause = [{ low_price: { order: 'asc' } }, { _score: { order: 'desc' } }, { id: { order: 'desc' } }];
-    if (sort === 'price_desc') sortClause = [{ low_price: { order: 'desc' } }, { _score: { order: 'desc' } }, { id: { order: 'desc' } }];
+    if (sort === 'price_asc') {
+      sortClause = [
+        { _script: { type: 'number', script: { source: "doc['low_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+        { low_price: { order: 'asc' } },
+        { _score: { order: 'desc' } },
+        { id: { order: 'desc' } },
+      ];
+    }
+    if (sort === 'price_desc') {
+      sortClause = [
+        { _script: { type: 'number', script: { source: "doc['low_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+        { low_price: { order: 'desc' } },
+        { _score: { order: 'desc' } },
+        { id: { order: 'desc' } },
+      ];
+    }
     if (sort === 'date_asc') sortClause = [{ delivery_date: { order: 'asc' } }, { _score: { order: 'desc' } }, { id: { order: 'desc' } }];
     if (sort === 'date_desc') sortClause = [{ delivery_date: { order: 'desc' } }, { _score: { order: 'desc' } }, { id: { order: 'desc' } }];
 
