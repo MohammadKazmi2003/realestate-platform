@@ -650,6 +650,27 @@ export default function BrowsePage() {
     handleApplyFiltersWithLocation(filters.location);
   };
 
+  const handleResetFilters = () => {
+    setLoading(true);
+    setFilters({ location: '', minPrice: '', maxPrice: '', bhkTypeId: '', propertyTypeId: '' });
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setCombinedNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
+    setSortedResultOrder([]);
+    setProperties([]);
+    setProjects([]);
+    setPropertyTotal(0);
+    setProjectTotal(0);
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchPropertiesRef.current(
+        searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+      );
+    }, 500);
+  };
+
   const loadMore = useCallback(() => {
     const bounds = searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null;
     const scope = searchScopeRef.current;
@@ -840,8 +861,11 @@ export default function BrowsePage() {
                   <input id="search-as-i-move" type="checkbox" checked={searchAsIMove} onChange={() => setSearchAsIMove(!searchAsIMove)} className="h-4 w-4 rounded shadow-neumorphic-inset appearance-none checked:bg-success-color transition"/>
                 </div>
 
-                {/* Apply */}
-                <button onClick={handleApplyFilters} className="neumorphic-button bg-cta-gradient w-full">Apply Filters</button>
+                {/* Apply + Reset */}
+                <div className="flex gap-2">
+                  <button onClick={handleApplyFilters} className="neumorphic-button bg-cta-gradient flex-1">Apply Filters</button>
+                  <button onClick={handleResetFilters} className="neumorphic-button flex-1">Reset Filters</button>
+                </div>
 
                 {/* My Location */}
                 <div>
@@ -962,7 +986,7 @@ export default function BrowsePage() {
               <>
                 {searchScope === 'both' ? (
               <div className={cn(
-                viewMode === 'list' ? "space-y-3" : "",
+                viewMode === 'list' ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : "",
                 viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
                 viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
               )}>
@@ -990,7 +1014,7 @@ export default function BrowsePage() {
               <>
                 {searchScope !== 'projects' && properties.length > 0 && (
                   <div className={cn(
-                    viewMode === 'list' ? "space-y-3" : "",
+                    viewMode === 'list' ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : "",
                     viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
                     viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
                   )}>
@@ -1003,7 +1027,7 @@ export default function BrowsePage() {
                 )}
                 {searchScope !== 'properties' && projects.length > 0 && (
                   <div className={cn(
-                    viewMode === 'list' ? "space-y-3" : "",
+                    viewMode === 'list' ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : "",
                     viewMode === 'grid' ? "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3" : "",
                     viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
                   )}>
