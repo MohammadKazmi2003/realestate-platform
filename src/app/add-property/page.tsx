@@ -8,6 +8,7 @@ import { getLookup } from '@/lib/lookupCache';
 import Header from '@/app/components/Header';
 import { withAuth } from '@/utils/withAuth';
 import imageCompression from 'browser-image-compression';
+import Fuse from 'fuse.js';
 import { Loader2, UploadCloud, Building, Home, LandPlot, Trash2 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -17,7 +18,7 @@ const LocationPicker = dynamic(() => import('@/app/components/LocationPicker'), 
 });
 
 // --- TYPE DEFINITIONS ---
-type LookupType = { id: number; name: string; };
+type LookupType = { id: number; name: string; parent_id?: number | null; };
 type BhkType = { id: number; label: string; };
 type Amenity = { id: number; name: string; category: string; property_type_scope: string; };
 type FurnishingItem = { id: number; name: string; category: string; };
@@ -26,6 +27,30 @@ type ImageUpload = { id: string; file: File; preview: string; tag: string; };
 const residentialImageTags = ['Living Room', 'Bedroom', 'Bathroom', 'Kitchen', 'Balcony', 'Pooja Room', 'Study Room', 'Servant Room', 'Store Room'];
 const commercialImageTags = ['Reception Area', 'Conference Room', 'Workstation Area', 'Director Cabin', 'Pantry', 'Facade'];
 const commonImageTags = ['Exterior', 'Entrance', 'Floor Plan', 'Master Plan', 'Location Map', 'Other'];
+
+/** Maps common search terms to amenity names for semantic matching. */
+const amenitySynonyms: Record<string, string[]> = {
+    workout: ['Gym', 'Fitness Centre / GYM', 'Gymnasium', 'Private Gym', 'Shared Gym', 'Running Track', 'Tennis Courts'],
+    swim: ['Swimming Pool', 'Indoor Swimming Pool', 'Infinity Pool', 'Private Pool', 'Shared Pool', "Children's Pool"],
+    car: ['Visitor Parking', 'Covered Parking', 'Basement Parking', 'Valet Parking', 'Garage', 'Parking', 'Private Marina Berths'],
+    bike: ['Bicycle Track', 'Cycle track', 'Covered Parking'],
+    kids: ['Children Play Area', "Children's Play Area", "Children's Pool", 'Day Care Centre', 'Children Nursery'],
+    play: ['Children Play Area', "Children's Play Area", 'Tennis Courts', 'Squash Court', 'Golf Course', 'Yoga room', 'Golf Club and Clubhouse'],
+    party: ['Community Hall', 'Ballroom', 'Barbecue Area', 'Club House', 'Club house / Community Center'],
+    food: ['Cafe and Restaurants', 'Restaurants', 'Dine-in Cinema', 'Barbecue Area', 'Kitchen Appliances', 'Fully Fitted Kitchen', 'Pantry'],
+    shop: ['Shopping Centre', 'Retail Facilities', 'Pharmacy'],
+    security: ['CCTV', 'CCTV Security', '24x7 Security', 'Security / Fire Alarm', 'Intercom Facility', 'Security Personnel', 'Security'],
+    prayer: ['Prayer Rooms', 'Mosque'],
+    view: ['Panoramic Views', 'View of Landmark', 'View of Water', 'Balcony', 'Private Garden', 'Private Garden / Terrace'],
+    garden: ['Garden', 'Landscaped Gardens', 'Landscaped Parks', 'Community Park', 'Private Garden', 'Private Garden / Terrace', 'Courtyard'],
+    water: ['Swimming Pool', 'Indoor Swimming Pool', 'Infinity Pool', 'Private Pool', 'Shared Pool', 'Water Storage', 'Water purifier', 'Rain Water Harvesting', 'Water softening plant'],
+    office: ['Conference Room', 'Reception Area', 'Director Cabin', 'Business centre', 'Business Facilities', 'Meeting rooms', 'Internet/Wi-Fi connectivity'],
+    power: ['Power Backup'],
+    internet: ['Internet/Wi-Fi connectivity', 'Networked'],
+    ac: ['Centrally Air Conditioned', 'Central A/C'],
+    pet: ['Pets Allowed'],
+    elderly: ['Lift(s)', 'Lift', 'High Speed Elevators'],
+};
 
 function AddPropertyPage() {
     const router = useRouter();
@@ -47,6 +72,8 @@ function AddPropertyPage() {
     const [selectedLocationAdvantages, setSelectedLocationAdvantages] = useState<Set<number>>(new Set());
     const [selectedLandFeatures, setSelectedLandFeatures] = useState<Set<number>>(new Set());
     
+    const [amenitySearch, setAmenitySearch] = useState('');
+
     const [coordinates, setCoordinates] = useState<{ lat: number; lng: number } | null>(null);
     const [imageUploads, setImageUploads] = useState<ImageUpload[]>([]);
     
@@ -110,37 +137,56 @@ function AddPropertyPage() {
     }, []);
 
     // --- SMART CONDITIONAL LOGIC ---
-    const selectedPropertyTypeName = useMemo(() => {
-        return lookupData.propertyTypes.find(p => String(p.id) === propertyTypeId)?.name;
+    const selectedPropertyType = useMemo(() => {
+        return lookupData.propertyTypes.find(p => String(p.id) === propertyTypeId) || null;
     }, [propertyTypeId, lookupData.propertyTypes]);
-    
+
+    /** The parent category (Residential, Commercial, Land / Plot) — follows parent_id chain. */
+    const selectedParentType = useMemo(() => {
+        if (!selectedPropertyType) return null;
+        if (selectedPropertyType.parent_id == null) return selectedPropertyType;
+        return lookupData.propertyTypes.find(p => p.id === selectedPropertyType.parent_id) || selectedPropertyType;
+    }, [selectedPropertyType, lookupData.propertyTypes]);
+
+    const selectedPropertyTypeName = selectedPropertyType?.name || null;
+    const selectedParentTypeName = selectedParentType?.name || null;
+
+    const parentCategories = useMemo(() => {
+        return lookupData.propertyTypes.filter(pt => pt.parent_id == null);
+    }, [lookupData.propertyTypes]);
+
+    const subTypesForParent = useMemo(() => {
+        if (!selectedParentType) return [];
+        return lookupData.propertyTypes.filter(pt => pt.parent_id === selectedParentType.id);
+    }, [selectedParentType, lookupData.propertyTypes]);
+
     const availableListingPurposes = useMemo(() => {
-        if (selectedPropertyTypeName === 'Land / Plot') {
+        if (selectedParentTypeName === 'Land / Plot') {
             return lookupData.listingPurposes.filter(p => p.name !== 'PG' & p.name !== 'Rent');
         }
-        if (selectedPropertyTypeName === 'Commercial') return lookupData.listingPurposes.filter(p => p.name !== 'PG');
-        if (selectedPropertyTypeName === 'Residential') return lookupData.listingPurposes.filter(p => p.name !== 'Lease');
+        if (selectedParentTypeName === 'Commercial') return lookupData.listingPurposes.filter(p => p.name !== 'PG');
+        if (selectedParentTypeName === 'Residential') return lookupData.listingPurposes.filter(p => p.name !== 'Lease');
         return lookupData.listingPurposes;
-    }, [selectedPropertyTypeName, lookupData.listingPurposes]);
+    }, [selectedParentTypeName, lookupData.listingPurposes]);
     
     const availableAmenitiesForType = useMemo(() => {
-        if (!selectedPropertyTypeName) return [];
-        if (selectedPropertyTypeName === 'Residential') return lookupData.amenities;
-        if (selectedPropertyTypeName === 'Commercial') return lookupData.amenities;
+        if (!selectedParentTypeName) return [];
+        if (selectedParentTypeName === 'Residential') return lookupData.amenities;
+        if (selectedParentTypeName === 'Commercial') return lookupData.amenities;
         // Correctly filter to only show relevant amenities for Land
         const landRelevantAmenities = ['Water Storage', 'Security / Fire Alarm', 'Security Personnel', 'Visitor Parking'];
-        if (selectedPropertyTypeName === 'Land / Plot') {
+        if (selectedParentTypeName === 'Land / Plot') {
             return lookupData.amenities.filter(a => landRelevantAmenities.includes(a.name));
         }
         return [];
-    }, [selectedPropertyTypeName, lookupData.amenities]);
+    }, [selectedParentTypeName, lookupData.amenities]);
 
     const availableImageTags = useMemo(() => {
-        if (selectedPropertyTypeName === 'Residential') return [...residentialImageTags, ...commonImageTags];
-        if (selectedPropertyTypeName === 'Commercial') return [...commercialImageTags, ...commonImageTags];
-        if (selectedPropertyTypeName === 'Land / Plot') return commonImageTags.filter(tag => !['Floor Plan', 'Pooja Room', 'Study Room', 'Servant Room'].includes(tag));
+        if (selectedParentTypeName === 'Residential') return [...residentialImageTags, ...commonImageTags];
+        if (selectedParentTypeName === 'Commercial') return [...commercialImageTags, ...commonImageTags];
+        if (selectedParentTypeName === 'Land / Plot') return commonImageTags.filter(tag => !['Floor Plan', 'Pooja Room', 'Study Room', 'Servant Room'].includes(tag));
         return commonImageTags;
-    }, [selectedPropertyTypeName]);
+    }, [selectedParentTypeName]);
 
     // --- EVENT HANDLERS ---
     const handleCommonChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setCommonData(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -233,34 +279,109 @@ function AddPropertyPage() {
         return <div className="flex justify-center items-center min-h-screen"><Loader2 className="h-12 w-12 animate-spin" /></div>;
     }
     
-    const renderChecklist = (title: string, items: (Amenity | FurnishingItem | LookupType)[], selected: Set<number>, handler: (id: number) => void) => {
-        if (!items || items.length === 0) return null;
-        const categories: { [key: string]: typeof items } = items.reduce((acc, item) => {
+    const AccordionChecklist = ({ title, items, selected, handler, searchQuery }: {
+        title: string;
+        items: (Amenity | FurnishingItem | LookupType)[];
+        selected: Set<number>;
+        handler: (id: number) => void;
+        searchQuery?: string;
+    }) => {
+        const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
+
+        // Hybrid search: Fuse.js fuzzy + synonym dictionary
+        const filteredItems = useMemo(() => {
+            if (!searchQuery || searchQuery.trim() === '') return items;
+            const q = searchQuery.toLowerCase().trim();
+
+            // 1. Fuse.js fuzzy search on name
+            const fuse = new Fuse(items, { keys: ['name'], threshold: 0.4 });
+            const matched = new Set<number>();
+            fuse.search(q).forEach(r => matched.add(r.item.id));
+
+            // 2. Synonym dictionary for semantic matches
+            for (const [synonym, amenityNames] of Object.entries(amenitySynonyms)) {
+                if (q.includes(synonym) || synonym.includes(q)) {
+                    items.forEach(item => {
+                        if (amenityNames.some(name => item.name.toLowerCase().includes(name.toLowerCase()))) {
+                            matched.add(item.id);
+                        }
+                    });
+                }
+            }
+
+            return items.filter(item => matched.has(item.id));
+        }, [items, searchQuery]);
+
+        if (!filteredItems || filteredItems.length === 0) {
+            if (searchQuery) return null;
+            return null;
+        }
+
+        const categories: { [key: string]: typeof items } = filteredItems.reduce((acc, item) => {
             const category = (item as any).category || 'General';
             if (!acc[category]) acc[category] = [];
             acc[category].push(item);
             return acc;
         }, {} as { [key: string]: typeof items });
 
+        const categoryNames = Object.keys(categories).sort();
+
+        // Auto-expand all categories when search is active; collapse when cleared
+        useEffect(() => {
+            if (searchQuery && searchQuery.trim() !== '') {
+                setOpenCategories(new Set(categoryNames));
+            } else {
+                setOpenCategories(new Set());
+            }
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [searchQuery]);
+
+        const toggleCategory = (name: string) => {
+            setOpenCategories(prev => {
+                const next = new Set(prev);
+                if (next.has(name)) next.delete(name);
+                else next.add(name);
+                return next;
+            });
+        };
+
         return (
-          <div className="mt-6">
-            <h3 className="font-semibold mb-4 text-text-color-dark">{title}</h3>
-            {Object.keys(categories).sort().map(category => (
-              <div key={category} className="mb-4">
-                <p className="text-sm font-medium text-text-color-light mb-2">{category}</p>
-                <div className="flex flex-wrap gap-3">
-                  {categories[category].map(item => (
-                    <label key={item.id} className={`flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-2 cursor-pointer ${selected.has(item.id) ? 'shadow-neumorphic-inset' : ''}`}>
-                      <input type="checkbox" checked={selected.has(item.id)} onChange={() => handler(item.id)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>
-                      {(item as any).label || item.name}
-                    </label>
-                  ))}
+            <div className="mt-6">
+                <h3 className="font-semibold mb-4 text-text-color-dark">{title}</h3>
+                <div className="space-y-2">
+                    {categoryNames.map(category => {
+                        const isOpen = openCategories.has(category);
+                        const itemsInCategory = categories[category];
+                        const selectedCount = itemsInCategory.filter(item => selected.has(item.id)).length;
+                        return (
+                            <div key={category} className="rounded-2xl shadow-neumorphic-outset overflow-hidden bg-bg-color">
+                                <button
+                                    type="button"
+                                    onClick={() => toggleCategory(category)}
+                                    className="w-full flex items-center justify-between p-4 text-sm font-medium text-text-color-dark hover:bg-shadow-dark/5 transition-colors"
+                                >
+                                    <span>{category} <span className="text-text-color-light font-normal">({itemsInCategory.length})</span></span>
+                                    <span className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>
+                                        ▼
+                                    </span>
+                                </button>
+                                {isOpen && (
+                                    <div className="px-4 pb-4 pt-2 flex flex-wrap gap-3">
+                                        {itemsInCategory.map(item => (
+                                            <label key={item.id} className={`flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-2 cursor-pointer ${selected.has(item.id) ? 'shadow-neumorphic-inset' : ''}`}>
+                                                <input type="checkbox" checked={selected.has(item.id)} onChange={() => handler(item.id)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>
+                                                {(item as any).label || item.name}
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
-              </div>
-            ))}
-          </div>
+            </div>
         );
-      };
+    };
 
     return (
         <div className="bg-bg-color min-h-screen">
@@ -273,13 +394,35 @@ function AddPropertyPage() {
                     <section>
                         <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">1. Select Property Type</h2>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {lookupData.propertyTypes.map(pt => (
-                                <button type="button" key={pt.id} onClick={() => setPropertyTypeId(String(pt.id))} className={`neumorphic-button flex flex-col items-center justify-center p-6 gap-2 text-lg ${propertyTypeId === String(pt.id) ? 'shadow-neumorphic-inset bg-cta-gradient' : ''}`}>
+                            {parentCategories.map(pt => (
+                                <button type="button" key={pt.id} onClick={() => setPropertyTypeId(String(pt.id))} className={`neumorphic-button flex flex-col items-center justify-center p-6 gap-2 text-lg ${selectedParentType?.id === pt.id ? 'shadow-neumorphic-inset bg-cta-gradient' : ''}`}>
                                     {pt.name === 'Residential' && <Home />} {pt.name === 'Commercial' && <Building />} {pt.name === 'Land / Plot' && <LandPlot />}
                                     <span>{pt.name}</span>
                                 </button>
                             ))}
                         </div>
+                        {subTypesForParent.length > 0 && (
+                            <div className="mt-4">
+                                <label className="block text-sm font-medium text-text-color-light mb-2">Property Sub-type</label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                    {subTypesForParent.map(st => (
+                                        <button
+                                            type="button"
+                                            key={st.id}
+                                            onClick={() => setPropertyTypeId(String(st.id))}
+                                            className={`neumorphic-button flex items-center justify-center p-4 text-sm font-medium ${
+                                                propertyTypeId === String(st.id) ? 'shadow-neumorphic-inset bg-cta-gradient' : ''
+                                            }`}
+                                        >
+                                            {st.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        {selectedParentType && !subTypesForParent.length && (
+                            <p className="mt-3 text-sm text-text-color-light">Selected: <strong>{selectedParentType.name}</strong></p>
+                        )}
                     </section>
 
                     {propertyTypeId && (
@@ -304,7 +447,7 @@ function AddPropertyPage() {
                             
                             <section>
                                 <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">3. Property Profile</h2>
-                                {selectedPropertyTypeName === 'Residential' && (
+                                {selectedParentTypeName === 'Residential' && (
                                     <div className="space-y-6">
                                         <div className="grid md:grid-cols-3 gap-6">
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Carpet Area (sq. ft.)</label><input name="carpet_area" type="number" min="0" value={residentialData.carpet_area} onChange={handleResidentialChange} required className="neumorphic-input"/></div>
@@ -319,7 +462,7 @@ function AddPropertyPage() {
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Furnishing Status</label><select name="furnishing_status_id" value={residentialData.furnishing_status_id} onChange={handleResidentialChange} className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.furnishingStatuses.map(fs => <option key={fs.id} value={fs.id}>{fs.name}</option>)}</select></div>
                                     </div>
                                 )}
-                                {selectedPropertyTypeName === 'Commercial' && (
+                                {selectedParentTypeName === 'Commercial' && (
                                      <div className="space-y-6">
                                         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Carpet Area (sq. ft.)</label><input name="carpet_area" type="number" min="0" value={commercialData.carpet_area} onChange={handleCommercialChange} required className="neumorphic-input" /></div>
@@ -343,7 +486,7 @@ function AddPropertyPage() {
                                         </div>
                                     </div>
                                 )}
-                                {selectedPropertyTypeName === 'Land / Plot' && (
+                                {selectedParentTypeName === 'Land / Plot' && (
                                     <div className="grid md:grid-cols-2 gap-6 items-center">
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Plot Area</label><input name="plot_area" type="number" min="0" value={landData.plot_area} onChange={handleLandChange} required className="neumorphic-input"/></div>
                                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Area Unit</label><select name="area_unit" value={landData.area_unit} onChange={handleLandChange} className="neumorphic-input w-full"><option value="sqft">Square Feet</option><option value="sqyd">Square Yards</option><option value="acre">Acres</option></select></div>
@@ -359,11 +502,22 @@ function AddPropertyPage() {
                             
                             <section>
                                 <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">4. Features & Amenities</h2>
-                                {selectedPropertyTypeName === 'Residential' && renderChecklist("Other Rooms", lookupData.otherRooms, selectedOtherRooms, (id) => handleCheckboxChange(setSelectedOtherRooms, id))}
-                                {selectedPropertyTypeName === 'Land / Plot' && renderChecklist("Land Features", lookupData.landFeatures, selectedLandFeatures, (id) => handleCheckboxChange(setSelectedLandFeatures, id))}
-                                {availableAmenitiesForType.length > 0 && renderChecklist("Amenities", availableAmenitiesForType, selectedAmenities, (id) => handleCheckboxChange(setSelectedAmenities, id))}
-                                {selectedPropertyTypeName === 'Residential' && renderChecklist("Furnishing Includes", lookupData.furnishingItems, selectedFurnishings, (id) => handleCheckboxChange(setSelectedFurnishings, id))}
-                                {renderChecklist("Location Advantages", lookupData.locationAdvantages, selectedLocationAdvantages, (id) => handleCheckboxChange(setSelectedLocationAdvantages, id))}
+                                
+                                <div className="mb-4">
+                                    <input
+                                        type="text"
+                                        placeholder="Search amenities... (e.g. pool, gym, parking)"
+                                        value={amenitySearch}
+                                        onChange={e => setAmenitySearch(e.target.value)}
+                                        className="neumorphic-input w-full"
+                                    />
+                                </div>
+
+                                {selectedParentTypeName === 'Residential' && <AccordionChecklist title="Other Rooms" items={lookupData.otherRooms} selected={selectedOtherRooms} handler={(id) => handleCheckboxChange(setSelectedOtherRooms, id)} searchQuery={amenitySearch} />}
+                                {selectedParentTypeName === 'Land / Plot' && <AccordionChecklist title="Land Features" items={lookupData.landFeatures} selected={selectedLandFeatures} handler={(id) => handleCheckboxChange(setSelectedLandFeatures, id)} searchQuery={amenitySearch} />}
+                                {availableAmenitiesForType.length > 0 && <AccordionChecklist title="Amenities" items={availableAmenitiesForType} selected={selectedAmenities} handler={(id) => handleCheckboxChange(setSelectedAmenities, id)} searchQuery={amenitySearch} />}
+                                {selectedParentTypeName === 'Residential' && <AccordionChecklist title="Furnishing Includes" items={lookupData.furnishingItems} selected={selectedFurnishings} handler={(id) => handleCheckboxChange(setSelectedFurnishings, id)} searchQuery={amenitySearch} />}
+                                {<AccordionChecklist title="Location Advantages" items={lookupData.locationAdvantages} selected={selectedLocationAdvantages} handler={(id) => handleCheckboxChange(setSelectedLocationAdvantages, id)} searchQuery={amenitySearch} />}
                             </section>
                             
                             <section>
