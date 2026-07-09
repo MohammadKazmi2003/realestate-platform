@@ -35,7 +35,7 @@ export async function middleware(req: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (user && (req.nextUrl.pathname === '/sign-in' || req.nextUrl.pathname === '/sign-up')) {
+  if (user && (req.nextUrl.pathname === '/sign-in' || req.nextUrl.pathname === '/sign-up' || req.nextUrl.pathname === '/forgot-password' || req.nextUrl.pathname === '/phone-sign-up')) {
     return NextResponse.redirect(new URL('/', req.url))
   }
 
@@ -45,8 +45,19 @@ export async function middleware(req: NextRequest) {
   }
 
   if (user) {
-    // Role is embedded in the JWT via custom_access_token_hook — no DB query needed.
-    const role = user.app_metadata?.user_role_id as number | undefined
+    // Role is embedded in the JWT via custom_access_token_hook.
+    // Fall back to the profiles table if JWT claims are missing
+    // (e.g. for sessions that predate the hook).
+    let role = user.app_metadata?.user_role_id as number | undefined
+
+    if (!role) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role_id')
+        .eq('id', user.id)
+        .single()
+      role = profile?.role_id
+    }
 
     if (req.nextUrl.pathname.startsWith('/admin') && role !== 1) {
       return NextResponse.redirect(new URL('/', req.url))
@@ -65,5 +76,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/sign-in', '/sign-up', '/admin/:path*', '/propertyowner/:path*', '/agent/:path*', '/my-listings/:path*', '/favorites/:path*', '/add-property/:path*', '/edit-property/:path*'],
+  matcher: ['/sign-in', '/sign-up', '/forgot-password', '/phone-sign-up', '/onboarding', '/mfa/:path*', '/admin/:path*', '/propertyowner/:path*', '/agent/:path*', '/my-listings/:path*', '/favorites/:path*', '/add-property/:path*', '/edit-property/:path*'],
 }

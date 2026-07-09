@@ -2,42 +2,19 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
-import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield, Briefcase, Calendar as CalendarIcon, MessageCircle } from 'lucide-react'
+import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield, Briefcase, Calendar as CalendarIcon, MessageCircle, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { ChatAssistant } from './ChatAssistant'
 
 export default function Header() {
   const router = useRouter()
-  const { user, session } = useAuth()
-  const [userRole, setUserRole] = useState<number | null>(null);
+  const { user, session, userRoleId } = useAuth()
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  useEffect(() => {
-    const getProfile = async () => {
-      if (user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role_id')
-          .eq('id', user.id)
-          .single();
-        if (profile) {
-          setUserRole(profile.role_id);
-        }
-      } else {
-        setUserRole(null);
-      }
-    };
-    getProfile();
-  }, [user]);
-
   const handleLogout = async () => {
-    await supabase.auth.signOut()
-    setUserRole(null);
-    router.push('/sign-in')
-    router.refresh(); 
+    router.push('/auth/signout')
   }
 
   const NavLink = ({ href, icon: Icon, children }: { href: string, icon: React.ElementType, children: React.ReactNode }) => (
@@ -62,15 +39,16 @@ export default function Header() {
           <NavLink href="/browse" icon={Building2}>Browse</NavLink>
           <NavLink href="/list" icon={List}>List</NavLink>
           <NavLink href="/projects" icon={Building2}>Projects</NavLink>
-          {userRole === 1 && <NavLink href="/admin" icon={Shield}>Admin</NavLink>}
-          {userRole === 2 && <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>}
-          {userRole === 3 && (
+          {userRoleId === 1 && <NavLink href="/admin" icon={Shield}>Admin</NavLink>}
+          {userRoleId === 2 && <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>}
+          {userRoleId === 3 && (
             <>
               <NavLink href="/propertyowner" icon={User}>Dashboard</NavLink>
               <NavLink href="/agent/leads" icon={Briefcase}>Leads</NavLink>
               <NavLink href="/agent/calendar" icon={CalendarIcon}>Calendar</NavLink>
             </>
           )}
+          {(userRoleId === null || userRoleId === 4) && user && <NavLink href="/onboarding" icon={User}>Get Started</NavLink>}
           {user && <NavLink href="/my-listings" icon={List}>My Listings</NavLink>}
           {user && <NavLink href="/favorites" icon={Heart}>Favorites</NavLink>}
         </nav>
@@ -87,6 +65,9 @@ export default function Header() {
           </button>
           {session ? (
               <>
+                  <Link href="/mfa" className="neumorphic-button flex items-center justify-center p-3 rounded-full" title="Two-factor authentication">
+                      <ShieldCheck size={16} />
+                  </Link>
                   <button
                       onClick={handleLogout}
                       className="neumorphic-button flex items-center justify-center p-3 rounded-full"
