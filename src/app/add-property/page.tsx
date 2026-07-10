@@ -52,6 +52,106 @@ const amenitySynonyms: Record<string, string[]> = {
     elderly: ['Lift(s)', 'Lift', 'High Speed Elevators'],
 };
 
+// Defined at module level so React preserves instance state across parent re-renders.
+const AccordionChecklist = ({ title, items, selected, handler, searchQuery }: {
+    title: string;
+    items: (Amenity | FurnishingItem | LookupType)[];
+    selected: Set<number>;
+    handler: (id: number) => void;
+    searchQuery?: string;
+}) => {
+    const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
+
+    // Hybrid search: Fuse.js fuzzy + synonym dictionary
+    const filteredItems = useMemo(() => {
+        if (!searchQuery || searchQuery.trim() === '') return items;
+        const q = searchQuery.toLowerCase().trim();
+
+        const fuse = new Fuse(items, { keys: ['name'], threshold: 0.4 });
+        const matched = new Set<number>();
+        fuse.search(q).forEach(r => matched.add(r.item.id));
+
+        for (const [synonym, amenityNames] of Object.entries(amenitySynonyms)) {
+            if (q.includes(synonym) || synonym.includes(q)) {
+                items.forEach(item => {
+                    if (amenityNames.some(name => item.name.toLowerCase().includes(name.toLowerCase()))) {
+                        matched.add(item.id);
+                    }
+                });
+            }
+        }
+
+        return items.filter(item => matched.has(item.id));
+    }, [items, searchQuery]);
+
+    const categories: { [key: string]: typeof items } = (filteredItems.length ? filteredItems : items).reduce((acc, item) => {
+        const category = (item as any).category || 'General';
+        if (!acc[category]) acc[category] = [];
+        acc[category].push(item);
+        return acc;
+    }, {} as { [key: string]: typeof items });
+
+    const categoryNames = Object.keys(categories).sort();
+
+    useEffect(() => {
+        if (searchQuery && searchQuery.trim() !== '') {
+            setOpenCategories(new Set(categoryNames));
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchQuery]);
+
+    if (!filteredItems || filteredItems.length === 0) {
+        if (searchQuery) return null;
+        return null;
+    }
+
+    const toggleCategory = (name: string) => {
+        setOpenCategories(prev => {
+            const next = new Set(prev);
+            if (next.has(name)) next.delete(name);
+            else next.add(name);
+            return next;
+        });
+    };
+
+    return (
+        <div className="mt-6">
+            <h3 className="font-semibold mb-4 text-text-color-dark">{title}</h3>
+            <div className="space-y-2">
+                {categoryNames.map(category => {
+                    const isOpen = openCategories.has(category);
+                    const itemsInCategory = categories[category];
+                    const selectedCount = itemsInCategory.filter(item => selected.has(item.id)).length;
+                    return (
+                        <div key={category} className="rounded-2xl shadow-neumorphic-outset overflow-hidden bg-bg-color">
+                            <button
+                                type="button"
+                                onClick={() => toggleCategory(category)}
+                                className="w-full flex items-center justify-between p-4 text-sm font-medium text-text-color-dark hover:bg-shadow-dark/5 transition-colors"
+                            >
+                                <span>{category} <span className="text-text-color-light font-normal">({itemsInCategory.length})</span></span>
+                                <span className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>
+                                    ▼
+                                </span>
+                            </button>
+                            {isOpen && (
+                                <div className="px-4 pb-4 pt-2 flex flex-wrap gap-3">
+                                    {itemsInCategory.map(item => (
+                                        <label key={item.id} className={`flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-2 cursor-pointer ${selected.has(item.id) ? 'shadow-neumorphic-inset' : ''}`}>
+                                            <input type="checkbox" checked={selected.has(item.id)} onChange={() => handler(item.id)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>
+                                            {(item as any).label || item.name}
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
 function AddPropertyPage() {
     const router = useRouter();
 
@@ -289,110 +389,6 @@ function AddPropertyPage() {
         return <div className="flex justify-center items-center min-h-screen"><Loader2 className="h-12 w-12 animate-spin" /></div>;
     }
     
-    const AccordionChecklist = ({ title, items, selected, handler, searchQuery }: {
-        title: string;
-        items: (Amenity | FurnishingItem | LookupType)[];
-        selected: Set<number>;
-        handler: (id: number) => void;
-        searchQuery?: string;
-    }) => {
-        const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
-
-        // Hybrid search: Fuse.js fuzzy + synonym dictionary
-        const filteredItems = useMemo(() => {
-            if (!searchQuery || searchQuery.trim() === '') return items;
-            const q = searchQuery.toLowerCase().trim();
-
-            // 1. Fuse.js fuzzy search on name
-            const fuse = new Fuse(items, { keys: ['name'], threshold: 0.4 });
-            const matched = new Set<number>();
-            fuse.search(q).forEach(r => matched.add(r.item.id));
-
-            // 2. Synonym dictionary for semantic matches
-            for (const [synonym, amenityNames] of Object.entries(amenitySynonyms)) {
-                if (q.includes(synonym) || synonym.includes(q)) {
-                    items.forEach(item => {
-                        if (amenityNames.some(name => item.name.toLowerCase().includes(name.toLowerCase()))) {
-                            matched.add(item.id);
-                        }
-                    });
-                }
-            }
-
-            return items.filter(item => matched.has(item.id));
-        }, [items, searchQuery]);
-
-        if (!filteredItems || filteredItems.length === 0) {
-            if (searchQuery) return null;
-            return null;
-        }
-
-        const categories: { [key: string]: typeof items } = filteredItems.reduce((acc, item) => {
-            const category = (item as any).category || 'General';
-            if (!acc[category]) acc[category] = [];
-            acc[category].push(item);
-            return acc;
-        }, {} as { [key: string]: typeof items });
-
-        const categoryNames = Object.keys(categories).sort();
-
-        // Auto-expand all categories when search is active; collapse when cleared
-        useEffect(() => {
-            if (searchQuery && searchQuery.trim() !== '') {
-                setOpenCategories(new Set(categoryNames));
-            } else {
-                setOpenCategories(new Set());
-            }
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [searchQuery]);
-
-        const toggleCategory = (name: string) => {
-            setOpenCategories(prev => {
-                const next = new Set(prev);
-                if (next.has(name)) next.delete(name);
-                else next.add(name);
-                return next;
-            });
-        };
-
-        return (
-            <div className="mt-6">
-                <h3 className="font-semibold mb-4 text-text-color-dark">{title}</h3>
-                <div className="space-y-2">
-                    {categoryNames.map(category => {
-                        const isOpen = openCategories.has(category);
-                        const itemsInCategory = categories[category];
-                        const selectedCount = itemsInCategory.filter(item => selected.has(item.id)).length;
-                        return (
-                            <div key={category} className="rounded-2xl shadow-neumorphic-outset overflow-hidden bg-bg-color">
-                                <button
-                                    type="button"
-                                    onClick={() => toggleCategory(category)}
-                                    className="w-full flex items-center justify-between p-4 text-sm font-medium text-text-color-dark hover:bg-shadow-dark/5 transition-colors"
-                                >
-                                    <span>{category} <span className="text-text-color-light font-normal">({itemsInCategory.length})</span></span>
-                                    <span className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>
-                                        ▼
-                                    </span>
-                                </button>
-                                {isOpen && (
-                                    <div className="px-4 pb-4 pt-2 flex flex-wrap gap-3">
-                                        {itemsInCategory.map(item => (
-                                            <label key={item.id} className={`flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-2 cursor-pointer ${selected.has(item.id) ? 'shadow-neumorphic-inset' : ''}`}>
-                                                <input type="checkbox" checked={selected.has(item.id)} onChange={() => handler(item.id)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>
-                                                {(item as any).label || item.name}
-                                            </label>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        );
-    };
-
     return (
         <div className="bg-bg-color min-h-screen">
             <Header />
