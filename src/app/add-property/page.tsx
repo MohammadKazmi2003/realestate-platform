@@ -171,13 +171,23 @@ function AddPropertyPage() {
     
     const availableAmenitiesForType = useMemo(() => {
         if (!selectedParentTypeName) return [];
-        if (selectedParentTypeName === 'Residential') return lookupData.amenities;
-        if (selectedParentTypeName === 'Commercial') return lookupData.amenities;
-        // Correctly filter to only show relevant amenities for Land
+
+        // Use property_type_scope from the database to filter dynamically.
+        // 'Both' scoped amenities show for all types. 'Residential'/'Commercial'
+        // scope filters to that specific type. This is data-driven — adding a new
+        // amenity with the correct scope automatically shows it in the right form.
+        if (selectedParentTypeName === 'Residential' || selectedParentTypeName === 'Commercial') {
+            return lookupData.amenities.filter(a =>
+                a.property_type_scope === 'Both' || a.property_type_scope === selectedParentTypeName
+            );
+        }
+
+        // Land / Plot: only land-relevant amenities (hardcoded — no Land scope exists)
         const landRelevantAmenities = ['Water Storage', 'Security / Fire Alarm', 'Security Personnel', 'Visitor Parking'];
         if (selectedParentTypeName === 'Land / Plot') {
             return lookupData.amenities.filter(a => landRelevantAmenities.includes(a.name));
         }
+
         return [];
     }, [selectedParentTypeName, lookupData.amenities]);
 
