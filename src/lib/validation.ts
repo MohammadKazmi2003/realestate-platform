@@ -41,6 +41,13 @@ const boundsSchema = z.object({
   maxLng: z.number().min(-180).max(180),
 }).optional();
 
+const polygonPointSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+});
+
+const polygonSchema = z.array(polygonPointSchema).min(3).optional();
+
 export const searchQuerySchema = z.object({
   query: z.string().max(500).optional(),
   location: z.string().max(500).optional(),
@@ -58,6 +65,7 @@ export const searchQuerySchema = z.object({
   lng: z.number().min(-180).max(180).optional(),
   radiusKm: z.number().min(0).max(500).optional(),
   bounds: boundsSchema.optional(),
+  polygon: polygonSchema,
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(100).optional(),
   sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular']).optional(),

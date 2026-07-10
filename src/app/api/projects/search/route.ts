@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
       cursor,
       page,
       bounds,
+      polygon,
     } = body;
 
     const sanitize = (s: string | undefined, maxLen = 200) => {
@@ -97,6 +98,16 @@ export async function POST(req: NextRequest) {
           },
         });
       }
+    }
+
+    if (polygon && polygon.length >= 3) {
+      filters.push({
+        geo_polygon: {
+          location: {
+            points: polygon.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
+          },
+        },
+      });
     }
 
     const amenityNames = amenities || [];

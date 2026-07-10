@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     const {
       query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
       amenities = [], furnishings = [], bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds,
-      cursor, pageSize = 24, sort = 'relevance', scope = 'properties',
+      polygon, cursor, pageSize = 24, sort = 'relevance', scope = 'properties',
     } = parsed.data;
 
     const query = sanitize(rawQuery)?.toLowerCase().trim();
@@ -138,6 +138,16 @@ export async function POST(req: NextRequest) {
           },
         });
       }
+    }
+
+    if (polygon && polygon.length >= 3) {
+      commonFilters.push({
+        geo_polygon: {
+          location: {
+            points: polygon.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
+          },
+        },
+      });
     }
 
     const filters: any[] = [...commonFilters];

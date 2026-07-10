@@ -49,6 +49,38 @@ async function searchProjects(params: any): Promise<{ results: any[]; total: num
   }
 }
 
+function simplifyPolygon(points: { lat: number; lng: number }[], tolerance: number = 0.0005): { lat: number; lng: number }[] {
+  if (points.length <= 2) return points;
+  let maxDist = 0;
+  let maxIdx = 0;
+  const first = points[0];
+  const last = points[points.length - 1];
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = perpendicularDistance(points[i], first, last);
+    if (d > maxDist) { maxDist = d; maxIdx = i; }
+  }
+  if (maxDist > tolerance) {
+    const left = simplifyPolygon(points.slice(0, maxIdx + 1), tolerance);
+    const right = simplifyPolygon(points.slice(maxIdx), tolerance);
+    return [...left.slice(0, -1), ...right];
+  }
+  return [first, last];
+}
+function perpendicularDistance(p: { lat: number; lng: number }, a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const dx = b.lng - a.lng;
+  const dy = b.lat - a.lat;
+  const mag = Math.sqrt(dx * dx + dy * dy);
+  if (mag === 0) return Math.sqrt((p.lat - a.lat) ** 2 + (p.lng - a.lng) ** 2);
+  const ux = dx / mag;
+  const uy = dy / mag;
+  const px = p.lng - a.lng;
+  const py = p.lat - a.lat;
+  const proj = ux * px + uy * py;
+  const closestX = a.lng + ux * proj;
+  const closestY = a.lat + uy * proj;
+  return Math.sqrt((p.lng - closestX) ** 2 + (p.lat - closestY) ** 2);
+}
+
 export default function BrowsePage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -96,6 +128,16 @@ export default function BrowsePage() {
   const [combinedNextCursor, setCombinedNextCursor] = useState<any[] | null>(null);
   const markerTickRef = useRef(0);
 
+  const [boundaryPoints, setBoundaryPoints] = useState<{ lat: number; lng: number }[]>([]);
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [boundaryActive, setBoundaryActive] = useState(false);
+  const boundarySourceRef = useRef<maplibregl.GeoJSONSource | null>(null);
+  const isDrawingRef = useRef(false);
+  const drawPointsRef = useRef<{ lat: number; lng: number }[]>([]);
+  const isDrawingModeRef = useRef(false);
+  const boundaryActiveRef = useRef(false);
+  const updateBoundaryLayerRef = useRef<(points: { lat: number; lng: number }[]) => void>(() => {});
+
   const fetchPropertiesRef = useRef<typeof fetchAllProperties>(() => Promise.resolve());
   const searchAsIMoveRef = useRef(searchAsIMove);
   const searchScopeRef = useRef(searchScope);
@@ -110,6 +152,8 @@ export default function BrowsePage() {
   searchScopeRef.current = searchScope;
   sortByRef.current = sortBy;
   fullScreenResultsRef.current = fullScreenResults;
+  isDrawingModeRef.current = isDrawingMode;
+  boundaryActiveRef.current = boundaryActive;
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -161,7 +205,7 @@ export default function BrowsePage() {
     return 'relevance';
   };
 
-  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }) => {
+  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: { lat: number; lng: number }[] | null) => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -187,6 +231,10 @@ export default function BrowsePage() {
       params.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
     }
 
+    const activePolygon = polygonOverride ?? (boundaryActive ? boundaryPoints : null);
+    if (activePolygon && activePolygon.length >= 3) {
+      params.polygon = activePolygon;
+    }
     if (searchAsIMoveRef.current && bounds && !isListView) {
       const minLat = bounds.getSouthWest().lat;
       const maxLat = bounds.getNorthEast().lat;
@@ -219,6 +267,7 @@ export default function BrowsePage() {
           combinedParams.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
         }
         if (params.bounds) combinedParams.bounds = params.bounds;
+        if (params.polygon) combinedParams.polygon = params.polygon;
         if (cursorOverride?.propertyCursor) {
           combinedParams.cursor = cursorOverride.propertyCursor;
         }
@@ -292,6 +341,7 @@ export default function BrowsePage() {
           pageSize: isAppend ? 12 : 100,
           sort: projectSortForBrowse(sortByRef.current),
           bounds: params.bounds,
+          polygon: params.polygon,
           signal,
         };
         if (cursorOverride?.projectCursor) {
@@ -371,7 +421,7 @@ export default function BrowsePage() {
       if (isAppend) setLoadingMore(false);
       else setLoading(false);
     }
-  }, [filters, lookupMaps]);
+  }, [filters, lookupMaps, boundaryActive, boundaryPoints]);
 
   fetchPropertiesRef.current = fetchAllProperties;
 
@@ -535,8 +585,41 @@ export default function BrowsePage() {
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
     const onLoad = () => {
+      map.addSource('boundary', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'boundary-fill', type: 'fill', source: 'boundary', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#2563eb', 'fill-opacity': 0 } });
+      map.addLayer({ id: 'boundary-outline', type: 'line', source: 'boundary', paint: { 'line-color': '#2563eb', 'line-width': 2, 'line-dasharray': [4, 4], 'line-opacity': 0 } });
+      map.addLayer({ id: 'boundary-vertices', type: 'circle', source: 'boundary', filter: ['==', '$type', 'LineString'], paint: { 'circle-radius': 4, 'circle-color': '#2563eb', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+      boundarySourceRef.current = map.getSource('boundary') as maplibregl.GeoJSONSource;
       fetchPropertiesRef.current(map.getBounds());
     };
+
+    let drawingStrokePoints: { lat: number; lng: number }[] = [];
+    const onMouseDown = (e: maplibregl.MapMouseEvent) => {
+      if (!isDrawingModeRef.current) return;
+      e.originalEvent.preventDefault();
+      e.originalEvent.stopPropagation();
+      isDrawingRef.current = true;
+      drawingStrokePoints = [{ lat: e.lngLat.lat, lng: e.lngLat.lng }];
+    };
+    const onMouseMove = (e: maplibregl.MapMouseEvent) => {
+      if (!isDrawingRef.current) return;
+      const last = drawingStrokePoints[drawingStrokePoints.length - 1];
+      const pt = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+      if (!last || Math.abs(pt.lat - last.lat) > 0.0002 || Math.abs(pt.lng - last.lng) > 0.0002) {
+        drawingStrokePoints.push(pt);
+        updateBoundaryLayerRef.current([...drawPointsRef.current, ...drawingStrokePoints]);
+      }
+    };
+    const onMouseUp = () => {
+      if (!isDrawingRef.current) return;
+      isDrawingRef.current = false;
+      if (drawingStrokePoints.length > 1) {
+        drawPointsRef.current = [...drawPointsRef.current, ...drawingStrokePoints];
+      }
+      drawingStrokePoints = [];
+      setBoundaryPoints([...drawPointsRef.current]);
+    };
+
     const onMoveEnd = () => {
       if (initialMoveEndRef.current) {
         initialMoveEndRef.current = false;
@@ -548,10 +631,16 @@ export default function BrowsePage() {
     };
 
     map.on('load', onLoad);
+    map.on('mousedown', onMouseDown);
+    map.on('mousemove', onMouseMove);
+    map.on('mouseup', onMouseUp);
     map.on('moveend', onMoveEnd);
 
     return () => {
       map.off('load', onLoad);
+      map.off('mousedown', onMouseDown);
+      map.off('mousemove', onMouseMove);
+      map.off('mouseup', onMouseUp);
       map.off('moveend', onMoveEnd);
       clearMarkers();
       map.remove();
@@ -663,6 +752,18 @@ export default function BrowsePage() {
     setProjects([]);
     setPropertyTotal(0);
     setProjectTotal(0);
+    setBoundaryActive(false);
+    setBoundaryPoints([]);
+    setIsDrawingMode(false);
+    drawPointsRef.current = [];
+    updateBoundaryLayerRef.current([]);
+    if (mapRef.current) {
+      mapRef.current.dragPan.enable();
+      mapRef.current.scrollZoom.enable();
+      mapRef.current.boxZoom.enable();
+      mapRef.current.doubleClickZoom.enable();
+      mapRef.current.getCanvas().style.cursor = '';
+    }
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
       fetchPropertiesRef.current(
@@ -725,6 +826,100 @@ export default function BrowsePage() {
       );
     }, 500);
   };
+
+  const updateBoundaryLayer = useCallback((points: { lat: number; lng: number }[]) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource('boundary') as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    if (points.length < 2) {
+      src.setData({ type: 'FeatureCollection', features: [] } as any);
+      map.setPaintProperty('boundary-fill', 'fill-opacity', 0);
+      map.setPaintProperty('boundary-outline', 'line-opacity', 0);
+      map.setPaintProperty('boundary-vertices', 'circle-opacity', 0);
+      return;
+    }
+    const coords: [number, number][] = points.map(p => [p.lng, p.lat]);
+    const isClosed = points.length >= 3;
+    const geometry = isClosed
+      ? { type: 'Polygon' as const, coordinates: [coords] }
+      : { type: 'LineString' as const, coordinates: coords };
+    src.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry, properties: {} }] } as any);
+    const isActive = boundaryActive && isClosed;
+    map.setPaintProperty('boundary-fill', 'fill-opacity', isActive ? 0.15 : 0.12);
+    map.setPaintProperty('boundary-outline', 'line-opacity', 0.8);
+    map.setPaintProperty('boundary-outline', 'line-width', isActive ? 3 : 2);
+    map.setPaintProperty('boundary-outline', 'line-dasharray', isActive ? [1, 0] : [4, 4]);
+    map.setPaintProperty('boundary-vertices', 'circle-opacity', 0);
+  }, [boundaryActive]);
+
+  useEffect(() => {
+    updateBoundaryLayerRef.current = updateBoundaryLayer;
+  }, [updateBoundaryLayer]);
+
+  const activateDrawing = useCallback(() => {
+    setIsDrawingMode(true);
+    setBoundaryPoints([]);
+    drawPointsRef.current = [];
+    clearMarkers();
+    if (mapRef.current) {
+      mapRef.current.dragPan.disable();
+      mapRef.current.scrollZoom.disable();
+      mapRef.current.boxZoom.disable();
+      mapRef.current.doubleClickZoom.disable();
+      mapRef.current.getCanvas().style.cursor = 'crosshair';
+    }
+  }, [clearMarkers]);
+
+  const cancelDrawing = useCallback(() => {
+    setIsDrawingMode(false);
+    drawPointsRef.current = [];
+    setBoundaryPoints([]);
+    updateBoundaryLayer([]);
+    if (mapRef.current) {
+      mapRef.current.dragPan.enable();
+      mapRef.current.scrollZoom.enable();
+      mapRef.current.boxZoom.enable();
+      mapRef.current.doubleClickZoom.enable();
+      mapRef.current.getCanvas().style.cursor = '';
+    }
+    fetchPropertiesRef.current(mapRef.current ? mapRef.current.getBounds() : null);
+  }, [updateBoundaryLayer]);
+
+  const applyBoundary = useCallback(() => {
+    const pts = drawPointsRef.current;
+    if (pts.length < 3) return;
+    const simplified = simplifyPolygon(pts);
+    drawPointsRef.current = simplified;
+    setBoundaryPoints(simplified);
+    setBoundaryActive(true);
+    setIsDrawingMode(false);
+    if (mapRef.current) {
+      mapRef.current.dragPan.enable();
+      mapRef.current.scrollZoom.enable();
+      mapRef.current.boxZoom.enable();
+      mapRef.current.doubleClickZoom.enable();
+      mapRef.current.getCanvas().style.cursor = '';
+    }
+    updateBoundaryLayer(simplified);
+    fetchPropertiesRef.current(null, undefined, simplified);
+  }, [updateBoundaryLayer]);
+
+  const removeBoundary = useCallback(() => {
+    setBoundaryActive(false);
+    setBoundaryPoints([]);
+    setIsDrawingMode(false);
+    drawPointsRef.current = [];
+    updateBoundaryLayer([]);
+    if (mapRef.current) {
+      mapRef.current.dragPan.enable();
+      mapRef.current.scrollZoom.enable();
+      mapRef.current.boxZoom.enable();
+      mapRef.current.doubleClickZoom.enable();
+      mapRef.current.getCanvas().style.cursor = '';
+    }
+    fetchPropertiesRef.current(mapRef.current ? mapRef.current.getBounds() : null);
+  }, [updateBoundaryLayer]);
 
   const combinedList = searchScope === 'both'
     ? [
@@ -873,6 +1068,37 @@ export default function BrowsePage() {
                     {isLocating ? <FaSpinner className="animate-spin"/> : <FaCrosshairs/>} {isLocating ? 'Locating...' : 'Use My Location'}
                   </button>
                   {locationError && <p className="text-xs text-danger-color mt-1 text-center">{locationError}</p>}
+                </div>
+
+                {/* Draw Boundary */}
+                <div>
+                  {!isDrawingMode && !boundaryActive && (
+                    <button onClick={activateDrawing} className="neumorphic-button w-full flex items-center justify-center gap-2">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 2 L22 8.5 L22 15.5 L12 22 L2 15.5 L2 8.5 Z"/>
+                        <circle cx="12" cy="12" r="3" fill="currentColor"/>
+                      </svg>
+                      Draw Boundary
+                    </button>
+                  )}
+                  {isDrawingMode && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-text-color-light text-center">Click & drag on map to draw a boundary. {boundaryPoints.length >= 3 ? `(${boundaryPoints.length} points)` : '(min 3 points required)'}</p>
+                      <div className="flex gap-2">
+                        <button onClick={cancelDrawing} className="neumorphic-button flex-1">Cancel</button>
+                        <button onClick={applyBoundary} disabled={boundaryPoints.length < 3} className="neumorphic-button bg-cta-gradient flex-1 disabled:opacity-50">Apply</button>
+                      </div>
+                    </div>
+                  )}
+                  {boundaryActive && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-success-color">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        Boundary Active ({boundaryPoints.length} pts)
+                      </div>
+                      <button onClick={removeBoundary} className="neumorphic-button w-full text-danger-color">Remove Boundary</button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
