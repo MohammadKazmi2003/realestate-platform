@@ -43,7 +43,7 @@ class Config:
         default_factory=lambda: os.getenv("MIMO_API_KEY", "")
     )
     MIMO_BASE_URL: str = field(
-        default_factory=lambda: os.getenv("MIMO_BASE_URL", "https://api.xiaomi.com/v1")
+        default_factory=lambda: os.getenv("MIMO_BASE_URL", "https://platform.xiaomimimo.com/v1")
     )
 
     # --- Supabase ---

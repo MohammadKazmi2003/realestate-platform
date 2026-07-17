@@ -36,7 +36,7 @@ async def get_llm_client():
         from openai import AsyncOpenAI
         _client = AsyncOpenAI(
             api_key=config.DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com/v1",
+            base_url="https://api.deepseek.com",
         )
 
     elif provider == "mimo":
@@ -61,8 +61,8 @@ def get_model_name() -> str:
     defaults = {
         "groq": "llama-3.1-8b-instant",
         "openai": "gpt-4o-mini",
-        "deepseek": "deepseek-chat",
-        "mimo": "MiMo-7B-RL",
+        "deepseek": "deepseek-v4-flash",
+        "mimo": "MiMo-V2.5",
     }
 
     return model or defaults.get(provider, "")
