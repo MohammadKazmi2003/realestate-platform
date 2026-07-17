@@ -16,6 +16,7 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"
     DEEPSEEK = "deepseek"
     MIMO = "mimo"
+    OPENROUTER = "openrouter"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,12 @@ class Config:
     )
     MIMO_BASE_URL: str = field(
         default_factory=lambda: os.getenv("MIMO_BASE_URL", "https://platform.xiaomimimo.com/v1")
+    )
+    OPENROUTER_API_KEY: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_API_KEY", "")
+    )
+    OPENROUTER_BASE_URL: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     )
 
     # --- Supabase ---

@@ -46,6 +46,13 @@ async def get_llm_client():
             base_url=config.MIMO_BASE_URL,
         )
 
+    elif provider == "openrouter":
+        from openai import AsyncOpenAI
+        _client = AsyncOpenAI(
+            api_key=config.OPENROUTER_API_KEY,
+            base_url=config.OPENROUTER_BASE_URL,
+        )
+
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
@@ -63,6 +70,7 @@ def get_model_name() -> str:
         "openai": "gpt-4o-mini",
         "deepseek": "deepseek-v4-flash",
         "mimo": "MiMo-V2.5",
+        "openrouter": "deepseek/deepseek-v4-flash:free",
     }
 
     return model or defaults.get(provider, "")
