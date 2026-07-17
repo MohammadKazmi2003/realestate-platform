@@ -10,11 +10,8 @@ openai
 cachetools
 tavily-python
 langchain-community
-langchain-tavily
-langchain-core
-langchain-groq
 langchain-huggingface
-langgraph
 pydantic
 bs4
 lxml
+redis

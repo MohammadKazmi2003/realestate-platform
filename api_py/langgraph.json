@@ -1,15 +1,19 @@
 {
     "graphs": {
-      "chatbot": "api_py/langchain_chatbot.py:app"
+      "chatbot": "api_py/main.py:app"
     },
     "dependencies": [
-      "langgraph",
-      "langchain-core",
-      "langchain-community",
-      "langchain-groq",
-      "openai",
       "fastapi",
-      "supabase"
+      "uvicorn",
+      "supabase",
+      "groq",
+      "openai",
+      "pydantic",
+      "sentence-transformers",
+      "torch",
+      "tavily-python",
+      "langchain-huggingface",
+      "bs4",
+      "lxml"
     ]
   }
-  
