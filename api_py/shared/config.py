@@ -14,6 +14,8 @@ load_dotenv()
 class LLMProvider(str, Enum):
     GROQ = "groq"
     OPENAI = "openai"
+    DEEPSEEK = "deepseek"
+    MIMO = "mimo"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,15 @@ class Config:
     )
     OPENAI_API_KEY: str = field(
         default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
+    )
+    DEEPSEEK_API_KEY: str = field(
+        default_factory=lambda: os.getenv("DEEPSEEK_API_KEY", "")
+    )
+    MIMO_API_KEY: str = field(
+        default_factory=lambda: os.getenv("MIMO_API_KEY", "")
+    )
+    MIMO_BASE_URL: str = field(
+        default_factory=lambda: os.getenv("MIMO_BASE_URL", "https://api.xiaomi.com/v1")
     )
 
     # --- Supabase ---

@@ -1,6 +1,6 @@
 """
 Shared LLM client factory.
-Provides async LLM clients for Groq and OpenAI providers.
+Provides async LLM clients for Groq, OpenAI, DeepSeek, and MiMo providers.
 """
 
 import logging
@@ -22,26 +22,50 @@ async def get_llm_client():
     if _client is not None:
         return _client
 
-    if config.LLM_PROVIDER.value == "groq":
+    provider = config.LLM_PROVIDER.value
+
+    if provider == "groq":
         from groq import AsyncGroq
         _client = AsyncGroq(api_key=config.GROQ_API_KEY)
-    elif config.LLM_PROVIDER.value == "openai":
+
+    elif provider == "openai":
         from openai import AsyncOpenAI
         _client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-    else:
-        raise ValueError(f"Unsupported LLM provider: {config.LLM_PROVIDER}")
 
-    logger.info(f"LLM client initialized: {config.LLM_PROVIDER.value}")
+    elif provider == "deepseek":
+        from openai import AsyncOpenAI
+        _client = AsyncOpenAI(
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com/v1",
+        )
+
+    elif provider == "mimo":
+        from openai import AsyncOpenAI
+        _client = AsyncOpenAI(
+            api_key=config.MIMO_API_KEY,
+            base_url=config.MIMO_BASE_URL,
+        )
+
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    logger.info(f"LLM client initialized: {provider}")
     return _client
 
 
 def get_model_name() -> str:
     """Get the model name for the current provider."""
-    if config.LLM_PROVIDER.value == "groq":
-        return config.LLM_MODEL
-    elif config.LLM_PROVIDER.value == "openai":
-        return config.LLM_MODEL or "gpt-4o-mini"
-    return config.LLM_MODEL
+    provider = config.LLM_PROVIDER.value
+    model = config.LLM_MODEL
+
+    defaults = {
+        "groq": "llama-3.1-8b-instant",
+        "openai": "gpt-4o-mini",
+        "deepseek": "deepseek-chat",
+        "mimo": "MiMo-7B-RL",
+    }
+
+    return model or defaults.get(provider, "")
 
 
 async def llm_chat(
