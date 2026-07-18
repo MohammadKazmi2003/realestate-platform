@@ -31,3 +31,24 @@
 .chat-markdown li {
   margin-bottom: 0.25rem;
 }
+
+.chat-markdown h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-top: 0.75rem;
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+}
+
+.chat-markdown h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: #334155;
+}
+
+.chat-markdown strong {
+  font-weight: 700;
+  color: #0f172a;
+}
