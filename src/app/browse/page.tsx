@@ -127,6 +127,7 @@ export default function BrowsePage() {
   const [sortedResultOrder, setSortedResultOrder] = useState<{ type: 'property' | 'project'; id: string }[]>([]);
   const [combinedNextCursor, setCombinedNextCursor] = useState<any[] | null>(null);
   const markerTickRef = useRef(0);
+  const isFetchingRef = useRef(false);
 
   const [boundaryPoints, setBoundaryPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
@@ -206,6 +207,8 @@ export default function BrowsePage() {
   };
 
   const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: { lat: number; lng: number }[] | null) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -415,6 +418,8 @@ export default function BrowsePage() {
           setPropertyTotal(0);
         }
       }
+    } finally {
+      isFetchingRef.current = false;
     }
     if (fetchId === fetchIdRef.current) {
       markerTickRef.current++;

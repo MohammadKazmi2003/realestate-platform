@@ -218,48 +218,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    let esResponse: any;
-    let hits: any[];
-    let total: number;
-    let propertyTotal = 0;
-    let projectTotal = 0;
+    const esQuery: any = {
+      index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
+      size: pageSize,
+      query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+      sort: sortClause,
+    };
 
     if (scope === 'both') {
-      // Run separate queries for properties and projects to ensure both types appear
-      const halfSize = Math.ceil(pageSize / 2);
-      const [propQuery, projQuery] = await Promise.all([
-        es.search({
-          index: ES_INDEX_ALIAS,
-          size: halfSize,
-          query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: [...filters] } },
-          sort: sortClause,
-          aggs: { by_entity_type: { terms: { field: 'entity_type', size: 2 } } },
-        }),
-        es.search({
-          index: PROJECTS_INDEX_ALIAS,
-          size: halfSize,
-          query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: [...filters] } },
-          sort: sortClause,
-          aggs: { by_entity_type: { terms: { field: 'entity_type', size: 2 } } },
-        }),
-      ]);
-      recordEsSuccess();
-
-      // Merge and sort by score
-      const propHits = propQuery.hits.hits.map((h: any) => ({ ...h, _source: { ...h._source, _esIndex: ES_INDEX_ALIAS } }));
-      const projHits = projQuery.hits.hits.map((h: any) => ({ ...h, _source: { ...h._source, _esIndex: PROJECTS_INDEX_ALIAS } }));
-      hits = [...propHits, ...projHits].sort((a: any, b: any) => (b._score || 0) - (a._score || 0)).slice(0, pageSize);
-
-      // Get totals from aggregations
-      const propAggBuckets = propQuery.aggregations?.by_entity_type?.buckets || [];
-      const projAggBuckets = projQuery.aggregations?.by_entity_type?.buckets || [];
-      for (const bucket of [...propAggBuckets, ...projAggBuckets]) {
-        if (bucket.key === 'property') propertyTotal += bucket.doc_count;
-        if (bucket.key === 'project') projectTotal += bucket.doc_count;
-      }
-      total = propertyTotal + projectTotal;
-
-      esResponse = { hits: { hits, total: { value: total, relation: 'eq' } }, aggregations: { by_entity_type: { buckets: [{ key: 'property', doc_count: propertyTotal }, { key: 'project', doc_count: projectTotal }] } } };
+      esQuery.aggs = {
+        by_entity_type: { terms: { field: 'entity_type', size: 2 } },
+      };
     } else {
       esQuery.aggs = {
         by_property_type: { terms: { field: 'property_type', size: 20 } },
@@ -269,7 +238,38 @@ export async function POST(req: NextRequest) {
         by_amenities: { terms: { field: 'amenities', size: 50 } },
         price_stats: { stats: { field: 'price' } },
       };
+    }
 
+    if (cursor) {
+      esQuery.search_after = cursor;
+    }
+
+    let esResponse: any;
+    let hits: any[];
+    let total: number;
+    let propertyTotal = 0;
+    let projectTotal = 0;
+
+    if (scope === 'both') {
+      // Parallel queries to ensure both types appear in results
+      const halfSize = Math.ceil(pageSize / 2);
+      const [propRes, projRes] = await Promise.all([
+        es.search({ ...esQuery, index: ES_INDEX_ALIAS, size: halfSize }),
+        es.search({ ...esQuery, index: PROJECTS_INDEX_ALIAS, size: halfSize }),
+      ]);
+      recordEsSuccess();
+
+      // Interleave results by score
+      const propHits = propRes.hits.hits;
+      const projHits = projRes.hits.hits;
+      hits = [...propHits, ...projHits].sort((a: any, b: any) => (b._score || 0) - (a._score || 0)).slice(0, pageSize);
+
+      const propTotal = typeof propRes.hits.total === 'object' ? propRes.hits.total.value : propRes.hits.total;
+      const projTotal = typeof projRes.hits.total === 'object' ? projRes.hits.total.value : projRes.hits.total;
+      propertyTotal = propTotal;
+      projectTotal = projTotal;
+      total = propTotal + projTotal;
+    } else {
       esResponse = await es.search(esQuery);
       recordEsSuccess();
       hits = esResponse.hits.hits;
@@ -285,13 +285,16 @@ export async function POST(req: NextRequest) {
     const response: any = {
       results,
       total,
+      aggregations: {},
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
-      aggregations: { facets: (esResponse as any).aggregations || {} },
     };
 
     if (scope === 'both') {
       response.propertyTotal = propertyTotal;
       response.projectTotal = projectTotal;
+      response.nextCursor = hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null;
+    } else {
+      response.aggregations = { facets: (esResponse as any).aggregations || {} };
     }
 
     await cacheSet(cacheKey, response, 60);
