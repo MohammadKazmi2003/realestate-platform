@@ -1,15 +1,17 @@
 """
 Property details service.
 Encapsulates business logic for fetching detailed property/project information.
+Uses Elasticsearch for fast lookups with Redis caching.
 """
 
 import logging
 from typing import Any, Optional
 from uuid import UUID
 
-from api_py.data.supabase_client import rpc_call
+from api_py.data.elasticsearch_client import es_search
 from api_py.shared.cache import TTLCache
 from api_py.shared.config import config
+from api_py.shared.redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +20,18 @@ _project_detail_cache = TTLCache(ttl_seconds=config.PROJECT_DETAIL_CACHE_TTL)
 
 
 class PropertyDetailsService:
-    """Handles property and project detail retrieval."""
+    """Handles property and project detail retrieval via Elasticsearch."""
 
     async def get_listing_details(self, listing_id: str) -> Optional[dict[str, Any]]:
         """
-        Get full details for a single property by UUID.
+        Get full details for a single listing by UUID.
+        Searches both properties and projects indices.
 
         Args:
-            listing_id: The UUID of the property.
+            listing_id: The UUID of the property or project.
 
         Returns:
-            Property details dict, or None if not found.
+            Listing details dict, or None if not found.
         """
         if not listing_id:
             logger.warning("get_listing_details called with empty listing_id")
@@ -40,19 +43,31 @@ class PropertyDetailsService:
             logger.error(f"Invalid UUID: {listing_id}")
             return None
 
+        cache_key = f"property:{listing_id}"
+
+        # Try Redis first, then in-memory
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            logger.info(f"get_listing_details Redis cache HIT for {listing_id}")
+            return cached
         cached = _detail_cache.get(listing_id)
         if cached is not None:
-            logger.info(f"get_listing_details cache HIT for {listing_id}")
+            logger.info(f"get_listing_details in-memory cache HIT for {listing_id}")
             return cached
 
         try:
-            data = await rpc_call(
-                "get_listing_details", {"p_listing_id": listing_id}
-            )
-            if not data:
+            body = {
+                "query": {"ids": {"values": [listing_id]}},
+            }
+            result = await es_search("properties_search,projects_search", body, size=1)
+            hits = result["hits"]["hits"]
+
+            if not hits:
                 return None
 
-            details = data[0] if isinstance(data, list) else data
+            details = hits[0]["_source"]
+            details["id"] = hits[0]["_id"]
+            await cache_set(cache_key, details, ttl=300)
             _detail_cache.set(listing_id, details)
             return details
 
@@ -74,17 +89,30 @@ class PropertyDetailsService:
             logger.warning("get_project_details called with empty slug")
             return None
 
+        cache_key = f"project:{slug}"
+
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            logger.info(f"get_project_details Redis cache HIT for '{slug}'")
+            return cached
         cached = _project_detail_cache.get(slug)
         if cached is not None:
-            logger.info(f"get_project_details cache HIT for '{slug}'")
+            logger.info(f"get_project_details in-memory cache HIT for '{slug}'")
             return cached
 
         try:
-            data = await rpc_call("get_project_by_slug", {"p_slug": slug})
-            if not data:
+            body = {
+                "query": {"term": {"slug": slug}},
+            }
+            result = await es_search("projects_search", body, size=1)
+            hits = result["hits"]["hits"]
+
+            if not hits:
                 return None
 
-            details = data[0] if isinstance(data, list) else data
+            details = hits[0]["_source"]
+            details["id"] = hits[0]["_id"]
+            await cache_set(cache_key, details, ttl=300)
             _project_detail_cache.set(slug, details)
             return details
 

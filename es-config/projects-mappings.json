@@ -84,12 +84,37 @@
       },
       "location": { "type": "geo_point" },
       "amenities": { "type": "keyword" },
+      "bedrooms": { "type": "integer" },
+      "city": { "type": "keyword" },
       "sort_price": { "type": "scaled_float", "scaling_factor": 100 },
       "entity_type": { "type": "keyword" },
       "status": { "type": "keyword" },
       "image_url": { "type": "keyword", "index": false },
       "created_at": { "type": "date" },
-      "suggest": { "type": "completion" }
+      "suggest": { "type": "completion" },
+
+      "description_html": { "type": "text", "index": false },
+      "master_plan_description": { "type": "text", "index": false },
+      "master_plan_storage_path": { "type": "keyword", "index": false },
+      "brochure_storage_path": { "type": "keyword", "index": false },
+      "price_currency": { "type": "keyword" },
+      "latitude": { "type": "double" },
+      "longitude": { "type": "double" },
+      "construction_progress_percent": { "type": "integer" },
+      "developer_detail": { "type": "object", "enabled": false },
+      "project_media": { "type": "object", "enabled": false },
+      "project_videos": { "type": "object", "enabled": false },
+      "unit_configurations": { "type": "object", "enabled": false },
+      "faqs": { "type": "object", "enabled": false },
+      "amenities_detail": { "type": "object", "enabled": false },
+      "price_range": { "type": "object", "enabled": false },
+      "description_embedding": {
+        "type": "dense_vector",
+        "dims": 768,
+        "element_type": "float",
+        "index": true,
+        "similarity": "cosine"
+      }
     }
   }
 }

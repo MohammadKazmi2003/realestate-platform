@@ -34,6 +34,18 @@ const es = new Client({ node: ES_URL, maxRetries: 3 });
 
 const INDEX_NAME = `projects_${INDEX_VERSION}`;
 
+function parseEmbedding(raw) {
+  if (!raw) return null;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return null;
+}
+
 async function applyIndexTemplate() {
   const templatePath = path.join(__dirname, '..', 'es-config', 'projects-index-template.json');
   if (!fs.existsSync(templatePath)) {
@@ -91,12 +103,30 @@ async function setupAlias() {
 }
 
 async function buildProjectDocument(project) {
-  const [developerRes, imageRes, locationRes, amenityRes] = await Promise.all([
-    supabase.from('developers').select('name').eq('id', project.developer_id).maybeSingle(),
+  const [developerRes, imageRes, locationRes, amenityRes, videosRes, unitConfigsRes, faqsRes, allImagesRes] = await Promise.all([
+    supabase.from('developers').select('name, logo_storage_path').eq('id', project.developer_id).maybeSingle(),
     supabase.from('project_images').select('storage_path_original').eq('project_id', project.id).order('is_primary', { ascending: false }).order('id', { ascending: true }).limit(1).maybeSingle(),
-    supabase.from('project_locations').select('locations(name)').eq('project_id', project.id).order('level', { referencedTable: 'locations', ascending: false }).limit(1).maybeSingle(),
-    supabase.from('project_amenities').select('amenities(name)').eq('project_id', project.id),
+    supabase.from('project_locations').select('locations(name, id, parent_id)').eq('project_id', project.id).order('level', { referencedTable: 'locations', ascending: false }).limit(1).maybeSingle(),
+    supabase.from('project_amenities').select('amenity_id, amenities(name)').eq('project_id', project.id),
+    supabase.from('project_videos').select('*').eq('project_id', project.id),
+    supabase.from('unit_configurations').select('*').eq('project_id', project.id),
+    supabase.from('faqs').select('question, answer').eq('project_id', project.id),
+    supabase.from('project_images').select('storage_path_original, is_primary').eq('project_id', project.id).order('is_primary', { ascending: false }).order('id', { ascending: true }),
   ]);
+
+  // Resolve city by traversing location hierarchy
+  let city = '';
+  const communityName = locationRes.data?.locations?.name || '';
+  let parentId = locationRes.data?.locations?.parent_id;
+  while (parentId) {
+    const { data: parentLoc } = await supabase.from('locations').select('name, level, parent_id').eq('id', parentId).single();
+    if (!parentLoc) break;
+    if (parentLoc.level === 'CITY') {
+      city = parentLoc.name;
+      break;
+    }
+    parentId = parentLoc.parent_id;
+  }
 
   const amenities = (amenityRes.data || [])
     .map((a) => a.amenities?.name || '')
@@ -115,18 +145,51 @@ async function buildProjectDocument(project) {
     status: 'available',
     construction_phase: project.construction_phase || '',
     delivery_date: project.delivery_date || null,
-    location_text: locationRes.data?.locations?.name || '',
+    location_text: communityName,
+    city,
     location: project.latitude != null && project.longitude != null
       ? { lat: Number(project.latitude), lon: Number(project.longitude) }
       : null,
     amenities,
+    bedrooms: (unitConfigsRes.data || []).reduce((min, uc) => {
+      const b = parseInt(uc.bedrooms) || 0;
+      return min === null || b < min ? b : min;
+    }, null) ?? 0,
     image_url: imageRes.data?.storage_path_original || null,
     created_at: project.created_at,
     suggest: [
       project.name?.trim(),
-      locationRes.data?.locations?.name?.trim(),
+      communityName.trim(),
       developerRes.data?.name?.trim(),
     ].filter(Boolean),
+
+    // Detail fields for retrieval (stored, not indexed)
+    description_html: project.description_html || '',
+    master_plan_description: project.master_plan_description || '',
+    master_plan_storage_path: project.master_plan_storage_path || '',
+    brochure_storage_path: project.brochure_storage_path || '',
+    price_currency: project.price_currency || 'AED',
+    latitude: project.latitude ? Number(project.latitude) : null,
+    longitude: project.longitude ? Number(project.longitude) : null,
+    construction_progress_percent: project.construction_progress_percent || 0,
+    developer_detail: developerRes.data ? { id: project.developer_id, name: developerRes.data.name, logo: developerRes.data.logo_storage_path } : null,
+    project_media: (allImagesRes.data || []).map((m) => ({
+      storage_path: m.storage_path_original,
+      is_primary: m.is_primary,
+    })),
+    project_videos: (videosRes.data || []),
+    unit_configurations: (unitConfigsRes.data || []),
+    faqs: (faqsRes.data || []),
+    amenities_detail: (amenityRes.data || []).map((a) => ({
+      id: a.amenity_id,
+      name: a.amenities?.name,
+    })),
+    price_range: {
+      low: project.low_price || 0,
+      high: project.high_price || 0,
+      currency: project.price_currency || 'AED',
+    },
+    description_embedding: parseEmbedding(project.description_embedding),
   };
 
   return doc;

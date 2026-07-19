@@ -1,22 +1,25 @@
 """
 Property search service.
 Encapsulates all property search business logic (structured, text, semantic).
-Delegates data access to the data layer.
+Delegates data access to Elasticsearch with Supabase RPC fallback.
 """
 
+import asyncio
+import json
 import logging
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
-from api_py.data.supabase_client import rpc_call, table_query
+from api_py.data.elasticsearch_client import es_search
 from api_py.data.embedding_engine import embed_query
 from api_py.shared.cache import TTLCache
 from api_py.shared.config import config
+from api_py.shared.redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
-# --- Service-level caches ---
+# --- Service-level caches (in-memory fallback) ---
 _search_cache = TTLCache(ttl_seconds=config.TEXT_SEARCH_CACHE_TTL, max_size=200)
 
 
@@ -36,18 +39,18 @@ class StructuredSearchParams(BaseModel):
     def validate_property_type(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        v_lower = v.lower()
-        if "apartment" in v_lower:
-            return "apartment"
-        if "villa" in v_lower:
-            return "villa"
-        if "plot" in v_lower:
-            return "plot"
-        if "commercial" in v_lower:
-            return "commercial"
-        if "land" in v_lower:
-            return "land"
-        return v
+        # Map user-facing values to ES canonical values
+        type_map = {
+            "apartment": "Residential Apartment",
+            "villa": "Independent House/Villa",
+            "house": "Independent House/Villa",
+            "plot": "Land / Plot",
+            "land": "Land / Plot",
+            "commercial": "Commercial",
+            "studio": "Residential Apartment",
+            "penthouse": "Residential Apartment",
+        }
+        return type_map.get(v.lower(), v)
 
     @field_validator("bedrooms", mode="before")
     @classmethod
@@ -60,19 +63,8 @@ class StructuredSearchParams(BaseModel):
         return v
 
 
-class PropertyResult(BaseModel):
-    id: str
-    title: Optional[str] = None
-    price: Optional[float] = None
-    location: Optional[str] = None
-    property_type: Optional[str] = None
-    bedrooms: Optional[int] = None
-    listing_type: Optional[str] = None
-    slug: Optional[str] = None
-
-
 class PropertySearchService:
-    """Handles all property search operations."""
+    """Handles all property search operations via Elasticsearch."""
 
     async def structured_search(
         self, params: StructuredSearchParams
@@ -86,33 +78,80 @@ class PropertySearchService:
         Returns:
             List of matching property dicts.
         """
-        cache_key = f"structured:{params.model_dump_json()}"
+        import json
+        cache_key = f"s:{json.dumps(params.model_dump(), sort_keys=True, default=str)}"
+
+        # Try Redis first, then in-memory
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            logger.info("structured_search Redis cache HIT")
+            return cached
         cached = _search_cache.get(cache_key)
         if cached is not None:
-            logger.info(f"structured_search cache HIT")
+            logger.info("structured_search in-memory cache HIT")
             return cached
 
-        rpc_params = {
-            "p_location": params.location,
-            "p_property_type": params.property_type,
-            "p_min_price": params.min_price,
-            "p_max_price": params.max_price,
-            "p_bedrooms": params.bedrooms,
-            "p_amenities": None,
-            "p_exclude_ids": [],
-            "p_page": params.page,
-            "p_limit": params.limit,
+        must = []
+        filters = [{"term": {"status": "available"}}]
+
+        if params.location:
+            must.append({
+                "bool": {
+                    "should": [
+                        {"multi_match": {
+                            "query": params.location,
+                            "fields": ["location_text^3", "title^2"],
+                            "fuzziness": "AUTO",
+                        }},
+                        {"term": {"city": params.location}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            })
+        if params.property_type:
+            filters.append({
+                "bool": {
+                    "should": [
+                        {"term": {"property_type": params.property_type}},
+                        {"bool": {"must_not": {"exists": {"field": "property_type"}}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            })
+        if params.min_price is not None or params.max_price is not None:
+            price_range: dict[str, Any] = {}
+            if params.min_price is not None:
+                price_range["gte"] = params.min_price
+            if params.max_price is not None:
+                price_range["lte"] = params.max_price
+            filters.append({
+                "bool": {
+                    "should": [
+                        {"range": {"price": price_range}},
+                        {"range": {"low_price": price_range}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            })
+        if params.bedrooms is not None:
+            filters.append({"term": {"bedrooms": params.bedrooms}})
+
+        body = {
+            "query": {"bool": {"must": must, "filter": filters}},
+            "sort": ["_score", {"_doc": "asc"}],
+            "from": (params.page - 1) * params.limit,
         }
-        # Remove None values
-        rpc_params = {k: v for k, v in rpc_params.items() if v is not None}
 
         try:
-            data = await rpc_call("search_all_properties", rpc_params)
+            result = await es_search("properties_search,projects_search", body, size=params.limit)
+            hits = result["hits"]["hits"]
+            data = [hit["_source"] | {"id": hit["_id"]} for hit in hits]
             if data:
+                await cache_set(cache_key, data, ttl=60)
                 _search_cache.set(cache_key, data)
-            return data or []
+            return data
         except Exception as e:
-            logger.error(f"structured_search error: {e}")
+            logger.error(f"structured_search ES error: {e}")
             return []
 
     async def text_search(self, query: str) -> list[dict[str, Any]]:
@@ -125,27 +164,43 @@ class PropertySearchService:
         Returns:
             List of matching property dicts.
         """
-        cache_key = f"text:{query}"
+        cache_key = f"s:{json.dumps({'query': query, 'type': 'text'}, sort_keys=True)}"
+
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            logger.info(f"text_search Redis cache HIT for '{query}'")
+            return cached
         cached = _search_cache.get(cache_key)
         if cached is not None:
-            logger.info(f"text_search cache HIT for '{query}'")
+            logger.info(f"text_search in-memory cache HIT for '{query}'")
             return cached
 
+        body = {
+            "query": {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["title^3", "project_name^3", "description", "location_text^2"],
+                    "fuzziness": "AUTO",
+                }
+            },
+        }
+
         try:
-            data = await rpc_call(
-                "text_search_properties",
-                {"p_query": query, "p_exclude_ids": []},
-            )
+            result = await es_search("properties_search,projects_search", body, size=10)
+            hits = result["hits"]["hits"]
+            data = [hit["_source"] | {"id": hit["_id"]} for hit in hits]
             if data:
+                await cache_set(cache_key, data, ttl=60)
                 _search_cache.set(cache_key, data)
-            return data or []
+            return data
         except Exception as e:
-            logger.error(f"text_search error: {e}")
+            logger.error(f"text_search ES error: {e}")
             return []
 
     async def semantic_search(self, query: str) -> list[dict[str, Any]]:
         """
         Search properties using natural language descriptions via vector similarity.
+        Uses ES kNN as primary, Supabase RPC as fallback.
 
         Args:
             query: A descriptive or conceptual query.
@@ -155,6 +210,35 @@ class PropertySearchService:
         """
         try:
             query_embedding = await _embed_query_async(query)
+        except Exception as e:
+            logger.error(f"Embedding generation failed: {e}")
+            return []
+
+        # Tier 1: ES kNN on both indices
+        try:
+            body = {
+                "knn": {
+                    "field": "description_embedding",
+                    "query_vector": query_embedding,
+                    "k": 10,
+                    "num_candidates": 100,
+                    "filter": {"term": {"status": "available"}},
+                },
+                "_source": {"excludes": ["description_embedding", "suggest", "detail_media"]},
+            }
+            result = await es_search("projects_search,properties_search", body, size=5)
+            hits = result["hits"]["hits"]
+            if hits:
+                return [
+                    hit["_source"] | {"id": hit["_id"], "similarity": hit["_score"]}
+                    for hit in hits
+                ]
+        except Exception as e:
+            logger.warning(f"ES kNN search failed, falling back to Supabase: {e}")
+
+        # Tier 2: Supabase RPC fallback
+        try:
+            from api_py.data.supabase_client import rpc_call, table_query
 
             matches = await rpc_call(
                 "match_property_chunks",
@@ -164,7 +248,6 @@ class PropertySearchService:
                     "match_count": 10,
                 },
             )
-
             if not matches:
                 return []
 
@@ -182,7 +265,7 @@ class PropertySearchService:
             return results or []
 
         except Exception as e:
-            logger.error(f"semantic_search error: {e}", exc_info=True)
+            logger.error(f"Semantic search RPC fallback failed: {e}")
             return []
 
     async def search_projects(self, query: str) -> list[dict[str, Any]]:
@@ -195,33 +278,38 @@ class PropertySearchService:
         Returns:
             List of matching project dicts.
         """
-        cache_key = f"project:{query}"
+        cache_key = f"s:{json.dumps({'query': query, 'type': 'project'}, sort_keys=True)}"
+
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
         cached = _search_cache.get(cache_key)
         if cached is not None:
             return cached
 
+        body = {
+            "query": {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["name^3", "description", "developer_name^2", "location_text^2"],
+                    "fuzziness": "AUTO",
+                }
+            },
+        }
+
         try:
-            data = await rpc_call(
-                "text_search_properties",
-                {"p_query": query, "p_exclude_ids": []},
-            )
-            if not data:
-                return []
-
-            projects = [
-                item for item in data if item.get("listing_type") == "project"
-            ]
-            if projects:
-                _search_cache.set(cache_key, projects)
-            return projects or []
-
+            result = await es_search("projects_search", body, size=10)
+            hits = result["hits"]["hits"]
+            data = [hit["_source"] | {"id": hit["_id"]} for hit in hits]
+            if data:
+                await cache_set(cache_key, data, ttl=60)
+                _search_cache.set(cache_key, data)
+            return data
         except Exception as e:
-            logger.error(f"search_projects error: {e}")
+            logger.error(f"search_projects ES error: {e}")
             return []
 
 
 async def _embed_query_async(text: str) -> list[float]:
     """Run embedding in a thread to avoid blocking the event loop."""
-    import asyncio
-
     return await asyncio.to_thread(embed_query, text)

@@ -126,7 +126,30 @@
       },
       "created_at": { "type": "date" },
       "updated_at": { "type": "date" },
-      "suggest": { "type": "completion" }
+      "suggest": { "type": "completion" },
+
+      "description_html": { "type": "text", "index": false },
+      "profiles": { "type": "object", "enabled": false },
+      "property_types_detail": { "type": "object", "enabled": false },
+      "lookup_listing_purposes_detail": { "type": "object", "enabled": false },
+      "details_residential": { "type": "object", "enabled": false },
+      "details_commercial": { "type": "object", "enabled": false },
+      "details_land": { "type": "object", "enabled": false },
+      "detail_media": {
+        "type": "nested",
+        "properties": {
+          "media_url": { "type": "keyword", "index": false },
+          "media_type": { "type": "keyword" },
+          "display_order": { "type": "integer" }
+        }
+      },
+      "description_embedding": {
+        "type": "dense_vector",
+        "dims": 768,
+        "element_type": "float",
+        "index": true,
+        "similarity": "cosine"
+      }
     }
   }
 }

@@ -23,20 +23,24 @@ def strip_html(text: Optional[str]) -> str:
 
 
 def format_property_summary(properties: List[Dict[str, Any]]) -> str:
-    """Format a list of properties into a compact summary for LLM context."""
+    """Format a list of properties/projects into a compact summary for LLM context."""
     if not properties:
         return "No properties found."
     summary_lines = []
     for i, prop in enumerate(properties, 1):
-        price_num = prop.get("price")
+        title = prop.get("title") or prop.get("name", "Unknown")
+        price_num = prop.get("price") or prop.get("low_price")
         price = (
             f"AED{price_num:,.0f}"
-            if isinstance(price_num, (int, float))
+            if isinstance(price_num, (int, float)) and price_num > 0
             else "Price on request"
         )
+        location = prop.get("location_text") or prop.get("location", "")
+        if isinstance(location, dict):
+            location = f"({location.get('lat', '?')}, {location.get('lon', '?')})"
         summary_lines.append(
-            f"Index: {i}, ID: {prop.get('id')}, Title: {prop.get('title')}, "
-            f"Price: {price}, Location: {prop.get('location')}"
+            f"Index: {i}, ID: {prop.get('id')}, Title: {title}, "
+            f"Price: {price}, Location: {location}"
         )
     return "\n".join(summary_lines)
 

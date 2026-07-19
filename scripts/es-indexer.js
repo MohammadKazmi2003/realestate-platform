@@ -52,6 +52,18 @@ function parseWKTPoint(wkt) {
   return { latitude: null, longitude: null };
 }
 
+function parseEmbedding(raw) {
+  if (!raw) return null;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return null;
+}
+
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('Error: SUPABASE_URL and SUPABASE_SERVICE_KEY are required.');
   process.exit(1);
@@ -160,6 +172,7 @@ async function buildPropertyDocument(property) {
     ownership_type: '',
     bhk_type: bhkLabel || '',
     bhk_type_id: residentialRes.data?.bhk_type_id || null,
+    bedrooms: bhkLabel ? parseInt(bhkLabel) || 0 : 0,
     bathrooms: residentialRes.data?.bathrooms || 0,
     balconies: residentialRes.data?.balconies || 0,
     area_sqft: areaData.carpet_area || areaData.plot_area || 0,
@@ -185,6 +198,21 @@ async function buildPropertyDocument(property) {
       property.location_text?.trim(),
       projectRes.data?.name?.trim(),
     ].filter(Boolean),
+
+    // Detail fields for retrieval (stored, not indexed)
+    description_html: property.description_html || '',
+    profiles: profileRes.data ? { name: profileRes.data.name, phone_number: profileRes.data.phone_number } : null,
+    property_types_detail: typeRes.data ? { name: typeRes.data.name } : null,
+    lookup_listing_purposes_detail: purposeRes.data ? { name: purposeRes.data.name } : null,
+    details_residential: residentialRes.data ? [residentialRes.data] : [],
+    details_commercial: commercialRes.data ? [commercialRes.data] : [],
+    details_land: landRes.data ? [landRes.data] : [],
+    detail_media: (mediaRes.data || []).map((m) => ({
+      media_url: m.media_url,
+      media_type: m.media_type,
+      display_order: m.display_order,
+    })),
+    description_embedding: parseEmbedding(property.description_embedding),
   };
 
   return doc;

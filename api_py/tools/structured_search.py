@@ -44,9 +44,9 @@ class StructuredPropertySearchTool(MCPTool):
         ToolParameter(
             name="property_type",
             type="string",
-            description="The type of property.",
+            description="The type of property. Use: apartment, villa, house, plot, commercial, land, studio, penthouse.",
             required=False,
-            enum=["apartment", "villa", "plot", "commercial", "land"],
+            enum=["apartment", "villa", "house", "plot", "commercial", "land", "studio", "penthouse"],
         ),
         ToolParameter(
             name="min_price",
@@ -65,6 +65,7 @@ class StructuredPropertySearchTool(MCPTool):
             type="integer",
             description="Number of bedrooms required. Example: 2 for a 2BHK.",
             required=False,
+            enum=[1, 2, 3, 4, 5, 6],
         ),
         ToolParameter(
             name="page",
