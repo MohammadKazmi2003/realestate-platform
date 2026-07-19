@@ -244,14 +244,14 @@ export async function POST(req: NextRequest) {
       esQuery.search_after = cursor;
     }
 
-    let esResponse: any;
     let hits: any[];
     let total: number;
     let propertyTotal = 0;
     let projectTotal = 0;
+    let aggregations: any = {};
 
     if (scope === 'both') {
-      // Parallel queries to ensure both types appear in results
+      // Two parallel queries so both entity types appear regardless of index size imbalance
       const halfSize = Math.ceil(pageSize / 2);
       const [propRes, projRes] = await Promise.all([
         es.search({ ...esQuery, index: ES_INDEX_ALIAS, size: halfSize }),
@@ -259,21 +259,19 @@ export async function POST(req: NextRequest) {
       ]);
       recordEsSuccess();
 
-      // Interleave results by score
       const propHits = propRes.hits.hits;
       const projHits = projRes.hits.hits;
       hits = [...propHits, ...projHits].sort((a: any, b: any) => (b._score || 0) - (a._score || 0)).slice(0, pageSize);
 
-      const propTotal = typeof propRes.hits.total === 'object' ? propRes.hits.total.value : propRes.hits.total;
-      const projTotal = typeof projRes.hits.total === 'object' ? projRes.hits.total.value : projRes.hits.total;
-      propertyTotal = propTotal;
-      projectTotal = projTotal;
-      total = propTotal + projTotal;
+      propertyTotal = typeof propRes.hits.total === 'object' ? propRes.hits.total.value : propRes.hits.total;
+      projectTotal = typeof projRes.hits.total === 'object' ? projRes.hits.total.value : projRes.hits.total;
+      total = propertyTotal + projectTotal;
     } else {
-      esResponse = await es.search(esQuery);
+      const esResponse = await es.search(esQuery);
       recordEsSuccess();
       hits = esResponse.hits.hits;
       total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
+      aggregations = { facets: (esResponse as any).aggregations || {} };
     }
 
     const results = hits.map((hit: any) => ({
@@ -285,16 +283,13 @@ export async function POST(req: NextRequest) {
     const response: any = {
       results,
       total,
-      aggregations: {},
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
+      aggregations,
     };
 
     if (scope === 'both') {
       response.propertyTotal = propertyTotal;
       response.projectTotal = projectTotal;
-      response.nextCursor = hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null;
-    } else {
-      response.aggregations = { facets: (esResponse as any).aggregations || {} };
     }
 
     await cacheSet(cacheKey, response, 60);
