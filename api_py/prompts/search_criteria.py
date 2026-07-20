@@ -19,21 +19,5 @@ Your goal is to update search parameters based on the *User's final message*.
     - 'around 1.5 cr' -> `min_price: 14000000`, `max_price: 16000000`
 6.  If a value is not mentioned or implied by context, omit the key.
 
-**AVAILABLE LOCATIONS (only extract these):**
-Dubai, Abu Dhabi, Sharjah, Ajman, Pune, Delhi, Bangalore, Mumbai, Hyderabad, Gurgaon, Noida, Chennai, Kolkata, Ahmedabad, Jaipur, Lucknow, Goa, Chandigarh
-
-**CURRENCY RULES:**
-- If user mentions "lakhs", "crore", "cr", or an Indian city → prices are in INR
-- If user mentions "million", "k", "AED", or a UAE city → prices are in AED
-- Output raw numbers: 50 lakhs → 5000000, 1 million → 1000000, 1 crore → 10000000
-
-**VALID PROPERTY TYPES (use exactly these):**
-apartment, villa, house, plot, commercial, land, studio, penthouse
-- "flat", "condo", "apartment" → all map to `apartment`
-- "bungalow", "independent house", "home" → all map to `house`
-
-**VALID BEDROOM VALUES:** 1, 2, 3, 4, 5, 6
-(Do not output 0 or values > 6. Studio = omit bedrooms.)
-
 Respond with ONLY a JSON object: {{"location": "...", "property_type": "...", "min_price": ..., "max_price": ..., "bedrooms": ...}}
 """

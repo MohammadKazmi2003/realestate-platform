@@ -39,18 +39,28 @@ class StructuredSearchParams(BaseModel):
     def validate_property_type(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        # Map user-facing values to ES canonical values
+        v_lower = v.lower()
+        # Map user terms to actual ES property_type values
         type_map = {
             "apartment": "Residential Apartment",
+            "flat": "Residential Apartment",
+            "condo": "Residential Apartment",
+            "studio": "Residential Apartment",
             "villa": "Independent House/Villa",
             "house": "Independent House/Villa",
+            "home": "Independent House/Villa",
+            "bungalow": "Independent House/Villa",
+            "penthouse": "Residential Apartment",
             "plot": "Land / Plot",
             "land": "Land / Plot",
             "commercial": "Commercial",
-            "studio": "Residential Apartment",
-            "penthouse": "Residential Apartment",
+            "office": "Commercial",
+            "residential": "Residential",
         }
-        return type_map.get(v.lower(), v)
+        for key, es_value in type_map.items():
+            if key in v_lower:
+                return es_value
+        return v
 
     @field_validator("bedrooms", mode="before")
     @classmethod

@@ -65,12 +65,6 @@ class Config:
     TAVILY_API_KEY: str = field(
         default_factory=lambda: os.getenv("TAVILY_API_KEY", "")
     )
-    ELASTICSEARCH_URL: str = field(
-        default_factory=lambda: os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
-    )
-    REDIS_URL: str = field(
-        default_factory=lambda: os.getenv("REDIS_URL", "redis://localhost:6379")
-    )
 
     # --- Server ---
     HOST: str = field(

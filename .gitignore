@@ -61,3 +61,10 @@ components.json
         remote_dump.backup
         tests/
         updateLocal.dump
+
+# Test artifacts
+test_results.json
+chatbot_test_results.json
+
+# opencode
+.opencode/
