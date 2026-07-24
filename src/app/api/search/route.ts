@@ -244,35 +244,9 @@ export async function POST(req: NextRequest) {
       esQuery.search_after = cursor;
     }
 
-    let hits: any[];
-    let total: number;
-    let propertyTotal = 0;
-    let projectTotal = 0;
-    let aggregations: any = {};
-
-    if (scope === 'both') {
-      // Two parallel queries so both entity types appear regardless of index size imbalance
-      const halfSize = Math.ceil(pageSize / 2);
-      const [propRes, projRes] = await Promise.all([
-        es.search({ ...esQuery, index: ES_INDEX_ALIAS, size: halfSize }),
-        es.search({ ...esQuery, index: PROJECTS_INDEX_ALIAS, size: halfSize }),
-      ]);
-      recordEsSuccess();
-
-      const propHits = propRes.hits.hits;
-      const projHits = projRes.hits.hits;
-      hits = [...propHits, ...projHits].sort((a: any, b: any) => (b._score || 0) - (a._score || 0)).slice(0, pageSize);
-
-      propertyTotal = typeof propRes.hits.total === 'object' ? propRes.hits.total.value : propRes.hits.total;
-      projectTotal = typeof projRes.hits.total === 'object' ? projRes.hits.total.value : projRes.hits.total;
-      total = propertyTotal + projectTotal;
-    } else {
-      const esResponse = await es.search(esQuery);
-      recordEsSuccess();
-      hits = esResponse.hits.hits;
-      total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
-      aggregations = { facets: (esResponse as any).aggregations || {} };
-    }
+    const esResponse = await es.search(esQuery);
+    recordEsSuccess();
+    const hits = esResponse.hits.hits;
 
     const results = hits.map((hit: any) => ({
       ...hit._source,
@@ -280,11 +254,23 @@ export async function POST(req: NextRequest) {
       _sort: hit.sort,
     }));
 
+    const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
+
+    let propertyTotal = 0;
+    let projectTotal = 0;
+    if (scope === 'both') {
+      const entityAgg = (esResponse as any).aggregations?.by_entity_type?.buckets || [];
+      for (const bucket of entityAgg) {
+        if (bucket.key === 'property') propertyTotal = bucket.doc_count;
+        if (bucket.key === 'project') projectTotal = bucket.doc_count;
+      }
+    }
+
     const response: any = {
       results,
       total,
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
-      aggregations,
+      aggregations: { facets: (esResponse as any).aggregations || {} },
     };
 
     if (scope === 'both') {

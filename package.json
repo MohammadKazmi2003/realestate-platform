@@ -14,10 +14,12 @@
     "es:verify": "node scripts/es-indexer.js verify",
     "es:index-one": "node scripts/es-indexer.js index-one",
     "seed": "node scripts/seed-data.js",
+    "ch:sync": "node scripts/sync-to-clickhouse.js",
     "provision": "node scripts/provision-customer.js",
     "worker": "npx tsx src/worker/index.ts"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.23.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@elastic/elasticsearch": "^8.15.0",
@@ -36,6 +38,7 @@
     "dotenv": "^17.4.2",
     "embla-carousel-react": "^8.6.0",
     "fuse.js": "^7.4.2",
+    "h3-js": "^4.5.0",
     "ioredis": "^5.11.1",
     "libphonenumber-js": "^1.12.9",
     "lucide-react": "^0.511.0",

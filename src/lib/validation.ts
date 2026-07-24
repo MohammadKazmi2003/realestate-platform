@@ -67,7 +67,7 @@ export const searchQuerySchema = z.object({
   bounds: boundsSchema.optional(),
   polygon: polygonSchema,
   cursor: z.array(z.any()).optional(),
-  pageSize: z.number().min(1).max(100).optional(),
+  pageSize: z.number().min(1).max(500).optional(),
   sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular']).optional(),
   scope: z.enum(['properties', 'projects', 'both']).optional(),
 });

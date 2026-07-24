@@ -1,7 +1,7 @@
 'use client';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
-import maplibregl, { LngLatBounds, Marker, Popup } from 'maplibre-gl';
+import maplibregl, { LngLatBounds } from 'maplibre-gl';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { FaMap, FaList, FaSpinner, FaCrosshairs, FaBuilding, FaHome } from 'react-icons/fa';
@@ -12,6 +12,10 @@ import { cn } from '@/lib/utils';
 import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
 import type { Project } from '@/lib/types';
+import { MapClustering, type ClusterPoint, type ResultFeature } from '@/lib/map/clustering';
+import { setupMapLayers, updateSourceData, updateCircleRadius, highlightFeature, removeMapLayers } from '@/lib/map/mapLayers';
+import { showPropertyPreview, hidePropertyPreview, showClusterPreview, hideClusterPreview, destroyPreviewCards } from '@/lib/map/previewCard';
+import type { Feature } from 'geojson';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
   latitude: number | null;
@@ -84,8 +88,7 @@ function perpendicularDistance(p: { lat: number; lng: number }, a: { lat: number
 export default function BrowsePage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<{ [key: string]: Marker }>({});
-  const popupsRef = useRef<{ [key: string]: Popup }>({});
+  const clusteringRef = useRef<MapClustering | null>(null);
   const router = useRouter();
 
   const [properties, setProperties] = useState<PropertyBrowse[]>([]);
@@ -126,7 +129,6 @@ export default function BrowsePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [sortedResultOrder, setSortedResultOrder] = useState<{ type: 'property' | 'project'; id: string }[]>([]);
   const [combinedNextCursor, setCombinedNextCursor] = useState<any[] | null>(null);
-  const markerTickRef = useRef(0);
   const isFetchingRef = useRef(false);
 
   const [boundaryPoints, setBoundaryPoints] = useState<{ lat: number; lng: number }[]>([]);
@@ -145,7 +147,6 @@ export default function BrowsePage() {
   const fullScreenResultsRef = useRef(fullScreenResults);
   const fetchIdRef = useRef(0);
   const initialMoveEndRef = useRef(true);
-  const animInjectedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const autocompleteAbortRef = useRef<AbortController | null>(null);
 
@@ -222,7 +223,7 @@ export default function BrowsePage() {
     const scope = searchScopeRef.current;
     const isListView = fullScreenResultsRef.current;
     const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
-    const params: any = { pageSize: isAppend ? 24 : 100, sort: sortByRef.current };
+    const params: any = { pageSize: isAppend ? 24 : 500, sort: sortByRef.current };
 
     if (filters.location) params.location = filters.location;
     if (filters.minPrice) params.minPrice = Number(filters.minPrice);
@@ -259,9 +260,8 @@ export default function BrowsePage() {
           query: filters.location || undefined,
           minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
           maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
-          pageSize: isAppend ? 24 : 48,
+          pageSize: isAppend ? 24 : 500,
           sort: sortByRef.current,
-          signal,
         };
         if (filters.bhkTypeId && bhkIdToLabel[Number(filters.bhkTypeId)]) {
           combinedParams.bhkType = bhkIdToLabel[Number(filters.bhkTypeId)];
@@ -422,7 +422,6 @@ export default function BrowsePage() {
       isFetchingRef.current = false;
     }
     if (fetchId === fetchIdRef.current) {
-      markerTickRef.current++;
       if (isAppend) setLoadingMore(false);
       else setLoading(false);
     }
@@ -438,130 +437,233 @@ export default function BrowsePage() {
     }, 1000);
   }, []);
 
-  const clearMarkers = useCallback(() => {
-    Object.values(markersRef.current).forEach(marker => marker.remove());
-    Object.values(popupsRef.current).forEach(popup => popup.remove());
-    markersRef.current = {};
-    popupsRef.current = {};
-  }, []);
-
   const highlightMarker = useCallback((id: string | null) => {
-    Object.entries(markersRef.current).forEach(([key, marker]) => {
-      const el = marker.getElement();
-      const content = el.firstElementChild as HTMLElement | null;
-      if (content) {
-        content.style.backgroundColor = content.dataset.defaultColor || '#2563eb';
-        content.style.transform = '';
-        content.style.animation = '';
-      }
-      el.style.zIndex = '0';
-      if (popupsRef.current[key]) {
-        popupsRef.current[key].remove();
-      }
-    });
-    if (id && markersRef.current[id]) {
-      const el = markersRef.current[id].getElement();
-      const content = el.firstElementChild as HTMLElement | null;
-      if (content) {
-        content.style.backgroundColor = '#ef4444';
-        content.style.transform = 'scale(1.3)';
-        content.style.transformOrigin = 'bottom';
-        content.style.animation = 'marker-pulse 1.5s ease-in-out infinite';
-      }
-      el.style.zIndex = '10';
-      const lngLat = markersRef.current[id].getLngLat();
-      popupsRef.current[id].setLngLat(lngLat).addTo(mapRef.current!);
+    if (mapRef.current) {
+      highlightFeature(mapRef.current, id);
     }
   }, []);
 
-  const updateMarkers = useCallback((props: PropertyBrowse[], projs: ProjectBrowse[]) => {
-    if (!mapRef.current) return;
+  const buildFeatures = useCallback((): ClusterPoint[] => {
+    const features: ClusterPoint[] = [];
+    for (const p of properties) {
+      if (p.latitude != null && p.longitude != null && !isNaN(p.latitude) && !isNaN(p.longitude)) {
+        features.push({
+          id: p.id,
+          type: 'property',
+          title: p.title || '',
+          price: p.price || 0,
+          image: p.images?.[0]?.image_url || '',
+          location: p.location_text || '',
+          area: p.area ? `${p.area} ${p.area_unit || 'sqft'}` : undefined,
+          bedrooms: p.bhk_type_label || undefined,
+          bathrooms: p.bathrooms?.toString(),
+          latitude: p.latitude,
+          longitude: p.longitude,
+        });
+      }
+    }
+    for (const p of projects) {
+      if (p.latitude != null && p.longitude != null && !isNaN(p.latitude) && !isNaN(p.longitude)) {
+        features.push({
+          id: p.id,
+          type: 'project',
+          title: p.name,
+          price: p.low_price || 0,
+          image: p.primary_image || '',
+          location: p.location_name || '',
+          latitude: p.latitude,
+          longitude: p.longitude,
+        });
+      }
+    }
+    return features;
+  }, [properties, projects]);
 
-    const newPropertyIds = new Set(props.map(p => p.id));
-    const newProjectKeys = new Set(projs.map(p => `proj_${p.id}`));
-    const allValidKeys = new Set([...newPropertyIds, ...newProjectKeys]);
-    Object.keys(markersRef.current).forEach(id => {
-      if (!allValidKeys.has(id)) {
-        markersRef.current[id].remove();
-        delete markersRef.current[id];
-        if (popupsRef.current[id]) {
-          popupsRef.current[id].remove();
-          delete popupsRef.current[id];
+  const fetchClustersAbortRef = useRef<AbortController | null>(null);
+  const viewportCacheRef = useRef<Map<string, { data: any; timestamp: number }>>(new Map());
+
+  const getViewportCacheKey = useCallback((
+    bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+    zoom: number
+  ) => {
+    const rounded = {
+      minLat: Math.round(bounds.minLat * 100) / 100,
+      maxLat: Math.round(bounds.maxLat * 100) / 100,
+      minLng: Math.round(bounds.minLng * 100) / 100,
+      maxLng: Math.round(bounds.maxLng * 100) / 100,
+    };
+    return `${rounded.minLat},${rounded.maxLat},${rounded.minLng},${rounded.maxLng}_z${zoom}`;
+  }, []);
+
+  const fetchServerClusters = useCallback(async (
+    bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+    zoom: number,
+    signal?: AbortSignal
+  ) => {
+    const cacheKey = getViewportCacheKey(bounds, zoom);
+    const cached = viewportCacheRef.current.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < 30000) {
+      return cached.data;
+    }
+
+    try {
+      const res = await fetch('/api/clusters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bounds,
+          zoom,
+          scope: searchScopeRef.current,
+          filters: {
+            minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
+            maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
+            propertyType: filters.propertyTypeId || undefined,
+            bhkType: filters.bhkTypeId || undefined,
+          },
+        }),
+        signal,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      viewportCacheRef.current.set(cacheKey, { data, timestamp: Date.now() });
+
+      if (viewportCacheRef.current.size > 200) {
+        const oldest = viewportCacheRef.current.keys().next().value;
+        if (oldest) viewportCacheRef.current.delete(oldest);
+      }
+
+      return data;
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return null;
+      return null;
+    }
+  }, [filters.minPrice, filters.maxPrice, filters.propertyTypeId, filters.bhkTypeId, getViewportCacheKey]);
+
+  const mergeOverlappingClusters = useCallback((clusters: any[], minPixelDistance: number, map: maplibregl.Map) => {
+    if (clusters.length <= 1) return clusters;
+
+    const sorted = [...clusters].sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
+    const merged: any[] = [];
+    const used = new Set<number>();
+
+    for (let i = 0; i < sorted.length; i++) {
+      if (used.has(i)) continue;
+
+      const group = [sorted[i]];
+      const pi = map.project(
+        new maplibregl.LngLat(sorted[i].center_lon || sorted[i].lon, sorted[i].center_lat || sorted[i].lat)
+      );
+
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (used.has(j)) continue;
+        const pj = map.project(
+          new maplibregl.LngLat(sorted[j].center_lon || sorted[j].lon, sorted[j].center_lat || sorted[j].lat)
+        );
+        const dx = pi.x - pj.x;
+        const dy = pi.y - pj.y;
+        if (Math.sqrt(dx * dx + dy * dy) < minPixelDistance) {
+          group.push(sorted[j]);
+          used.add(j);
         }
       }
-    });
 
-    const isValidCoord = (v: any): boolean => v != null && typeof v === 'number' && !isNaN(v);
-
-    props.forEach(prop => {
-      if (isValidCoord(prop.latitude) && isValidCoord(prop.longitude) && !markersRef.current[prop.id]) {
-        const markerEl = document.createElement('div');
-        markerEl.className = 'px-2 py-1 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg transition-all duration-200';
-        markerEl.style.backgroundColor = '#2563eb';
-        markerEl.dataset.defaultColor = '#2563eb';
-        markerEl.textContent = `₹${((prop.price || 0) / 100000).toFixed(0)}L`;
-
-        const popupDiv = document.createElement('div');
-        popupDiv.className = 'p-1';
-        const titleDiv = document.createElement('div');
-        titleDiv.className = 'font-bold text-sm text-text-color-dark';
-        titleDiv.textContent = prop.title || '';
-        const priceDiv = document.createElement('div');
-        priceDiv.className = 'text-xs text-text-color-light';
-        priceDiv.textContent = `₹${(prop.price || 0).toLocaleString()}`;
-        popupDiv.appendChild(titleDiv);
-        popupDiv.appendChild(priceDiv);
-        const popup = new Popup({ offset: 25, closeButton: false, className: 'neumorphic-popup' }).setDOMContent(popupDiv);
-
-        const marker = new Marker({ element: markerEl, anchor: 'bottom' })
-          .setLngLat([prop.longitude, prop.latitude])
-          .addTo(mapRef.current!);
-
-        marker.getElement().addEventListener('click', () => router.push(`/property/${prop.id}`));
-        marker.getElement().addEventListener('mouseenter', () => popup.setLngLat([prop.longitude!, prop.latitude!]).addTo(mapRef.current!));
-        marker.getElement().addEventListener('mouseleave', () => popup.remove());
-        markersRef.current[prop.id] = marker;
-        popupsRef.current[prop.id] = popup;
+      if (group.length === 1) {
+        merged.push(group[0]);
+      } else {
+        const totalCount = group.reduce((s: number, c: any) => s + (c.count || 0), 0);
+        const totalWeightedLat = group.reduce((s: number, c: any) => s + (c.center_lat || c.lat || 0) * (c.count || 0), 0);
+        const totalWeightedLon = group.reduce((s: number, c: any) => s + (c.center_lon || c.lon || 0) * (c.count || 0), 0);
+        merged.push({
+          ...group[0],
+          center_lat: totalWeightedLat / totalCount,
+          center_lon: totalWeightedLon / totalCount,
+          count: totalCount,
+          avg_price: Math.round(group.reduce((s: number, c: any) => s + (c.avg_price || 0) * (c.count || 0), 0) / totalCount),
+          min_price: Math.min(...group.map((c: any) => c.min_price || Infinity)),
+          max_price: Math.max(...group.map((c: any) => c.max_price || 0)),
+        });
       }
-    });
+    }
+    return merged;
+  }, []);
 
-    projs.forEach(proj => {
-      if (isValidCoord(proj.latitude) && isValidCoord(proj.longitude) && !markersRef.current[`proj_${proj.id}`]) {
-        const markerEl = document.createElement('div');
-        markerEl.className = 'px-2 py-1 text-white text-xs font-bold border-2 border-white rounded-full cursor-pointer shadow-lg transition-all duration-200';
-        markerEl.style.backgroundColor = PROJECT_MARKER_COLOR;
-        markerEl.dataset.defaultColor = PROJECT_MARKER_COLOR;
-        markerEl.textContent = `${((proj.low_price || 0) / 100000).toFixed(0)}L`;
+  const updateClusters = useCallback(() => {
+    const map = mapRef.current;
+    const clustering = clusteringRef.current;
+    if (!map || !clustering) return;
 
-        const popupDiv = document.createElement('div');
-        popupDiv.className = 'p-1';
-        const titleDiv = document.createElement('div');
-        titleDiv.className = 'font-bold text-sm text-text-color-dark';
-        titleDiv.textContent = proj.name;
-        const priceDiv = document.createElement('div');
-        priceDiv.className = 'text-xs text-text-color-light';
-        priceDiv.textContent = `${(proj.low_price || 0).toLocaleString()} - ${(proj.high_price || 0).toLocaleString()}`;
-        popupDiv.appendChild(titleDiv);
-        popupDiv.appendChild(priceDiv);
-        const popup = new Popup({ offset: 25, closeButton: false, className: 'neumorphic-popup' }).setDOMContent(popupDiv);
+    const bounds = map.getBounds();
+    const zoom = map.getZoom();
 
-        const marker = new Marker({ element: markerEl, anchor: 'bottom' })
-          .setLngLat([proj.longitude, proj.latitude])
-          .addTo(mapRef.current!);
+    if (zoom <= 13) {
+      // FAR ZOOM: Server-side clustering via ES geohash_grid
+      if (fetchClustersAbortRef.current) fetchClustersAbortRef.current.abort();
+      const controller = new AbortController();
+      fetchClustersAbortRef.current = controller;
 
-        marker.getElement().addEventListener('click', () => router.push(`/projects/${proj.id}`));
-        marker.getElement().addEventListener('mouseenter', () => popup.setLngLat([proj.longitude!, proj.latitude!]).addTo(mapRef.current!));
-        marker.getElement().addEventListener('mouseleave', () => popup.remove());
-        markersRef.current[`proj_${proj.id}`] = marker;
-        popupsRef.current[`proj_${proj.id}`] = popup;
-      }
-    });
-  }, [router]);
+      const bbox = {
+        minLat: bounds.getSouth(),
+        maxLat: bounds.getNorth(),
+        minLng: bounds.getWest(),
+        maxLng: bounds.getEast(),
+      };
+
+      fetchServerClusters(bbox, zoom, controller.signal).then((data) => {
+        if (!data || !mapRef.current) return;
+
+        const merged = mergeOverlappingClusters(data.clusters, 70, mapRef.current);
+
+        const geojson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: merged.map((c: any, i: number) => ({
+            type: 'Feature' as const,
+            geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
+            properties: {
+              point_count: c.count,
+              point_count_abbreviated: c.count >= 10000
+                ? `${Math.round(c.count / 1000)}k`
+                : c.count >= 1000
+                  ? `${(c.count / 1000).toFixed(1)}k`
+                  : c.count.toString(),
+              avg_price: c.avg_price,
+              min_price: c.min_price,
+              max_price: c.max_price,
+              types: c.types,
+              _index: i,
+            },
+          })),
+        };
+
+        updateSourceData(mapRef.current, geojson);
+        updateCircleRadius(mapRef.current, zoom);
+      });
+    } else {
+      // CLOSE ZOOM: Client-side clustering via supercluster
+      const features = buildFeatures();
+      clustering.load(features);
+
+      const bbox: [number, number, number, number] = [
+        bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
+      ];
+      const clusters = clustering.getClusters(bbox, zoom);
+
+      const geojson: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: clusters.map((f, i) => ({
+          type: 'Feature' as const,
+          geometry: f.geometry,
+          properties: { ...f.properties, _index: i },
+        })),
+      };
+
+      updateSourceData(map, geojson);
+      updateCircleRadius(map, zoom);
+    }
+  }, [buildFeatures, fetchServerClusters]);
 
   useEffect(() => {
-    updateMarkers(properties, projects);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markerTickRef.current, properties, projects, updateMarkers]);
+    updateClusters();
+  }, [properties, projects, updateClusters]);
 
   useEffect(() => {
     const init = async () => {
@@ -589,12 +691,90 @@ export default function BrowsePage() {
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
+    const onPointMouseMove = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
+      const feature = e.features?.[0];
+      if (!feature) return;
+      const props = feature.properties as any;
+      if (props.cluster) return;
+      map.getCanvas().style.cursor = 'pointer';
+      const point: ClusterPoint = {
+        id: props.id, type: props.type, title: props.title, price: props.price || 0,
+        image: props.image || '', location: props.location || '',
+        area: props.area, bedrooms: props.bedrooms,
+        latitude: e.lngLat.lat, longitude: e.lngLat.lng,
+      };
+      showPropertyPreview(map, point, e.lngLat);
+    };
+
+    const onPointMouseLeave = () => {
+      map.getCanvas().style.cursor = '';
+      hidePropertyPreview();
+    };
+
+    const onPointClick = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
+      const feature = e.features?.[0];
+      if (!feature) return;
+      const props = feature.properties as any;
+      if (props.type === 'project') {
+        router.push(`/projects/${props.id}`);
+      } else {
+        router.push(`/property/${props.id}`);
+      }
+    };
+
+    const onClusterMouseMove = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
+      const feature = e.features?.[0];
+      if (!feature || !clusteringRef.current) return;
+      const props = feature.properties as any;
+      if (!props.cluster) return;
+      map.getCanvas().style.cursor = 'pointer';
+      const leaves = clusteringRef.current.getLeaves(props.cluster_id, 5);
+      const totalCount = props.point_count || 0;
+      const leafPoints: ClusterPoint[] = leaves.map((l) => ({
+        id: l.properties.id, type: l.properties.type, title: l.properties.title,
+        price: l.properties.price || 0, image: l.properties.image || '',
+        location: l.properties.location || '',
+        latitude: l.geometry.coordinates[1], longitude: l.geometry.coordinates[0],
+      }));
+      showClusterPreview(map, leafPoints, totalCount, e.lngLat, () => {
+        map.flyTo({ center: e.lngLat.toArray() as [number, number], zoom: map.getZoom() + 2, duration: 500 });
+      }, props.avg_price, props.min_price, props.max_price);
+    };
+
+    const onClusterMouseLeave = () => {
+      map.getCanvas().style.cursor = '';
+      hideClusterPreview();
+    };
+
+    const onClusterClick = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
+      const feature = e.features?.[0];
+      if (!feature || !clusteringRef.current) return;
+      const props = feature.properties as any;
+      if (!props.cluster) return;
+      const zoom = clusteringRef.current.getClusterExpansionZoom(props.cluster_id);
+      map.flyTo({ center: (feature.geometry as any).coordinates, zoom: zoom + 1 });
+    };
+
     const onLoad = () => {
       map.addSource('boundary', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({ id: 'boundary-fill', type: 'fill', source: 'boundary', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#2563eb', 'fill-opacity': 0 } });
       map.addLayer({ id: 'boundary-outline', type: 'line', source: 'boundary', paint: { 'line-color': '#2563eb', 'line-width': 2, 'line-dasharray': [4, 4], 'line-opacity': 0 } });
       map.addLayer({ id: 'boundary-vertices', type: 'circle', source: 'boundary', filter: ['==', '$type', 'LineString'], paint: { 'circle-radius': 4, 'circle-color': '#2563eb', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
       boundarySourceRef.current = map.getSource('boundary') as maplibregl.GeoJSONSource;
+
+      setupMapLayers(map);
+      clusteringRef.current = new MapClustering();
+
+      map.on('mousemove', 'unclustered-properties', onPointMouseMove);
+      map.on('mousemove', 'unclustered-projects', onPointMouseMove);
+      map.on('mouseleave', 'unclustered-properties', onPointMouseLeave);
+      map.on('mouseleave', 'unclustered-projects', onPointMouseLeave);
+      map.on('click', 'unclustered-properties', onPointClick);
+      map.on('click', 'unclustered-projects', onPointClick);
+      map.on('mousemove', 'clusters', onClusterMouseMove);
+      map.on('mouseleave', 'clusters', onClusterMouseLeave);
+      map.on('click', 'clusters', onClusterClick);
+
       fetchPropertiesRef.current(map.getBounds());
     };
 
@@ -630,6 +810,11 @@ export default function BrowsePage() {
         initialMoveEndRef.current = false;
         return;
       }
+      const currentZoom = map.getZoom();
+      if (currentZoom <= 13) {
+        // Far zoom: update server-side clusters
+        updateClusters();
+      }
       if (searchAsIMoveRef.current) {
         debouncedFetchProperties(map.getBounds());
       }
@@ -647,25 +832,22 @@ export default function BrowsePage() {
       map.off('mousemove', onMouseMove);
       map.off('mouseup', onMouseUp);
       map.off('moveend', onMoveEnd);
-      clearMarkers();
+      map.off('mousemove', 'unclustered-properties', onPointMouseMove);
+      map.off('mousemove', 'unclustered-projects', onPointMouseMove);
+      map.off('mouseleave', 'unclustered-properties', onPointMouseLeave);
+      map.off('mouseleave', 'unclustered-projects', onPointMouseLeave);
+      map.off('click', 'unclustered-properties', onPointClick);
+      map.off('click', 'unclustered-projects', onPointClick);
+      map.off('mousemove', 'clusters', onClusterMouseMove);
+      map.off('mouseleave', 'clusters', onClusterMouseLeave);
+      map.off('click', 'clusters', onClusterClick);
+      removeMapLayers(map);
+      destroyPreviewCards();
+      clusteringRef.current = null;
       map.remove();
       mapRef.current = null;
     };
-  }, [clearMarkers, debouncedFetchProperties]);
-
-  useEffect(() => {
-    if (!animInjectedRef.current) {
-      const style = document.createElement('style');
-      style.textContent = `
-        @keyframes marker-pulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
-          50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-        }
-      `;
-      document.head.appendChild(style);
-      animInjectedRef.current = true;
-    }
-  }, []);
+  }, [debouncedFetchProperties, router]);
 
   useEffect(() => {
     const resizer = resizerRef.current;
@@ -866,15 +1048,18 @@ export default function BrowsePage() {
     setIsDrawingMode(true);
     setBoundaryPoints([]);
     drawPointsRef.current = [];
-    clearMarkers();
     if (mapRef.current) {
+      const source = mapRef.current.getSource('browse-points') as maplibregl.GeoJSONSource | undefined;
+      if (source) {
+        source.setData({ type: 'FeatureCollection', features: [] });
+      }
       mapRef.current.dragPan.disable();
       mapRef.current.scrollZoom.disable();
       mapRef.current.boxZoom.disable();
       mapRef.current.doubleClickZoom.disable();
       mapRef.current.getCanvas().style.cursor = 'crosshair';
     }
-  }, [clearMarkers]);
+  }, []);
 
   const cancelDrawing = useCallback(() => {
     setIsDrawingMode(false);
