@@ -285,6 +285,27 @@ export default function BrowsePage() {
           setProjects([]);
         } else {
           const response = await res.json();
+
+          // ALWAYS update map clusters from response (even if fetch is stale)
+          if (response.clusters && mapRef.current) {
+            const merged = mergeOverlappingClusters(response.clusters, 70, mapRef.current);
+            const geojson: GeoJSON.FeatureCollection = {
+              type: 'FeatureCollection',
+              features: merged.map((c: any, i: number) => ({
+                type: 'Feature' as const,
+                geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
+                properties: {
+                  point_count: c.count,
+                  point_count_abbreviated: c.count >= 10000 ? `${Math.round(c.count / 1000)}k` : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k` : c.count.toString(),
+                  avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
+                  _index: i,
+                },
+              })),
+            };
+            updateSourceData(mapRef.current, geojson);
+            updateCircleRadius(mapRef.current, mapRef.current.getZoom());
+          }
+
           if (fetchId !== fetchIdRef.current) return;
 
           // Process listings (same logic as before)
@@ -330,26 +351,6 @@ export default function BrowsePage() {
           setPropertyTotal(response.propertyTotal ?? 0);
           setProjectTotal(response.projectTotal ?? 0);
           setCombinedNextCursor(response.nextCursor ?? null);
-
-          // Update map clusters from same response (1 request = clusters + listings)
-          if (response.clusters && mapRef.current) {
-            const merged = mergeOverlappingClusters(response.clusters, 70, mapRef.current);
-            const geojson: GeoJSON.FeatureCollection = {
-              type: 'FeatureCollection',
-              features: merged.map((c: any, i: number) => ({
-                type: 'Feature' as const,
-                geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
-                properties: {
-                  point_count: c.count,
-                  point_count_abbreviated: c.count >= 10000 ? `${Math.round(c.count / 1000)}k` : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k` : c.count.toString(),
-                  avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
-                  _index: i,
-                },
-              })),
-            };
-            updateSourceData(mapRef.current, geojson);
-            updateCircleRadius(mapRef.current, mapRef.current.getZoom());
-          }
         }
       } else if (scope === 'both' && isAppend) {
         // APPEND: Use existing /api/search endpoint for pagination
