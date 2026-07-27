@@ -492,8 +492,9 @@ export default function BrowsePage() {
       minLng: Math.round(bounds.minLng * 100) / 100,
       maxLng: Math.round(bounds.maxLng * 100) / 100,
     };
-    return `${rounded.minLat},${rounded.maxLat},${rounded.minLng},${rounded.maxLng}_z${zoom}`;
-  }, []);
+    const filterHash = `${filters.minPrice || ''}_${filters.maxPrice || ''}_${filters.propertyTypeId || ''}_${filters.bhkTypeId || ''}`;
+    return `${rounded.minLat},${rounded.maxLat},${rounded.minLng},${rounded.maxLng}_z${zoom}_${filterHash}`;
+  }, [filters.minPrice, filters.maxPrice, filters.propertyTypeId, filters.bhkTypeId]);
 
   const fetchServerClusters = useCallback(async (
     bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number },
@@ -728,17 +729,24 @@ export default function BrowsePage() {
       const props = feature.properties as any;
       if (!props.cluster) return;
       map.getCanvas().style.cursor = 'pointer';
-      const leaves = clusteringRef.current.getLeaves(props.cluster_id, 5);
       const totalCount = props.point_count || 0;
-      const leafPoints: ClusterPoint[] = leaves.map((l) => ({
-        id: l.properties.id, type: l.properties.type, title: l.properties.title,
-        price: l.properties.price || 0, image: l.properties.image || '',
-        location: l.properties.location || '',
-        latitude: l.geometry.coordinates[1], longitude: l.geometry.coordinates[0],
-      }));
-      showClusterPreview(map, leafPoints, totalCount, e.lngLat, () => {
-        map.flyTo({ center: e.lngLat.toArray() as [number, number], zoom: map.getZoom() + 2, duration: 500 });
-      }, props.avg_price, props.min_price, props.max_price);
+      const currentZoom = map.getZoom();
+      if (currentZoom <= 13) {
+        showClusterPreview(map, [], totalCount, e.lngLat, () => {
+          map.flyTo({ center: e.lngLat.toArray() as [number, number], zoom: map.getZoom() + 2, duration: 500 });
+        }, props.avg_price, props.min_price, props.max_price);
+      } else {
+        const leaves = clusteringRef.current.getLeaves(props.cluster_id, 5);
+        const leafPoints: ClusterPoint[] = leaves.map((l) => ({
+          id: l.properties.id, type: l.properties.type, title: l.properties.title,
+          price: l.properties.price || 0, image: l.properties.image || '',
+          location: l.properties.location || '',
+          latitude: l.geometry.coordinates[1], longitude: l.geometry.coordinates[0],
+        }));
+        showClusterPreview(map, leafPoints, totalCount, e.lngLat, () => {
+          map.flyTo({ center: e.lngLat.toArray() as [number, number], zoom: map.getZoom() + 2, duration: 500 });
+        }, props.avg_price, props.min_price, props.max_price);
+      }
     };
 
     const onClusterMouseLeave = () => {
@@ -923,6 +931,7 @@ export default function BrowsePage() {
   };
 
   const handleApplyFilters = async () => {
+    viewportCacheRef.current.clear();
     handleApplyFiltersWithLocation(filters.location);
   };
 

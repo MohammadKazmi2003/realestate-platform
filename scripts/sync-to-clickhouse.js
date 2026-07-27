@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { createClient } = require('@clickhouse/client');
 const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
-const h3 = require('h3-js');
 
 const ch = createClient({
   url: process.env.CLICKHOUSE_URL || 'http://localhost:8123',
@@ -39,23 +38,60 @@ function parseWKTPoint(wkt) {
 async function syncAll() {
   console.log('=== Syncing Properties & Projects to ClickHouse ===\n');
 
-  // 1. Sync Properties
-  console.log('1. Fetching properties from Supabase...');
-  const { data: properties, error: propError } = await supabase
-    .from('properties')
-    .select('id, title, location_text, price, status, location_point')
-    .limit(5000);
+  // 1. Fetch BHK type lookup
+  const { data: bhkTypes } = await supabase.from('bhk_types').select('id, label');
+  const bhkMap = {};
+  for (const b of (bhkTypes || [])) {
+    bhkMap[b.id] = b.label;
+  }
+  console.log('BHK types loaded:', Object.keys(bhkMap).length);
 
-  if (propError) {
-    console.error('Supabase properties error:', propError);
-    return;
+  // 2. Sync Properties with details
+  console.log('1. Fetching properties with details from Supabase...');
+
+  // Paginate properties
+  let allProperties = [];
+  let page = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data: batch, error } = await supabase
+      .from('properties')
+      .select('id, title, location_text, price, status, location_point')
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+
+    if (error || !batch || batch.length === 0) break;
+    allProperties = allProperties.concat(batch);
+    if (batch.length < pageSize) break;
+    page++;
+  }
+
+  // Fetch details for all properties
+  const propIds = allProperties.map(p => p.id);
+  let allDetails = [];
+  for (let i = 0; i < propIds.length; i += 500) {
+    const chunk = propIds.slice(i, i + 500);
+    const { data: details } = await supabase
+      .from('details_residential')
+      .select('property_id, bhk_type_id, bathrooms, carpet_area')
+      .in('property_id', chunk);
+    if (details) allDetails = allDetails.concat(details);
+  }
+
+  const detailsMap = {};
+  for (const d of allDetails) {
+    detailsMap[d.property_id] = d;
   }
 
   const propMarkers = [];
-  for (const p of properties) {
+  for (const p of allProperties) {
     if (!p.price || p.price <= 0) continue;
     const coords = parseWKTPoint(p.location_point);
     if (!coords.latitude || !coords.longitude) continue;
+
+    const detail = detailsMap[p.id] || {};
+    const bhkLabel = detail.bhk_type_id ? (bhkMap[detail.bhk_type_id] || '') : '';
+
     propMarkers.push({
       id: p.id,
       title: p.title || '',
@@ -63,24 +99,23 @@ async function syncAll() {
       lon: coords.longitude,
       price: p.price,
       property_type: 'Property',
-      bhk_type: '',
+      bhk_type: bhkLabel,
       entity_type: 'property',
       status: p.status || 'available',
-      area_sqft: 0,
-      bathrooms: 0,
-      bedrooms: 0,
+      area_sqft: detail.carpet_area || 0,
+      bathrooms: detail.bathrooms || 0,
+      bedrooms: parseInt(bhkLabel) || 0,
       location_text: p.location_text || '',
       image_url: '',
     });
   }
   console.log(`   Properties: ${propMarkers.length} valid`);
 
-  // 2. Sync Projects (paginate to get ALL records)
+  // 3. Sync Projects
   console.log('2. Fetching projects from Supabase...');
   let allProjects = [];
-  let page = 0;
-  const pageSize = 1000;
-  
+  page = 0;
+
   while (true) {
     const { data: batch, error: projError } = await supabase
       .from('projects')
@@ -125,27 +160,12 @@ async function syncAll() {
     return;
   }
 
-  // 3. Generate H3 rows
-  const h3Rows = [];
-  for (const m of allMarkers) {
-    for (const res of [5, 7, 8]) {
-      h3Rows.push({
-        ...m,
-        h3_resolution: res,
-        h3_index: Number(h3.latLngToCell(m.lat, m.lon, res)),
-      });
-    }
-  }
-
-  // 4. Insert into ClickHouse
+  // 4. Insert into ClickHouse (MV auto-aggregates)
   console.log('\n3. Inserting into ClickHouse...');
   try {
     await ch.insert({ table: 'realestate.property_markers', values: allMarkers, format: 'JSONEachRow' });
     console.log(`   ✓ property_markers: ${allMarkers.length} rows`);
-
-    await ch.insert({ table: 'realestate.property_h3', values: h3Rows, format: 'JSONEachRow' });
-    console.log(`   ✓ property_h3: ${h3Rows.length} rows`);
-
+    console.log('   ✓ Materialized views auto-aggregated into h3_clusters_precomputed');
     console.log('\n✅ Sync complete!');
   } catch (err) {
     console.error('ClickHouse insert error:', err.message);
