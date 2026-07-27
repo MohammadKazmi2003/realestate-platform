@@ -254,13 +254,111 @@ export default function BrowsePage() {
     }
 
     try {
-      if (scope === 'both') {
+      if (scope === 'both' && !isAppend) {
+        // FRESH LOAD: Use combined /api/map-data endpoint (clusters + listings in 1 request)
+        const combinedParams: any = {
+          bounds: params.bounds,
+          zoom: 12,
+          scope: 'both',
+          query: filters.location || undefined,
+          minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
+          maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
+          pageSize: 500,
+          sort: sortByRef.current,
+        };
+        if (filters.bhkTypeId && bhkIdToLabel[Number(filters.bhkTypeId)]) {
+          combinedParams.bhkType = bhkIdToLabel[Number(filters.bhkTypeId)];
+        }
+        if (filters.propertyTypeId && propTypeIdToName[Number(filters.propertyTypeId)]) {
+          combinedParams.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
+        }
+
+        const res = await fetch('/api/map-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(combinedParams),
+          signal,
+        });
+        if (fetchId !== fetchIdRef.current) return;
+        if (!res.ok) {
+          setProperties([]);
+          setProjects([]);
+        } else {
+          const response = await res.json();
+          if (fetchId !== fetchIdRef.current) return;
+
+          // Process listings (same logic as before)
+          const props: PropertyBrowse[] = [];
+          const projs: ProjectBrowse[] = [];
+          const order: { type: 'property' | 'project'; id: string }[] = [];
+
+          for (const r of (response.results || [])) {
+            if (r.entity_type === 'property') {
+              const mapped = mapEsResultToPropertyCard(r);
+              const formatted: PropertyBrowse = {
+                ...mapped,
+                latitude: r.location?.lat ?? null,
+                longitude: r.location?.lon ?? null,
+                images: mapped.images.length > 0 ? mapped.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
+              };
+              props.push(formatted);
+              order.push({ type: 'property', id: r.id });
+            } else if (r.entity_type === 'project') {
+              const loc = r.location || {};
+              const mapped: ProjectBrowse = {
+                id: r.id,
+                name: r.name || '',
+                slug: r.slug || '',
+                low_price: r.low_price || 0,
+                high_price: r.high_price || 0,
+                construction_phase: r.construction_phase || '',
+                delivery_date: r.delivery_date || null,
+                developer_name: r.developer_name || '',
+                primary_image: r.image_url || null,
+                location_name: r.location_text || null,
+                latitude: loc.lat ?? null,
+                longitude: loc.lon ?? null,
+              };
+              projs.push(mapped);
+              order.push({ type: 'project', id: r.id });
+            }
+          }
+
+          setProperties(props);
+          setProjects(projs);
+          setSortedResultOrder(order);
+          setPropertyTotal(response.propertyTotal ?? 0);
+          setProjectTotal(response.projectTotal ?? 0);
+          setCombinedNextCursor(response.nextCursor ?? null);
+
+          // Update map clusters from same response (1 request = clusters + listings)
+          if (response.clusters && mapRef.current) {
+            const merged = mergeOverlappingClusters(response.clusters, 70, mapRef.current);
+            const geojson: GeoJSON.FeatureCollection = {
+              type: 'FeatureCollection',
+              features: merged.map((c: any, i: number) => ({
+                type: 'Feature' as const,
+                geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
+                properties: {
+                  point_count: c.count,
+                  point_count_abbreviated: c.count >= 10000 ? `${Math.round(c.count / 1000)}k` : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k` : c.count.toString(),
+                  avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
+                  _index: i,
+                },
+              })),
+            };
+            updateSourceData(mapRef.current, geojson);
+            updateCircleRadius(mapRef.current, mapRef.current.getZoom());
+          }
+        }
+      } else if (scope === 'both' && isAppend) {
+        // APPEND: Use existing /api/search endpoint for pagination
         const combinedParams: any = {
           scope: 'both',
           query: filters.location || undefined,
           minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
           maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
-          pageSize: isAppend ? 24 : 500,
+          pageSize: 24,
           sort: sortByRef.current,
         };
         if (filters.bhkTypeId && bhkIdToLabel[Number(filters.bhkTypeId)]) {
@@ -270,7 +368,6 @@ export default function BrowsePage() {
           combinedParams.propertyType = propTypeIdToName[Number(filters.propertyTypeId)];
         }
         if (params.bounds) combinedParams.bounds = params.bounds;
-        if (params.polygon) combinedParams.polygon = params.polygon;
         if (cursorOverride?.propertyCursor) {
           combinedParams.cursor = cursorOverride.propertyCursor;
         }
@@ -283,7 +380,7 @@ export default function BrowsePage() {
         });
         if (fetchId !== fetchIdRef.current) return;
         if (!res.ok) {
-          if (!isAppend) { setProperties([]); setProjects([]); }
+          // No-op for append
         } else {
           const response = await res.json();
           if (fetchId !== fetchIdRef.current) return;
@@ -323,15 +420,9 @@ export default function BrowsePage() {
             }
           }
 
-          if (isAppend) {
-            setProperties(prev => [...prev, ...props]);
-            setProjects(prev => [...prev, ...projs]);
-            setSortedResultOrder(prev => [...prev, ...order]);
-          } else {
-            setProperties(props);
-            setProjects(projs);
-            setSortedResultOrder(order);
-          }
+          setProperties(prev => [...prev, ...props]);
+          setProjects(prev => [...prev, ...projs]);
+          setSortedResultOrder(prev => [...prev, ...order]);
           setPropertyTotal(response.propertyTotal ?? 0);
           setProjectTotal(response.projectTotal ?? 0);
           setCombinedNextCursor(response.nextCursor ?? null);

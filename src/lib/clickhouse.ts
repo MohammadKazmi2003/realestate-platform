@@ -93,23 +93,30 @@ export async function getMapClusters(
     conditions.push(`price_bucket >= {minBucket:UInt16} AND price_bucket <= {maxBucket:UInt16}`);
   }
 
-  // Step 2: Query using h3ToGeo() for spatial filtering via HAVING clause
-  // h3_index is in ORDER BY, so GROUP BY is efficient
-  // h3ToGeo() computes centroid from h3_index at query time (no storage needed)
+  // Query using subquery for spatial filtering (avoids HAVING on aggregate columns)
+  // h3ToGeo() computes centroid from h3_index at query time
   const query = `
     SELECT
       h3_index,
-      countMerge(property_count) AS count,
-      avgMerge(avg_price) AS avg_price,
-      minMerge(min_price) AS min_price,
-      maxMerge(max_price) AS max_price,
+      count,
+      avg_price,
+      min_price,
+      max_price,
       h3ToGeo(h3_index).1 AS center_lat,
       h3ToGeo(h3_index).2 AS center_lon
-    FROM h3_clusters_precomputed
-    WHERE ${conditions.join(' AND ')}
-    GROUP BY h3_index
-    HAVING center_lat >= {minLat:Float64} AND center_lat <= {maxLat:Float64}
-       AND center_lon >= {minLng:Float64} AND center_lon <= {maxLng:Float64}
+    FROM (
+      SELECT
+        h3_index,
+        countMerge(property_count) AS count,
+        avgMerge(avg_price) AS avg_price,
+        minMerge(min_price) AS min_price,
+        maxMerge(max_price) AS max_price
+      FROM h3_clusters_precomputed
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY h3_index
+    ) AS subquery
+    WHERE center_lat >= {minLat:Float64} AND center_lat <= {maxLat:Float64}
+      AND center_lon >= {minLng:Float64} AND center_lon <= {maxLng:Float64}
     ORDER BY count DESC
   `;
 

@@ -7,8 +7,6 @@ CREATE DATABASE IF NOT EXISTS realestate;
 -- ============================================================
 -- 1. RAW PROPERTIES TABLE
 -- ============================================================
--- ORDER BY (lat, lon, id) enables spatial index utilization
--- TTL ensures data lifecycle management
 CREATE TABLE IF NOT EXISTS realestate.property_markers (
     id String,
     title String,
@@ -36,9 +34,8 @@ SETTINGS index_granularity = 8192;
 -- ============================================================
 -- 2. PRE-AGGREGATED CLUSTERS
 -- ============================================================
--- Supports filter dimensions: property_type, bhk_type, entity_type, price_bucket
--- price_bucket: UInt16 supports prices up to ₹65.5Cr (vs UInt8 overflow at ₹2.55Cr)
--- ORDER BY enables primary index for spatial + filter queries
+-- No center_lat/center_lon stored — use h3ToGeo() at query time
+-- ORDER BY (h3_resolution, h3_index, ...) for primary index
 CREATE TABLE IF NOT EXISTS realestate.h3_clusters_precomputed (
     h3_resolution  UInt8,
     h3_index       UInt64,
@@ -60,18 +57,14 @@ PARTITION BY h3_resolution;
 -- ============================================================
 -- 3. MATERIALIZED VIEWS (Auto-update on INSERT)
 -- ============================================================
--- All MVs include bhk_type in GROUP BY for filter support
--- price_bucket uses UInt16 to prevent overflow
 
--- H3 Resolution 5: Region/city level (~253 km² hexagons)
+-- H3 Resolution 5
 CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom5_mv
 TO realestate.h3_clusters_precomputed
 AS SELECT
     5 AS h3_resolution,
     geoToH3(lat, lon, 5) AS h3_index,
-    property_type,
-    bhk_type,
-    entity_type,
+    property_type, bhk_type, entity_type,
     toUInt16(toInt64(price) / 100000) AS price_bucket,
     countState(toUInt8(1)) AS property_count,
     avgState(price) AS avg_price,
@@ -83,15 +76,13 @@ FROM realestate.property_markers
 WHERE status = 'available'
 GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
 
--- H3 Resolution 7: Neighborhood level (~5 km² hexagons)
+-- H3 Resolution 7
 CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom7_mv
 TO realestate.h3_clusters_precomputed
 AS SELECT
     7 AS h3_resolution,
     geoToH3(lat, lon, 7) AS h3_index,
-    property_type,
-    bhk_type,
-    entity_type,
+    property_type, bhk_type, entity_type,
     toUInt16(toInt64(price) / 100000) AS price_bucket,
     countState(toUInt8(1)) AS property_count,
     avgState(price) AS avg_price,
@@ -103,15 +94,13 @@ FROM realestate.property_markers
 WHERE status = 'available'
 GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
 
--- H3 Resolution 8: Block level (~0.7 km² hexagons)
+-- H3 Resolution 8
 CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom8_mv
 TO realestate.h3_clusters_precomputed
 AS SELECT
     8 AS h3_resolution,
     geoToH3(lat, lon, 8) AS h3_index,
-    property_type,
-    bhk_type,
-    entity_type,
+    property_type, bhk_type, entity_type,
     toUInt16(toInt64(price) / 100000) AS price_bucket,
     countState(toUInt8(1)) AS property_count,
     avgState(price) AS avg_price,
