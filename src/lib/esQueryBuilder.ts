@@ -35,7 +35,10 @@ function buildSortClause(sort: string, lat?: number, lng?: number, scope?: strin
     }
     if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
     if (sort === 'popular') return [{ _score: { order: 'desc' } }];
-    return [{ _score: { order: 'desc' } }];
+    return [
+      { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+      { _score: { order: 'desc' } },
+    ];
   }
   if (sort === 'price_asc') return [{ price: { order: 'asc' } }, { _score: { order: 'desc' } }];
   if (sort === 'price_desc') return [{ price: { order: 'desc' } }, { _score: { order: 'desc' } }];
@@ -46,7 +49,10 @@ function buildSortClause(sort: string, lat?: number, lng?: number, scope?: strin
       { _score: { order: 'desc' } },
     ];
   }
-  return [{ _score: { order: 'desc' } }];
+  return [
+    { _script: { type: 'number', script: { source: "doc['price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+    { _score: { order: 'desc' } },
+  ];
 }
 
 function buildAggregations(scope: string) {
@@ -157,6 +163,7 @@ export async function queryESListings(params: any) {
         should: [
           { bool: { filter: propertyFilters } },
           { bool: { must_not: { exists: { field: 'bhk_type' } } } },
+          { bool: { filter: [{ term: { bhk_type: '' } }] } },
         ],
         minimum_should_match: 1,
       },

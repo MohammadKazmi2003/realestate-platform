@@ -570,7 +570,6 @@ export default function BrowsePage() {
     return features;
   }, [properties, projects]);
 
-  const fetchClustersAbortRef = useRef<AbortController | null>(null);
   const viewportCacheRef = useRef<Map<string, { data: any; timestamp: number }>>(new Map());
 
   const getViewportCacheKey = useCallback((
@@ -678,84 +677,6 @@ export default function BrowsePage() {
     }
     return merged;
   }, []);
-
-  const updateClusters = useCallback(() => {
-    const map = mapRef.current;
-    const clustering = clusteringRef.current;
-    if (!map || !clustering) return;
-
-    const bounds = map.getBounds();
-    const zoom = map.getZoom();
-
-    if (zoom <= 13) {
-      // FAR ZOOM: Server-side clustering via ES geohash_grid
-      if (fetchClustersAbortRef.current) fetchClustersAbortRef.current.abort();
-      const controller = new AbortController();
-      fetchClustersAbortRef.current = controller;
-
-      const bbox = {
-        minLat: bounds.getSouth(),
-        maxLat: bounds.getNorth(),
-        minLng: bounds.getWest(),
-        maxLng: bounds.getEast(),
-      };
-
-      fetchServerClusters(bbox, zoom, controller.signal).then((data) => {
-        if (!data || !mapRef.current) return;
-
-        const merged = mergeOverlappingClusters(data.clusters, 70, mapRef.current);
-
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: merged.map((c: any, i: number) => ({
-            type: 'Feature' as const,
-            geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
-            properties: {
-              point_count: c.count,
-              point_count_abbreviated: c.count >= 10000
-                ? `${Math.round(c.count / 1000)}k`
-                : c.count >= 1000
-                  ? `${(c.count / 1000).toFixed(1)}k`
-                  : c.count.toString(),
-              avg_price: c.avg_price,
-              min_price: c.min_price,
-              max_price: c.max_price,
-              types: c.types,
-              _index: i,
-            },
-          })),
-        };
-
-        updateSourceData(mapRef.current, geojson);
-        updateCircleRadius(mapRef.current, zoom);
-      });
-    } else {
-      // CLOSE ZOOM: Client-side clustering via supercluster
-      const features = buildFeatures();
-      clustering.load(features);
-
-      const bbox: [number, number, number, number] = [
-        bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
-      ];
-      const clusters = clustering.getClusters(bbox, zoom);
-
-      const geojson: GeoJSON.FeatureCollection = {
-        type: 'FeatureCollection',
-        features: clusters.map((f, i) => ({
-          type: 'Feature' as const,
-          geometry: f.geometry,
-          properties: { ...f.properties, _index: i },
-        })),
-      };
-
-      updateSourceData(map, geojson);
-      updateCircleRadius(map, zoom);
-    }
-  }, [buildFeatures, fetchServerClusters]);
-
-  useEffect(() => {
-    updateClusters();
-  }, [properties, projects, updateClusters]);
 
   useEffect(() => {
     const init = async () => {
@@ -908,11 +829,6 @@ export default function BrowsePage() {
       if (initialMoveEndRef.current) {
         initialMoveEndRef.current = false;
         return;
-      }
-      const currentZoom = map.getZoom();
-      if (currentZoom <= 13) {
-        // Far zoom: update server-side clusters
-        updateClusters();
       }
       if (searchAsIMoveRef.current) {
         debouncedFetchProperties(map.getBounds());

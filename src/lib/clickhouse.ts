@@ -77,10 +77,12 @@ export async function getMapClusters(
   ];
 
   // Filter dimensions (from MV GROUP BY columns)
-  if (filters?.propertyType) {
+  // Property type filter: only apply for properties (projects have construction phase types)
+  if (filters?.propertyType && filters?.entityType === 'property') {
     conditions.push(`property_type = {propertyType:String}`);
   }
-  if (filters?.bhkType) {
+  // BHK filter: only apply for properties (projects have bhk_type = '')
+  if (filters?.bhkType && filters?.entityType === 'property') {
     conditions.push(`bhk_type = {bhkType:String}`);
   }
   if (filters?.entityType) {
@@ -129,6 +131,7 @@ export async function getMapClusters(
   };
 
   if (filters?.propertyType) params.propertyType = filters.propertyType;
+  if (filters?.bhkType) params.bhkType = filters.bhkType;
   if (filters?.entityType) params.entityType = filters.entityType;
   if (priceBuckets) {
     params.minBucket = priceBuckets.minBucket;
