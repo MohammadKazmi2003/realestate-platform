@@ -4,7 +4,7 @@
 # ============================================================
 set -e
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 echo "Syncing data to Elasticsearch and ClickHouse..."
 

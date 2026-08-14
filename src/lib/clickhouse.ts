@@ -10,7 +10,7 @@ export function getClickHouseClient(): ClickHouseClient {
       username: process.env.CLICKHOUSE_USER || 'default',
       password: process.env.CLICKHOUSE_PASSWORD || '',
       database: process.env.CLICKHOUSE_DB || 'realestate',
-      request_timeout: 5000,
+      request_timeout: 2000,
       max_open_connections: 10,
     });
   }

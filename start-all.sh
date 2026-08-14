@@ -7,7 +7,7 @@
 # ============================================================
 set -e
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 echo "=========================================="
 echo "  Real Estate Platform — Starting All"
@@ -17,7 +17,13 @@ echo "=========================================="
 echo ""
 echo "[1/4] Starting Supabase (CLI-managed)..."
 if ! supabase status 2>/dev/null | grep -q "Local URL"; then
-  supabase start
+  echo "  Starting Supabase (first run may take a while)..."
+  if ! supabase start 2>&1; then
+    echo "  ⚠ Supabase failed to start (likely port conflict from a previous run)."
+    echo "  Stopping existing Supabase project and retrying..."
+    supabase stop --project-id "$(grep -E '^project_id' supabase/config.toml 2>/dev/null | awk '{print $3}')" 2>/dev/null || true
+    supabase start
+  fi
 else
   echo "  Supabase already running"
 fi

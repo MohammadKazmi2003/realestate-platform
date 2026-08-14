@@ -165,10 +165,12 @@ export async function GET(req: NextRequest) {
       new Promise<AutocompleteSuggestion[]>(res => setTimeout(() => res([]), 2500)),
     ]);
 
+    // Handle each source independently: if ES fails, keep geo results (and vice-versa).
+    // A .catch on Promise.all would discard BOTH on a single failure → empty suggestions.
     const [esSuggestions, geoSuggestions] = await Promise.all([
-      esPromise,
-      geoPromise,
-    ]).catch(() => [[], []] as [AutocompleteSuggestion[], AutocompleteSuggestion[]]);
+      esPromise.catch(() => [] as AutocompleteSuggestion[]),
+      geoPromise.catch(() => [] as AutocompleteSuggestion[]),
+    ]);
 
     // Deduplicate: don't show same text twice
     const seen = new Set<string>();
