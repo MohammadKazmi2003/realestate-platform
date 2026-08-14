@@ -38,18 +38,36 @@ function parseWKTPoint(wkt) {
 async function syncAll() {
   console.log('=== Syncing Properties & Projects to ClickHouse ===\n');
 
-  // 1. Fetch BHK type lookup
-  const { data: bhkTypes } = await supabase.from('bhk_types').select('id, label');
+  // 0. Truncate existing data to avoid double-counting (MV is additive)
+  console.log('0. Truncating existing ClickHouse data...');
+  try {
+    await ch.exec({ query: 'TRUNCATE TABLE realestate.property_markers' });
+    await ch.exec({ query: 'TRUNCATE TABLE realestate.h3_clusters_precomputed' });
+    console.log('   ✓ Tables truncated');
+  } catch (err) {
+    console.warn('   Truncate warning (may be empty):', err.message);
+  }
+
+  // 1. Fetch lookup tables
+  const [{ data: bhkTypes }, { data: propTypes }] = await Promise.all([
+    supabase.from('bhk_types').select('id, label'),
+    supabase.from('property_types').select('id, name'),
+  ]);
   const bhkMap = {};
   for (const b of (bhkTypes || [])) {
     bhkMap[b.id] = b.label;
   }
+  const propTypeMap = {};
+  for (const pt of (propTypes || [])) {
+    propTypeMap[pt.id] = pt.name;
+  }
   console.log('BHK types loaded:', Object.keys(bhkMap).length);
+  console.log('Property types loaded:', Object.keys(propTypeMap).length);
 
   // 2. Sync Properties with details
   console.log('1. Fetching properties with details from Supabase...');
 
-  // Paginate properties
+  // Paginate properties (include property_type_id for real type names)
   let allProperties = [];
   let page = 0;
   const pageSize = 1000;
@@ -57,7 +75,7 @@ async function syncAll() {
   while (true) {
     const { data: batch, error } = await supabase
       .from('properties')
-      .select('id, title, location_text, price, status, location_point')
+      .select('id, title, location_text, price, status, location_point, property_type_id')
       .range(page * pageSize, (page + 1) * pageSize - 1);
 
     if (error || !batch || batch.length === 0) break;
@@ -85,7 +103,6 @@ async function syncAll() {
 
   const propMarkers = [];
   for (const p of allProperties) {
-    if (!p.price || p.price <= 0) continue;
     const coords = parseWKTPoint(p.location_point);
     if (!coords.latitude || !coords.longitude) continue;
 
@@ -97,8 +114,8 @@ async function syncAll() {
       title: p.title || '',
       lat: coords.latitude,
       lon: coords.longitude,
-      price: p.price,
-      property_type: 'Property',
+      price: p.price || 0,
+      property_type: propTypeMap[p.property_type_id] || 'Other',
       bhk_type: bhkLabel,
       entity_type: 'property',
       status: p.status || 'available',
@@ -138,8 +155,8 @@ async function syncAll() {
       title: p.name || '',
       lat: p.latitude,
       lon: p.longitude,
-      price: p.low_price || p.high_price || 0,
-      property_type: p.construction_phase || 'Project',
+      price: p.low_price || 0,  // B7: match ES (sort_price = low_price)
+      property_type: 'Project',
       bhk_type: '',
       entity_type: 'project',
       status: 'available',

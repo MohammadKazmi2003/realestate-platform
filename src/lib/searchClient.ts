@@ -13,8 +13,8 @@ async function pgFallbackSearch(params: SearchQueryInput): Promise<any> {
       p_min_price: params.minPrice ?? null,
       p_max_price: params.maxPrice ?? null,
     };
-    if (params.bhkType) rpcParams.p_bhk_type_id = null;
-    if (params.propertyType) rpcParams.p_property_type_id = null;
+    if (params.bhkType) rpcParams.p_bhk_type = params.bhkType;
+    if (params.propertyType) rpcParams.p_property_type = params.propertyType;
     if (params.lat != null && params.lng != null && params.radiusKm) {
       rpcParams.min_lat = params.lat - (params.radiusKm / 111);
       rpcParams.max_lat = params.lat + (params.radiusKm / 111);
@@ -75,13 +75,17 @@ export async function searchProperties(params: SearchQueryInput, signal?: AbortS
   }
 }
 
-export async function autocompleteSearch(query: string, signal?: AbortSignal) {
+export async function autocompleteSearch(query: string, signal?: AbortSignal, scope?: string) {
   try {
-    const response = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(query)}`, { signal });
+    const scopeParam = scope ? `&scope=${scope}` : '';
+    const response = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(query)}${scopeParam}`, {
+      signal: signal || AbortSignal.timeout(5000),
+    });
     if (!response.ok) {
       return { suggestions: [] };
     }
-    return response.json();
+    const data = await response.json();
+    return data;
   } catch (err: any) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
     return { suggestions: [] };

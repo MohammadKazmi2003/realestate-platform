@@ -56,9 +56,28 @@ PARTITION BY h3_resolution;
 
 -- ============================================================
 -- 3. MATERIALIZED VIEWS (Auto-update on INSERT)
+--    One MV per H3 resolution (4-10) matching zoomToH3Resolution()
 -- ============================================================
 
--- H3 Resolution 5
+-- H3 Resolution 4: State/region (~690 km² cells)
+CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom4_mv
+TO realestate.h3_clusters_precomputed
+AS SELECT
+    4 AS h3_resolution,
+    geoToH3(lat, lon, 4) AS h3_index,
+    property_type, bhk_type, entity_type,
+    toUInt16(toInt64(price) / 100000) AS price_bucket,
+    countState(toUInt8(1)) AS property_count,
+    avgState(price) AS avg_price,
+    minState(price) AS min_price,
+    maxState(price) AS max_price,
+    sumState(toUInt16(bedrooms)) AS total_bedrooms,
+    sumState(toUInt16(bathrooms)) AS total_bathrooms
+FROM realestate.property_markers
+WHERE status = 'available'
+GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
+
+-- H3 Resolution 5: City (~253 km²)
 CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom5_mv
 TO realestate.h3_clusters_precomputed
 AS SELECT
@@ -76,7 +95,25 @@ FROM realestate.property_markers
 WHERE status = 'available'
 GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
 
--- H3 Resolution 7
+-- H3 Resolution 6: District (~80 km²)
+CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom6_mv
+TO realestate.h3_clusters_precomputed
+AS SELECT
+    6 AS h3_resolution,
+    geoToH3(lat, lon, 6) AS h3_index,
+    property_type, bhk_type, entity_type,
+    toUInt16(toInt64(price) / 100000) AS price_bucket,
+    countState(toUInt8(1)) AS property_count,
+    avgState(price) AS avg_price,
+    minState(price) AS min_price,
+    maxState(price) AS max_price,
+    sumState(toUInt16(bedrooms)) AS total_bedrooms,
+    sumState(toUInt16(bathrooms)) AS total_bathrooms
+FROM realestate.property_markers
+WHERE status = 'available'
+GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
+
+-- H3 Resolution 7: Neighborhood (~5 km²)
 CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom7_mv
 TO realestate.h3_clusters_precomputed
 AS SELECT
@@ -94,12 +131,48 @@ FROM realestate.property_markers
 WHERE status = 'available'
 GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
 
--- H3 Resolution 8
+-- H3 Resolution 8: Block (~0.7 km²)
 CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom8_mv
 TO realestate.h3_clusters_precomputed
 AS SELECT
     8 AS h3_resolution,
     geoToH3(lat, lon, 8) AS h3_index,
+    property_type, bhk_type, entity_type,
+    toUInt16(toInt64(price) / 100000) AS price_bucket,
+    countState(toUInt8(1)) AS property_count,
+    avgState(price) AS avg_price,
+    minState(price) AS min_price,
+    maxState(price) AS max_price,
+    sumState(toUInt16(bedrooms)) AS total_bedrooms,
+    sumState(toUInt16(bathrooms)) AS total_bathrooms
+FROM realestate.property_markers
+WHERE status = 'available'
+GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
+
+-- H3 Resolution 9: Street (~0.25 km²)
+CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom9_mv
+TO realestate.h3_clusters_precomputed
+AS SELECT
+    9 AS h3_resolution,
+    geoToH3(lat, lon, 9) AS h3_index,
+    property_type, bhk_type, entity_type,
+    toUInt16(toInt64(price) / 100000) AS price_bucket,
+    countState(toUInt8(1)) AS property_count,
+    avgState(price) AS avg_price,
+    minState(price) AS min_price,
+    maxState(price) AS max_price,
+    sumState(toUInt16(bedrooms)) AS total_bedrooms,
+    sumState(toUInt16(bathrooms)) AS total_bathrooms
+FROM realestate.property_markers
+WHERE status = 'available'
+GROUP BY h3_index, property_type, bhk_type, entity_type, price_bucket;
+
+-- H3 Resolution 10: Building (~0.08 km²) — used at max zoom before client clustering takes over
+CREATE MATERIALIZED VIEW IF NOT EXISTS realestate.h3_zoom10_mv
+TO realestate.h3_clusters_precomputed
+AS SELECT
+    10 AS h3_resolution,
+    geoToH3(lat, lon, 10) AS h3_index,
     property_type, bhk_type, entity_type,
     toUInt16(toInt64(price) / 100000) AS price_bucket,
     countState(toUInt8(1)) AS property_count,

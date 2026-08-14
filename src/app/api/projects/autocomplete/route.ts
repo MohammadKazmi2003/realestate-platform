@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getElasticsearchClient, isEsAvailable, PROJECTS_INDEX_ALIAS } from '@/lib/elasticsearch';
-import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
+import { checkAutocompleteRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 
 export async function GET(req: NextRequest) {
   const identifier = getRateLimitIdentifier(req);
-  const { allowed } = await checkSearchRateLimit(identifier);
+  const { allowed } = await checkAutocompleteRateLimit(identifier);
   if (!allowed) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }

@@ -11,7 +11,7 @@ export function getClickHouseClient(): ClickHouseClient {
       password: process.env.CLICKHOUSE_PASSWORD || '',
       database: process.env.CLICKHOUSE_DB || 'realestate',
       request_timeout: 5000,
-      max_open_connections: 50,
+      max_open_connections: 10,
     });
   }
   return chClient;
@@ -37,11 +37,17 @@ export interface MapTileResponse {
   h3_resolution: number;
 }
 
-// Maps zoom levels to available H3 resolutions (must match MV resolutions in init.sql)
+// Maps zoom levels to H3 resolutions (must match MV resolutions in init.sql).
+// Each zoom level has a dedicated H3 resolution so that cell counts per viewport
+// stay roughly constant (~20-200 cells) regardless of zoom.
 function zoomToH3Resolution(zoom: number): number {
-  if (zoom <= 6) return 5;   // Region/city level
-  if (zoom <= 10) return 7;  // Neighborhood level
-  return 8;                   // Block level
+  if (zoom <= 4) return 4;     // State/region (~690 km² cells)
+  if (zoom <= 6) return 5;     // City (~253 km²)
+  if (zoom <= 8) return 6;     // District (~80 km²)
+  if (zoom <= 10) return 7;    // Neighborhood (~5 km²)
+  if (zoom <= 12) return 8;    // Block (~0.7 km²)
+  if (zoom <= 14) return 9;    // Street (~0.25 km²)
+  return 10;                    // Building (~0.08 km²) — at zoom 15+, client-side supercluster takes over
 }
 
 // Convert price to bucket (10L increments)
@@ -66,6 +72,7 @@ export async function getMapClusters(
     propertyType?: string;
     bhkType?: string;
     entityType?: string;
+    locationText?: string;
   }
 ): Promise<MapTileResponse> {
   const client = getClickHouseClient();
@@ -77,16 +84,21 @@ export async function getMapClusters(
   ];
 
   // Filter dimensions (from MV GROUP BY columns)
-  // Property type filter: only apply for properties (projects have construction phase types)
-  if (filters?.propertyType && filters?.entityType === 'property') {
+  // Property type and BHK filters: apply unconditionally.
+  // Projects have empty property_type/bhk_type in the MV, so the filter naturally
+  // only matches properties — no entityType guard needed.
+  if (filters?.propertyType) {
     conditions.push(`property_type = {propertyType:String}`);
   }
-  // BHK filter: only apply for properties (projects have bhk_type = '')
-  if (filters?.bhkType && filters?.entityType === 'property') {
+  if (filters?.bhkType) {
     conditions.push(`bhk_type = {bhkType:String}`);
   }
   if (filters?.entityType) {
     conditions.push(`entity_type = {entityType:String}`);
+  }
+  // B2: Location text filter — best-effort match on location_text
+  if (filters?.locationText && filters.locationText.trim().length >= 2) {
+    conditions.push(`location_text ILIKE {locationText:String}`);
   }
 
   // Price bucket filter (UInt16 supports up to ₹65.5Cr)
@@ -133,6 +145,9 @@ export async function getMapClusters(
   if (filters?.propertyType) params.propertyType = filters.propertyType;
   if (filters?.bhkType) params.bhkType = filters.bhkType;
   if (filters?.entityType) params.entityType = filters.entityType;
+  if (filters?.locationText && filters.locationText.trim().length >= 2) {
+    params.locationText = `%${filters.locationText.trim()}%`;
+  }
   if (priceBuckets) {
     params.minBucket = priceBuckets.minBucket;
     params.maxBucket = priceBuckets.maxBucket;

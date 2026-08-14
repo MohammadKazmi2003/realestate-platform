@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
     const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
 
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), cursor, pageSize, sort, scope })}`;
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), pageSize, sort, scope })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {

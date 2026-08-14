@@ -16,7 +16,11 @@
     "seed": "node scripts/seed-data.js",
     "ch:sync": "node scripts/sync-to-clickhouse.js",
     "provision": "node scripts/provision-customer.js",
-    "worker": "npx tsx src/worker/index.ts"
+    "worker": "npx tsx src/worker/index.ts",
+    "start:all": "./start-all.sh",
+    "stop:all": "./stop-all.sh",
+    "sync:all": "./sync-all.sh",
+    "dev:all": "./start-all.sh && npm run dev"
   },
   "dependencies": {
     "@clickhouse/client": "^1.23.1",
