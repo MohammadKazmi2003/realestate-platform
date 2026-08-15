@@ -73,7 +73,8 @@ done
 
 echo "  Waiting for Redis..."
 for i in $(seq 1 10); do
-  if redis-cli ping 2>/dev/null | grep -q PONG; then
+  # Use docker exec — host may not have redis-cli installed (macOS)
+  if docker exec realestate-redis redis-cli ping 2>/dev/null | grep -q PONG; then
     echo "    ✓ Redis ready"
     break
   fi
