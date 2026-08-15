@@ -826,7 +826,6 @@ export default function BrowsePage() {
       if (activeFilters.propertyTypeId && propTypeIdToName[Number(activeFilters.propertyTypeId)]) {
         filterParams.propertyType = propTypeIdToName[Number(activeFilters.propertyTypeId)];
       }
-      if (activeFilters.location) filterParams.location = activeFilters.location;  // B2: forward location text
 
       const clusterBody: any = { bounds: bbox, zoom, filters: filterParams, scope: searchScopeRef.current };
       if (boundaryActiveRef.current && drawPointsRef.current.length >= 3) {

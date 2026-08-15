@@ -6,7 +6,7 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - xpack.ml.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx1g"
+      - "ES_JAVA_OPTS=-Xms256m -Xmx512m"
       - cluster.name=realestate-platform
       - node.name=es01
       - network.host=0.0.0.0
@@ -23,17 +23,17 @@ services:
       retries: 5
     restart: unless-stopped
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.15.0
-    container_name: realestate-kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    restart: unless-stopped
+#   kibana:
+#     image: docker.elastic.co/kibana/kibana:8.15.0
+#     container_name: realestate-kibana
+#     environment:
+#       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+#     ports:
+#       - "5601:5601"
+#     depends_on:
+#       elasticsearch:
+#         condition: service_healthy
+#     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -67,7 +67,7 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       # Limit ClickHouse to 60% of container memory for queries
       CLICKHOUSE_MAX_SERVER_MEMORY_USAGE_TO_RAM_RATIO: 0.6
-    mem_limit: 4g
+    mem_limit: 1g
     shm_size: '2gb'
     ulimits:
       nofile:

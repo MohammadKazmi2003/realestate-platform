@@ -178,7 +178,6 @@ async function executeMapQuery(body: any) {
   // Build cluster query: when scope='both' with property-specific filters (BHK/propertyType),
   // query ClickHouse per-entity-type and merge — otherwise a single query suffices
   const hasPropertyFilters = !!(propertyType || bhkType);
-  const locationText = location || query || undefined;  // B2: forward text to CH
   const clusterPromise = chAvailable
     ? (async () => {
         if (scope === 'both' && hasPropertyFilters) {
@@ -189,13 +188,11 @@ async function executeMapQuery(body: any) {
               maxPrice: maxPrice ? Number(maxPrice) : undefined,
               propertyType, bhkType,
               entityType: 'property',
-              locationText,
             }).catch(() => null),
             getMapClusters(bounds, zoom, {
               minPrice: minPrice ? Number(minPrice) : undefined,
               maxPrice: maxPrice ? Number(maxPrice) : undefined,
               entityType: 'project',
-              locationText,
             }).catch(() => null),
           ]);
           // Merge clusters from both entity types
@@ -215,7 +212,6 @@ async function executeMapQuery(body: any) {
           propertyType, bhkType,
           entityType: scope === 'properties' ? 'property'
                     : scope === 'projects' ? 'project' : undefined,
-          locationText,
         });
       })().catch((err) => {
         logger.warn('ClickHouse cluster query failed', err);

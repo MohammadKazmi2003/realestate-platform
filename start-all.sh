@@ -2,35 +2,50 @@
 # ============================================================
 # Real Estate Platform — Start Everything
 #
-# Starts: Supabase (CLI-managed), Elasticsearch, Kibana,
-#         Redis, ClickHouse (docker compose)
+# Usage: ./start-all.sh [--with-supabase]
+#   Default: starts ES, Kibana(off), Redis, ClickHouse only
+#   --with-supabase: also starts Supabase (12 containers) — only
+#                    needed for auth/lookup development
 # ============================================================
 set -e
 
 cd "$(dirname "$0")"
 
+WITH_SUPABASE=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-supabase) WITH_SUPABASE=1 ;;
+  esac
+done
+
 echo "=========================================="
 echo "  Real Estate Platform — Starting All"
 echo "=========================================="
 
-# 1. Start Supabase (manages its own ~15 containers: postgres, kong, auth, rest, storage, studio, ...)
-echo ""
-echo "[1/4] Starting Supabase (CLI-managed)..."
-if ! supabase status 2>/dev/null | grep -q "Local URL"; then
-  echo "  Starting Supabase (first run may take a while)..."
-  if ! supabase start 2>&1; then
-    echo "  ⚠ Supabase failed to start (likely port conflict from a previous run)."
-    echo "  Stopping existing Supabase project and retrying..."
-    supabase stop --project-id "$(grep -E '^project_id' supabase/config.toml 2>/dev/null | awk '{print $3}')" 2>/dev/null || true
-    supabase start
+# 1. Start Supabase (OPT-IN — it runs 12 containers on an 8GB machine)
+if [ "$WITH_SUPABASE" = "1" ]; then
+  echo ""
+  echo "[1/4] Starting Supabase (CLI-managed)..."
+  if ! supabase status 2>/dev/null | grep -q "Local URL"; then
+    echo "  Starting Supabase (first run may take a while)..."
+    if ! supabase start 2>&1; then
+      echo "  ⚠ Supabase failed to start (likely port conflict from a previous run)."
+      echo "  Stopping existing Supabase project and retrying..."
+      supabase stop --project-id "$(grep -E '^project_id' supabase/config.toml 2>/dev/null | awk '{print $3}')" 2>/dev/null || true
+      supabase start
+    fi
+  else
+    echo "  Supabase already running"
   fi
 else
-  echo "  Supabase already running"
+  echo ""
+  echo "[1/4] Skipping Supabase (use ./start-all.sh --with-supabase to include it)"
+  echo "  NOTE: location lookups + auth need Supabase; map browsing does not"
 fi
 
-# 2. Start Elasticsearch + Kibana + Redis + ClickHouse (docker compose)
+# 2. Start Elasticsearch + Redis + ClickHouse (docker compose; Kibana disabled)
 echo ""
-echo "[2/4] Starting Elasticsearch, Kibana, Redis, ClickHouse..."
+echo "[2/4] Starting Elasticsearch, Redis, ClickHouse..."
 docker compose up -d
 
 # 3. Wait for services to become healthy
@@ -70,10 +85,10 @@ echo ""
 echo "[4/4] All services running!"
 echo "=========================================="
 echo ""
-echo "  Supabase (Postgres)  http://localhost:54321"
+echo "  Supabase (opt-in)    http://localhost:54321"
 echo "  Supabase Studio       http://localhost:54323"
 echo "  Elasticsearch        http://localhost:9200"
-echo "  Kibana               http://localhost:5601"
+echo "  Kibana               (disabled — optional)"
 echo "  Redis                redis://localhost:6379"
 echo "  ClickHouse           http://localhost:8123"
 echo ""

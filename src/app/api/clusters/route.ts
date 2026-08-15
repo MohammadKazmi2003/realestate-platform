@@ -105,7 +105,6 @@ export async function POST(req: NextRequest) {
     if (isClickHouseAvailable()) {
       try {
         const hasPropertyFilters = !!(filters.propertyType || filters.bhkType);
-        const locationText = filters.location || filters.query || undefined;  // B2: forward text to CH
         let result: MapTileResponse;
 
         if (scope === 'both' && hasPropertyFilters) {
@@ -115,13 +114,11 @@ export async function POST(req: NextRequest) {
               maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
               propertyType: filters.propertyType, bhkType: filters.bhkType,
               entityType: 'property',
-              locationText,
             }),
             getMapClusters({ minLat, maxLat, minLng, maxLng }, zoom, {
               minPrice: filters.minPrice ? Number(filters.minPrice) : undefined,
               maxPrice: filters.maxPrice ? Number(filters.maxPrice) : undefined,
               entityType: 'project',
-              locationText,
             }),
           ]);
           const allClusters = [...propClusters.clusters, ...projClusters.clusters];
@@ -140,7 +137,6 @@ export async function POST(req: NextRequest) {
               propertyType: filters.propertyType,
               bhkType: filters.bhkType,
               entityType: scope === 'properties' ? 'property' : scope === 'projects' ? 'project' : undefined,
-              locationText,
             }
           );
         }

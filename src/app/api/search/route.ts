@@ -282,16 +282,20 @@ export async function POST(req: NextRequest) {
 
     logger.searchAnalytics(query || location || '', response.total, 0);
 
-    enqueueAnalytics({
-      query_text: query || location || '',
-      total_results: response.total,
-      latency_ms: 0,
-      filters: {
-        minPrice, maxPrice, propertyType, bhkType, listingPurpose,
-        amenities, furnishings, bathrooms, minArea, maxArea,
-        lat, lng, radiusKm,
-      },
-    }).catch(() => {});
+    // Analytics is fire-and-forget; in dev it creates a Supabase client +
+    // Redis writes that compete for the event loop. Skip in dev.
+    if (process.env.NODE_ENV === 'production') {
+      enqueueAnalytics({
+        query_text: query || location || '',
+        total_results: response.total,
+        latency_ms: 0,
+        filters: {
+          minPrice, maxPrice, propertyType, bhkType, listingPurpose,
+          amenities, furnishings, bathrooms, minArea, maxArea,
+          lat, lng, radiusKm,
+        },
+      }).catch(() => {});
+    }
 
     return NextResponse.json(response);
   } catch (error: any) {

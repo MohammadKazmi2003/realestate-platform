@@ -72,7 +72,6 @@ export async function getMapClusters(
     propertyType?: string;
     bhkType?: string;
     entityType?: string;
-    locationText?: string;
   }
 ): Promise<MapTileResponse> {
   const client = getClickHouseClient();
@@ -87,6 +86,10 @@ export async function getMapClusters(
   // Property type and BHK filters: apply unconditionally.
   // Projects have empty property_type/bhk_type in the MV, so the filter naturally
   // only matches properties — no entityType guard needed.
+  // NOTE: location_text is NOT in h3_clusters_precomputed — text filtering
+  // would throw UNKNOWN_IDENTIFIER. Location filtering is handled by the
+  // polygon post-filter (when a geocoded location is selected) and by ES
+  // (which filters listing text in queryESListings).
   if (filters?.propertyType) {
     conditions.push(`property_type = {propertyType:String}`);
   }
@@ -95,10 +98,6 @@ export async function getMapClusters(
   }
   if (filters?.entityType) {
     conditions.push(`entity_type = {entityType:String}`);
-  }
-  // B2: Location text filter — best-effort match on location_text
-  if (filters?.locationText && filters.locationText.trim().length >= 2) {
-    conditions.push(`location_text ILIKE {locationText:String}`);
   }
 
   // Price bucket filter (UInt16 supports up to ₹65.5Cr)
@@ -145,9 +144,6 @@ export async function getMapClusters(
   if (filters?.propertyType) params.propertyType = filters.propertyType;
   if (filters?.bhkType) params.bhkType = filters.bhkType;
   if (filters?.entityType) params.entityType = filters.entityType;
-  if (filters?.locationText && filters.locationText.trim().length >= 2) {
-    params.locationText = `%${filters.locationText.trim()}%`;
-  }
   if (priceBuckets) {
     params.minBucket = priceBuckets.minBucket;
     params.maxBucket = priceBuckets.maxBucket;
