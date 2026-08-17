@@ -24,13 +24,19 @@ function getCircleRadius(zoom: number): number {
 }
 
 function getClusterColor(): maplibregl.Expression {
+  // Property clusters: blue (#2563EB), Project clusters: green (#059669)
   return [
-    'interpolate', ['linear'], ['get', 'point_count'],
-    0,   '#4ade80',
-    5,   '#facc15',
-    25,  '#fb923c',
-    100, '#ef4444',
-    500, '#dc2626',
+    'case',
+    ['==', ['get', 'cluster_type'], 'property'], PROPERTY_COLOR,
+    ['==', ['get', 'cluster_type'], 'project'], PROJECT_COLOR,
+    // Fallback: legacy combined clusters (no cluster_type)
+    ['interpolate', ['linear'], ['get', 'point_count'],
+      0,   '#4ade80',
+      5,   '#facc15',
+      25,  '#fb923c',
+      100, '#ef4444',
+      500, '#dc2626',
+    ],
   ] as unknown as maplibregl.Expression;
 }
 

@@ -453,37 +453,23 @@ export default function BrowsePage() {
             const mapFeatures: GeoJSON.Feature[] = [];
 
             if (response.clusters?.length > 0) {
-              const merged = mergeOverlappingClusters(response.clusters, 70, mapRef.current);
-              for (let i = 0; i < merged.length; i++) {
-                const c = merged[i];
-                // ALL server-side clusters are shown — geotile_grid counts the
-                // full filtered population per tile, so every bucket matters.
-                // Cluster label: show entity-type breakdown when multiple types
-                // exist (e.g., "103p · 1015j") so properties don't "disappear"
-                // inside the combined total at country-level zoom.
-                const types = c.types || {};
-                const typeKeys = Object.keys(types);
-                let abbreviated: string;
-                if (typeKeys.length > 1) {
-                  const pCount = types.property || 0;
-                  const jCount = types.project || 0;
-                  abbreviated = `${pCount}p · ${jCount}j`;
-                } else if (c.count >= 10000) {
-                  abbreviated = `${Math.round(c.count / 1000)}k`;
-                } else if (c.count >= 1000) {
-                  abbreviated = `${(c.count / 1000).toFixed(1)}k`;
-                } else {
-                  abbreviated = c.count.toString();
-                }
-
+              // Each cluster has its own centroid (from separate property/project
+              // geotile_grid aggs) and a cluster_type tag — render directly.
+              for (let i = 0; i < response.clusters.length; i++) {
+                const c = response.clusters[i];
+                if (c.count <= 0) continue;
+                const label = c.count >= 10000 ? `${Math.round(c.count / 1000)}k`
+                  : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k`
+                  : c.count.toString();
                 mapFeatures.push({
                   type: 'Feature' as const,
-                  geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
+                  geometry: { type: 'Point' as const, coordinates: [c.lon, c.lat] },
                   properties: {
                     point_count: c.count,
-                    point_count_abbreviated: abbreviated,
+                    point_count_abbreviated: label,
+                    cluster_type: c.cluster_type,
                     avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
-                    types: c.types, _index: i,
+                    _index: i,
                   },
                 });
               }
