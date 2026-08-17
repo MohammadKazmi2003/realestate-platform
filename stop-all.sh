@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 echo "Stopping all services..."
 
-# 1. Stop docker compose services (ES, Kibana, Redis, ClickHouse)
+# 1. Stop docker compose services (ES, Redis)
 echo "  Stopping docker compose services..."
 docker compose down 2>/dev/null || echo "  (no compose services running)"
 

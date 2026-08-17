@@ -55,14 +55,52 @@ function buildSortClause(sort: string, lat?: number, lng?: number, scope?: strin
   ];
 }
 
-function buildAggregations(scope: string) {
+// Map geotile precision from zoom. The same query that feeds the sidebar list
+// also produces the map cluster circles, so list + map can never diverge.
+export function zoomToPrecision(zoom: number): number {
+  if (zoom <= 5) return 2;
+  if (zoom <= 8) return 3;
+  if (zoom <= 11) return 4;
+  if (zoom <= 13) return 5;
+  return 6;
+}
+
+// scaled_float (×100) metric aggregations return raw scaled values — divide
+// by the scaling factor to get real prices (matches es-config mappings).
+const PRICE_SCALING = 100;
+
+function buildAggregations(scope: string, zoom?: number, bounds?: any) {
   // Map-data endpoint only needs entity-type counts for scope='both'.
   // Facet aggregations (property_type, bhk, amenities, etc.) are not used
   // by the browse page — they add 50-200ms of ES CPU time for no benefit.
+  const aggs: any = {};
   if (scope === 'both') {
-    return { by_entity_type: { terms: { field: 'entity_type', size: 5 } } };
+    aggs.by_entity_type = { terms: { field: 'entity_type', size: 5 } };
   }
-  return {};
+  // Map clusters: geotile_grid geographic bucketing over the SAME filtered
+  // docs the list shows (all filters + viewport are applied in the query
+  // itself — never post-filtered). bounds restricts bucketing to the
+  // viewport so sum(buckets) == viewport total by construction.
+  if (zoom != null && bounds?.minLat != null) {
+    aggs.clusters = {
+      geotile_grid: {
+        field: 'location',
+        precision: zoomToPrecision(zoom),
+        bounds: {
+          top_left: { lat: bounds.maxLat, lon: bounds.minLng },
+          bottom_right: { lat: bounds.minLat, lon: bounds.maxLng },
+        },
+      },
+      aggs: {
+        center: { geo_centroid: { field: 'location' } },
+        avg_price: { avg: { field: 'sort_price' } },
+        min_price: { min: { field: 'sort_price' } },
+        max_price: { max: { field: 'sort_price' } },
+        by_type: { terms: { field: 'entity_type', size: 5 } },
+      },
+    };
+  }
+  return aggs;
 }
 
 export async function queryESListings(params: any) {
@@ -71,6 +109,7 @@ export async function queryESListings(params: any) {
     query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType,
     listingPurpose, amenities = [], furnishings = [], bathrooms, minArea, maxArea,
     lat, lng, radiusKm, bounds, polygon, cursor, pageSize = 24, sort = 'relevance', scope = 'both',
+    zoom,
   } = params;
 
   const query = sanitize(rawQuery)?.toLowerCase().trim();
@@ -172,7 +211,7 @@ export async function queryESListings(params: any) {
     size: pageSize,
     query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
     sort: buildSortClause(sort, lat, lng, scope),
-    aggs: buildAggregations(scope),
+    aggs: buildAggregations(scope, zoom, bounds),
     // Only return fields used by the browse page — cuts response size by ~55%
     _source: [
       'id', 'title', 'name', 'slug', 'entity_type',
@@ -199,6 +238,7 @@ export async function queryESListings(params: any) {
   }));
 
   const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total || 0;
+  const totalRelation = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.relation : undefined;
 
   let propertyTotal = 0;
   let projectTotal = 0;
@@ -215,9 +255,34 @@ export async function queryESListings(params: any) {
   return {
     results,
     total,
+    totalRelation,
+    clusters: parseClusterBuckets((esResponse.aggregations as any)?.clusters?.buckets),
+    precision: zoom != null ? zoomToPrecision(zoom) : undefined,
     propertyTotal,
     projectTotal,
     nextCursor: results.length >= pageSize ? results[results.length - 1]._sort : null,
     aggregations: esResponse.aggregations || {},
   };
+}
+
+// Map clusters: geotile_grid buckets → lightweight {tile, lat, lon, count, price stats, types}.
+// Rendered as cluster circles by the browse map. No heavy documents shipped.
+export function parseClusterBuckets(buckets: any[]): any[] {
+  return (buckets || []).map((bucket: any) => {
+    const center = bucket.center?.location;
+    const types = (bucket.by_type?.buckets || []).reduce((acc: any, b: any) => {
+      acc[b.key] = b.doc_count;
+      return acc;
+    }, {});
+    return {
+      tile: bucket.key,
+      lat: center?.lat ?? 0,
+      lon: center?.lon ?? 0,
+      count: bucket.doc_count || 0,
+      avg_price: Math.round((bucket.avg_price?.value || 0) / PRICE_SCALING),
+      min_price: Math.round((bucket.min_price?.value || 0) / PRICE_SCALING),
+      max_price: Math.round((bucket.max_price?.value || 0) / PRICE_SCALING),
+      types,
+    };
+  });
 }

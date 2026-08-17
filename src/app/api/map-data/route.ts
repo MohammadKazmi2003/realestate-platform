@@ -1,65 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isClickHouseAvailable, getMapClusters } from '@/lib/clickhouse';
 import { isEsAvailable, recordEsSuccess } from '@/lib/elasticsearch';
 import { queryESListings } from '@/lib/esQueryBuilder';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { checkMapRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
-
-function roundBounds(b: any) {
-  if (!b) return b;
-  return {
-    minLat: Math.round(b.minLat * 100) / 100,
-    maxLat: Math.round(b.maxLat * 100) / 100,
-    minLng: Math.round(b.minLng * 100) / 100,
-    maxLng: Math.round(b.maxLng * 100) / 100,
-  };
-}
-
-/**
- * Point-in-polygon test using ray casting.
- */
-function pointInPolygon(lat: number, lng: number, polygon: { lat: number; lng: number }[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i].lng, yi = polygon[i].lat;
-    const xj = polygon[j].lng, yj = polygon[j].lat;
-    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
-/**
- * Filter cluster centroids by polygon. Only clusters whose centroid falls inside the polygon are kept.
- */
-function filterClustersByPolygon(clusters: any[], polygon: { lat: number; lng: number }[]): any[] {
-  if (!polygon || polygon.length < 3) return clusters;
-  return clusters.filter(c => {
-    const lat = c.center_lat ?? c.lat ?? 0;
-    const lng = c.center_lon ?? c.lon ?? 0;
-    return pointInPolygon(lat, lng, polygon);
-  });
-}
-
-/**
- * B1: Post-filter clusters by exact price range.
- * ClickHouse price_bucket is coarse (₹1L buckets) — a cluster whose max_price
- * is above maxPrice (or min_price below minPrice) would otherwise over-count.
- */
-function filterClustersByPrice(
-  clusters: any[],
-  minPrice?: number,
-  maxPrice?: number,
-): any[] {
-  if (minPrice == null && maxPrice == null) return clusters;
-  return clusters.filter(c => {
-    if (minPrice != null && (c.max_price ?? Infinity) < minPrice) return false;
-    if (maxPrice != null && (c.min_price ?? 0) > maxPrice) return false;
-    return true;
-  });
-}
 
 // Convert bounds + zoom to a web map tile coordinate for cache key.
 // Tile-based keys have bounded cardinality (2^zoom × 2^zoom possible values),
@@ -116,12 +60,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid bounds' }, { status: 400 });
     }
 
-    // Tile-based cache key: converts continuous viewport coordinates to discrete
-    // tile coordinates with bounded cardinality. This gives 80%+ cache hit rate
-    // for adjacent viewports vs near-0% with floating-point bounds.
+    // Cache key must include EVERY parameter that can change the map response.
+    // Tile-based key: converts continuous viewport coordinates to discrete
+    // tile coordinates with bounded cardinality → high hit rate for adjacent viewports.
     const filterHash = buildFilterHash({
       query, location, minPrice, maxPrice, propertyType, bhkType,
-      listingPurpose, scope, sort, pageSize, polygon,
+      listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
+      lat, lng, radiusKm, scope, sort, pageSize, cursor, polygon,
     });
     const cacheKey = `md:${boundsToTileKey({ minLat, maxLat, minLng, maxLng }, zoom)}:${filterHash}`;
 
@@ -139,7 +84,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(result);
     }
 
-    // Execute query (parallel: ClickHouse + ES)
+    // Execute query — single ES call: filters + viewport + total + geotile_grid
     const promise = executeMapQuery(body);
     pendingRequests.set(cacheKey, promise);
 
@@ -171,121 +116,60 @@ async function executeMapQuery(body: any) {
     lat, lng, radiusKm, polygon,
   } = body;
 
-  // Check availability before parallel queries
-  const chAvailable = isClickHouseAvailable();
   const esAvailable = await isEsAvailable();
 
-  // Build cluster query: when scope='both' with property-specific filters (BHK/propertyType),
-  // query ClickHouse per-entity-type and merge — otherwise a single query suffices
-  const hasPropertyFilters = !!(propertyType || bhkType);
-  const clusterPromise = chAvailable
-    ? (async () => {
-        if (scope === 'both' && hasPropertyFilters) {
-          // Two queries: properties (with filters) + projects (without property-specific filters)
-          const [propClusters, projClusters] = await Promise.all([
-            getMapClusters(bounds, zoom, {
-              minPrice: minPrice ? Number(minPrice) : undefined,
-              maxPrice: maxPrice ? Number(maxPrice) : undefined,
-              propertyType, bhkType,
-              entityType: 'property',
-            }).catch(() => null),
-            getMapClusters(bounds, zoom, {
-              minPrice: minPrice ? Number(minPrice) : undefined,
-              maxPrice: maxPrice ? Number(maxPrice) : undefined,
-              entityType: 'project',
-            }).catch(() => null),
-          ]);
-          // Merge clusters from both entity types
-          const allClusters = [
-            ...(propClusters?.clusters || []),
-            ...(projClusters?.clusters || []),
-          ];
-          return {
-            clusters: allClusters,
-            total: allClusters.reduce((sum, c) => sum + c.count, 0),
-            h3_resolution: propClusters?.h3_resolution || projClusters?.h3_resolution || 8,
-          };
-        }
-        return getMapClusters(bounds, zoom, {
-          minPrice: minPrice ? Number(minPrice) : undefined,
-          maxPrice: maxPrice ? Number(maxPrice) : undefined,
-          propertyType, bhkType,
-          entityType: scope === 'properties' ? 'property'
-                    : scope === 'projects' ? 'project' : undefined,
-        });
-      })().catch((err) => {
-        logger.warn('ClickHouse cluster query failed', err);
+  // ES is the single source of truth: filters + viewport (BKD geo index)
+  // + total count + geotile_grid clusters all come from ONE query, so the
+  // list, badge, and map circles describe the exact same filtered population.
+  const searchResult = esAvailable
+    ? await queryESListings({
+        query, location, minPrice, maxPrice, propertyType, bhkType,
+        listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
+        lat, lng, radiusKm, bounds, polygon, cursor, pageSize, sort, scope,
+        zoom,
+      }).catch((err) => {
+        logger.warn('ES listing query failed', err);
         return null;
       })
-    : Promise.resolve(null);
-
-  // Parallel queries: ClickHouse clusters + ES listings
-  const [clusterResult, searchResult] = await Promise.all([
-    clusterPromise,
-
-    // ES: listings + aggregations (50-200ms)
-    esAvailable
-      ? queryESListings({
-          query, location, minPrice, maxPrice, propertyType, bhkType,
-          listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
-          lat, lng, radiusKm, bounds, polygon, cursor, pageSize, sort, scope,
-        }).catch((err) => {
-          logger.warn('ES listing query failed', err);
-          return null;
-        })
-      : Promise.resolve(null),
-  ]);
+    : null;
 
   // Signal ES success to circuit breaker (if ES query succeeded)
   if (searchResult) recordEsSuccess();
 
-  // If both backends failed, return error state (not silent empty results)
-  if (!clusterResult && !searchResult) {
+  if (!searchResult) {
     return NextResponse.json({
       error: 'Search services temporarily unavailable',
       clusters: [], clusterTotal: 0,
-      results: [], total: 0,
+      results: [], total: 0, totalRelation: undefined,
       nextCursor: null, aggregations: {},
       propertyTotal: 0, projectTotal: 0,
       zoom, precision: undefined,
     }, { status: 503 });
   }
 
-  // Combine into single response
-  let clusters = clusterResult?.clusters || [];
-
-  // B1: Post-filter clusters by exact price range (ClickHouse buckets are coarse)
-  const minP = minPrice ? Number(minPrice) : undefined;
-  const maxP = maxPrice ? Number(maxPrice) : undefined;
-  clusters = filterClustersByPrice(clusters, minP, maxP);
-
-  // Apply polygon filter to clusters when boundary is active.
-  // ClickHouse clusters are NOT filtered by polygon — they use bbox only.
-  // ES listings ARE filtered by polygon (geo_polygon in queryESListings).
-  // This post-filter ensures cluster counts only include listings inside the boundary.
-  if (polygon && polygon.length >= 3) {
-    clusters = filterClustersByPolygon(clusters, polygon);
-  }
+  const clusters = searchResult.clusters || [];
+  const clusterTotal = clusters.reduce((sum: number, c: any) => sum + (c.count || 0), 0);
 
   return {
-    // For map markers
+    // For map markers — lightweight cluster buckets only (no heavy docs)
     clusters,
-    clusterTotal: clusters.reduce((sum: number, c: any) => sum + (c.count || 0), 0),
+    clusterTotal,
 
-    // For sidebar
-    results: searchResult?.results || [],
-    total: searchResult?.total || 0,
-    nextCursor: searchResult?.nextCursor || null,
+    // For sidebar — lightweight listing fields
+    results: searchResult.results,
+    total: searchResult.total,
+    totalRelation: searchResult.totalRelation,
+    nextCursor: searchResult.nextCursor,
 
     // For filter badges
-    aggregations: searchResult?.aggregations || {},
+    aggregations: searchResult.aggregations,
 
     // For scope counts
-    propertyTotal: searchResult?.propertyTotal || 0,
-    projectTotal: searchResult?.projectTotal || 0,
+    propertyTotal: searchResult.propertyTotal,
+    projectTotal: searchResult.projectTotal,
 
     // Metadata
     zoom,
-    precision: clusterResult?.h3_resolution,
+    precision: searchResult.precision,
   };
 }

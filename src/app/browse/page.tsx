@@ -177,10 +177,8 @@ export default function BrowsePage() {
   const abortRef = useRef<AbortController | null>(null);
   const autocompleteAbortRef = useRef<AbortController | null>(null);
   const autocompleteReqIdRef = useRef(0);  // A5: stale-response guard for autocomplete
-  const clustersFetchIdRef = useRef(0);    // B8: stale-response guard for clusters
   const filtersRef = useRef(filters);
   const pendingFetchRef = useRef<{ bounds: any; cursorOverride?: any; polygonOverride?: any } | null>(null);
-  const fetchClustersAbortRef = useRef<AbortController | null>(null);
 
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
@@ -448,14 +446,13 @@ export default function BrowsePage() {
             }
           }
 
-          // Build map GeoJSON: ES result individual markers + optional H3 clusters
+          // Build map GeoJSON: ES result individual markers + server cluster circles.
+          // Clusters come from the SAME ES query as the listing results (geotile_grid
+          // over the identical filtered population) — consistent under ANY filter.
           if (mapRef.current) {
             const mapFeatures: GeoJSON.Feature[] = [];
-            const hasPropertySpecificFilters = !!(combinedParams.bhkType || combinedParams.propertyType);
 
-            // H3 cluster circles — only when clusters exist AND no property-specific filters
-            // (ClickHouse property_type/bhk_type data may differ from ES, causing count mismatches)
-            if (!hasPropertySpecificFilters && response.clusters?.length > 0) {
+            if (response.clusters?.length > 0) {
               const merged = mergeOverlappingClusters(response.clusters, 70, mapRef.current);
               for (let i = 0; i < merged.length; i++) {
                 const c = merged[i];
@@ -467,7 +464,7 @@ export default function BrowsePage() {
                     point_count: c.count,
                     point_count_abbreviated: c.count >= 10000 ? `${Math.round(c.count / 1000)}k` : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k` : c.count.toString(),
                     avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
-                    _index: i,
+                    types: c.types, _index: i,
                   },
                 });
               }
@@ -802,140 +799,82 @@ export default function BrowsePage() {
     const bounds = map.getBounds();
     const zoom = Math.round(map.getZoom());  // B9: single rounded zoom for consistency
 
-    if (zoom <= 13) {
-      // FAR ZOOM: Server-side clustering via ClickHouse ES geohash_grid
-      if (fetchClustersAbortRef.current) fetchClustersAbortRef.current.abort();
-      const controller = new AbortController();
-      fetchClustersAbortRef.current = controller;
-      const clusterFetchId = ++clustersFetchIdRef.current;  // B8: freshness guard
+    // CLOSE ZOOM ONLY: client-side clustering via supercluster in a Web Worker
+    // (keeps main thread free for 60fps map rendering).
+    // At far zoom (z ≤ 13) the cluster circles come from /api/map-data — the
+    // same ES query that feeds the sidebar list, so map + list + badge are
+    // consistent by construction.
+    let features = buildFeatures();
 
-      const activeFilters = filtersRef.current;
-      const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
-      const bbox = {
-        minLat: bounds.getSouth(),
-        maxLat: bounds.getNorth(),
-        minLng: bounds.getWest(),
-        maxLng: bounds.getEast(),
-      };
-      const filterParams: any = {};
-      if (activeFilters.minPrice) filterParams.minPrice = Number(activeFilters.minPrice);
-      if (activeFilters.maxPrice) filterParams.maxPrice = Number(activeFilters.maxPrice);
-      if (activeFilters.bhkTypeId && bhkIdToLabel[Number(activeFilters.bhkTypeId)]) {
-        filterParams.bhkType = bhkIdToLabel[Number(activeFilters.bhkTypeId)];
-      }
-      if (activeFilters.propertyTypeId && propTypeIdToName[Number(activeFilters.propertyTypeId)]) {
-        filterParams.propertyType = propTypeIdToName[Number(activeFilters.propertyTypeId)];
-      }
-
-      const clusterBody: any = { bounds: bbox, zoom, filters: filterParams, scope: searchScopeRef.current };
-      if (boundaryActiveRef.current && drawPointsRef.current.length >= 3) {
-        clusterBody.polygon = drawPointsRef.current;
-      }
-
-      fetch('/api/clusters', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(clusterBody),
-        signal: controller.signal,
-      }).then(res => res.json()).then((data) => {
-        if (!data || !data.clusters || !mapRef.current) return;
-        // B8: ignore stale responses (a newer cluster fetch has started)
-        if (clusterFetchId !== clustersFetchIdRef.current) return;
-        const zoomLvl = mapRef.current.getZoom();
-        if (Math.round(zoomLvl) !== zoom) return; // stale zoom
-
-        const merged = mergeOverlappingClusters(data.clusters, 70, mapRef.current);
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: merged.map((c: any, i: number) => ({
-            type: 'Feature' as const,
-            geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
-            properties: {
-              point_count: c.count,
-              point_count_abbreviated: c.count >= 10000 ? `${Math.round(c.count / 1000)}k` : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k` : c.count.toString(),
-              avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
-              types: c.types, _index: i,
-            },
-          })),
-        };
-        updateSourceData(mapRef.current, geojson);
-        updateCircleRadius(mapRef.current, zoomLvl);
-      }).catch(() => {});
-    } else {
-      // CLOSE ZOOM: Client-side clustering via supercluster in Web Worker
-      // (keeps main thread free for 60fps map rendering)
-      let features = buildFeatures();
-
-      // B4: If a boundary is active, filter points by polygon BEFORE clustering.
-      // Server-side clusters use centroid approximation; here we can be exact.
-      const poly = boundaryActiveRef.current && drawPointsRef.current.length >= 3
-        ? drawPointsRef.current
-        : null;
-      if (poly) {
-        features = features.filter(p =>
-          pointInPolygonClient(p.latitude, p.longitude, poly)
-        );
-      }
-
-      const bbox: [number, number, number, number] = [
-        bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
-      ];
-
-      // Fallback: run on main thread if worker unavailable (dev mode, SSR, etc.)
-      if (typeof Worker === 'undefined') {
-        clustering.load(features);
-        const clusters = clustering.getClusters(bbox, zoom);
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: clusters.map((f, i) => ({
-            type: 'Feature' as const,
-            geometry: f.geometry,
-            properties: { ...f.properties, _index: i },
-          })),
-        };
-        updateSourceData(map, geojson);
-        updateCircleRadius(map, zoom);
-        return;
-      }
-
-      const worker = new Worker(new URL('@/lib/map/clusterWorker', import.meta.url));
-      worker.postMessage({ type: 'cluster', features, bbox, zoom });
-      worker.onmessage = (e: MessageEvent) => {
-        const clusters: any[] = e.data.clusters || [];
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: clusters.map((f: any, i: number) => ({
-            type: 'Feature' as const,
-            geometry: f.geometry,
-            properties: { ...f.properties, _index: i },
-          })),
-        };
-        updateSourceData(map, geojson);
-        updateCircleRadius(map, zoom);
-        worker.terminate();
-      };
-      worker.onerror = () => {
-        // Worker failed, fall back to main thread
-        clustering.load(features);
-        const clusters = clustering.getClusters(bbox, zoom);
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: clusters.map((f, i) => ({
-            type: 'Feature' as const,
-            geometry: f.geometry,
-            properties: { ...f.properties, _index: i },
-          })),
-        };
-        updateSourceData(map, geojson);
-        updateCircleRadius(map, zoom);
-      };
+    // B4: If a boundary is active, filter points by polygon BEFORE clustering.
+    // Server-side clusters use centroid approximation; here we can be exact.
+    const poly = boundaryActiveRef.current && drawPointsRef.current.length >= 3
+      ? drawPointsRef.current
+      : null;
+    if (poly) {
+      features = features.filter(p =>
+        pointInPolygonClient(p.latitude, p.longitude, poly)
+      );
     }
-  }, [buildFeatures, mergeOverlappingClusters, lookupMaps]);
+
+    const bbox: [number, number, number, number] = [
+      bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
+    ];
+
+    // Fallback: run on main thread if worker unavailable (dev mode, SSR, etc.)
+    if (typeof Worker === 'undefined') {
+      clustering.load(features);
+      const clusters = clustering.getClusters(bbox, zoom);
+      const geojson: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: clusters.map((f, i) => ({
+          type: 'Feature' as const,
+          geometry: f.geometry,
+          properties: { ...f.properties, _index: i },
+        })),
+      };
+      updateSourceData(map, geojson);
+      updateCircleRadius(map, zoom);
+      return;
+    }
+
+    const worker = new Worker(new URL('@/lib/map/clusterWorker', import.meta.url));
+    worker.postMessage({ type: 'cluster', features, bbox, zoom });
+    worker.onmessage = (e: MessageEvent) => {
+      const clusters: any[] = e.data.clusters || [];
+      const geojson: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: clusters.map((f: any, i: number) => ({
+          type: 'Feature' as const,
+          geometry: f.geometry,
+          properties: { ...f.properties, _index: i },
+        })),
+      };
+      updateSourceData(map, geojson);
+      updateCircleRadius(map, zoom);
+      worker.terminate();
+    };
+    worker.onerror = () => {
+      // Worker failed, fall back to main thread
+      clustering.load(features);
+      const clusters = clustering.getClusters(bbox, zoom);
+      const geojson: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: clusters.map((f, i) => ({
+          type: 'Feature' as const,
+          geometry: f.geometry,
+          properties: { ...f.properties, _index: i },
+        })),
+      };
+      updateSourceData(map, geojson);
+      updateCircleRadius(map, zoom);
+    };
+  }, [buildFeatures]);
 
   useEffect(() => {
     // Always update clusters when properties/projects change.
-    // updateClusters() handles polygon filtering via /api/clusters when boundary is active.
-    // Skipping it when boundary is active caused unfiltered clusters from /api/map-data to persist.
+    // Far-zoom circles come from /api/map-data (same ES query as the list);
+    // this updates the close-zoom client-side clustering layer.
     updateClusters();
   }, [properties, projects, updateClusters]);
 
@@ -963,6 +902,7 @@ export default function BrowsePage() {
       center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM,
     });
     mapRef.current = map;
+    if (process.env.NODE_ENV !== 'production') (window as any).__map = map; // dev-only debug hook
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
     const onPointMouseMove = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
@@ -1075,6 +1015,10 @@ export default function BrowsePage() {
       map.on('click', 'clusters', onClusterClick);
 
       fetchPropertiesRef.current(map.getBounds());
+      // Static init (center/zoom set in constructor) does NOT fire moveend,
+      // so the initialMoveEndRef guard would otherwise swallow the USER's
+      // first pan/zoom. Reset it here, after the initial load fetch.
+      initialMoveEndRef.current = false;
     };
 
     let drawingStrokePoints: { lat: number; lng: number }[] = [];
@@ -1125,11 +1069,11 @@ export default function BrowsePage() {
         updateClusters();
       }
       if (searchAsIMoveRef.current) {
-        // 1000ms debounce for pan-triggered searches
+        // 400ms debounce for pan-triggered searches (spec §8: 300-500ms + cancel)
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = setTimeout(() => {
           fetchPropertiesRef.current(map.getBounds());
-        }, 1000);
+        }, 400);
       }
     };
 

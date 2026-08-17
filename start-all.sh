@@ -3,7 +3,7 @@
 # Real Estate Platform — Start Everything
 #
 # Usage: ./start-all.sh [--with-supabase]
-#   Default: starts ES, Kibana(off), Redis, ClickHouse only
+#   Default: starts Elasticsearch + Redis only
 #   --with-supabase: also starts Supabase (12 containers) — only
 #                    needed for auth/lookup development
 # ============================================================
@@ -43,9 +43,9 @@ else
   echo "  NOTE: location lookups + auth need Supabase; map browsing does not"
 fi
 
-# 2. Start Elasticsearch + Redis + ClickHouse (docker compose; Kibana disabled)
+# 2. Start Elasticsearch + Redis (docker compose; Kibana disabled)
 echo ""
-echo "[2/4] Starting Elasticsearch, Redis, ClickHouse..."
+echo "[2/4] Starting Elasticsearch + Redis..."
 docker compose up -d
 
 # 3. Wait for services to become healthy
@@ -58,16 +58,6 @@ for i in $(seq 1 30); do
     break
   fi
   [ "$i" = "30" ] && echo "    ✗ Elasticsearch not ready — check 'docker compose ps'" && exit 1
-  sleep 2
-done
-
-echo "  Waiting for ClickHouse..."
-for i in $(seq 1 15); do
-  if curl -sf http://localhost:8123/ping >/dev/null 2>&1; then
-    echo "    ✓ ClickHouse ready"
-    break
-  fi
-  [ "$i" = "15" ] && echo "    ✗ ClickHouse not ready — check 'docker compose ps'" && exit 1
   sleep 2
 done
 
@@ -91,7 +81,6 @@ echo "  Supabase Studio       http://localhost:54323"
 echo "  Elasticsearch        http://localhost:9200"
 echo "  Kibana               (disabled — optional)"
 echo "  Redis                redis://localhost:6379"
-echo "  ClickHouse           http://localhost:8123"
 echo ""
 echo "  Next step — start the app:"
 echo "    npm run dev   →  http://localhost:3000"
@@ -99,5 +88,4 @@ echo ""
 echo "  If data is missing, sync it:"
 echo "    node scripts/es-indexer.js full-sync"
 echo "    node scripts/es-project-indexer.js full-sync"
-echo "    node scripts/sync-to-clickhouse.js"
 echo "=========================================="
