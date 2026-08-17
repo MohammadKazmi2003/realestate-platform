@@ -338,11 +338,9 @@ export default function BrowsePage() {
     const isListView = fullScreenResultsRef.current;
     const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
     const activeFilters = filtersRef.current;
-    // Dynamic page size: 100 at far zoom (clusters dominate, fewer cards needed),
-    // 500 at close zoom (individual markers and supercluster need full dataset)
-    const currentZoom = mapRef.current ? mapRef.current.getZoom() : 12;
-    const mapPageSize = currentZoom <= 13 ? 100 : 500;
-    const params: any = { pageSize: isAppend ? 24 : mapPageSize, sort: sortByRef.current };
+    // Page size: 24 always. Clusters come from ES geotile_grid aggregation
+    // (counts ALL docs per tile), not from the docs returned here.
+    const params: any = { pageSize: 24, sort: sortByRef.current };
 
     if (activeFilters.location) params.location = activeFilters.location;
     if (activeFilters.minPrice) params.minPrice = Number(activeFilters.minPrice);
@@ -383,7 +381,7 @@ export default function BrowsePage() {
           query: activeFilters.location || undefined,
           minPrice: activeFilters.minPrice ? Number(activeFilters.minPrice) : undefined,
           maxPrice: activeFilters.maxPrice ? Number(activeFilters.maxPrice) : undefined,
-          pageSize: 500,
+          pageSize: 24,
           sort: sortByRef.current,
         };
         if (activeFilters.bhkTypeId && bhkIdToLabel[Number(activeFilters.bhkTypeId)]) {
