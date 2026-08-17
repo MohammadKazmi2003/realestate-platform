@@ -68,3 +68,10 @@ chatbot_test_results.json
 
 # opencode
 .opencode/
+
+# local opencode tooling (kept out of git on purpose)
+opencode.json
+playwright.config.ts
+/specs/
+/scripts/verify-map-consistency.js
+/src/lib/esQueryBuilder.test.ts

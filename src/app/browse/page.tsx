@@ -456,13 +456,32 @@ export default function BrowsePage() {
               const merged = mergeOverlappingClusters(response.clusters, 70, mapRef.current);
               for (let i = 0; i < merged.length; i++) {
                 const c = merged[i];
-                if (c.count <= 1) continue;
+                // ALL server-side clusters are shown — geotile_grid counts the
+                // full filtered population per tile, so every bucket matters.
+                // Cluster label: show entity-type breakdown when multiple types
+                // exist (e.g., "103p · 1015j") so properties don't "disappear"
+                // inside the combined total at country-level zoom.
+                const types = c.types || {};
+                const typeKeys = Object.keys(types);
+                let abbreviated: string;
+                if (typeKeys.length > 1) {
+                  const pCount = types.property || 0;
+                  const jCount = types.project || 0;
+                  abbreviated = `${pCount}p · ${jCount}j`;
+                } else if (c.count >= 10000) {
+                  abbreviated = `${Math.round(c.count / 1000)}k`;
+                } else if (c.count >= 1000) {
+                  abbreviated = `${(c.count / 1000).toFixed(1)}k`;
+                } else {
+                  abbreviated = c.count.toString();
+                }
+
                 mapFeatures.push({
                   type: 'Feature' as const,
                   geometry: { type: 'Point' as const, coordinates: [c.center_lon || c.lon, c.center_lat || c.lat] },
                   properties: {
                     point_count: c.count,
-                    point_count_abbreviated: c.count >= 10000 ? `${Math.round(c.count / 1000)}k` : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k` : c.count.toString(),
+                    point_count_abbreviated: abbreviated,
                     avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
                     types: c.types, _index: i,
                   },
@@ -470,27 +489,32 @@ export default function BrowsePage() {
               }
             }
 
-            // ES result individual markers (no point_count → rendered by unclustered layers)
-            for (const r of (response.results || [])) {
-              const loc = r.location;
-              if (!loc?.lat || !loc?.lon) continue;
-              const img = r.image_url || r.primary_image || '';
-              const title = r.entity_type === 'project' ? (r.name || '') : (r.title || '');
-              mapFeatures.push({
-                type: 'Feature' as const,
-                geometry: { type: 'Point' as const, coordinates: [loc.lon, loc.lat] },
-                properties: {
-                  id: r.id,
-                  type: r.entity_type === 'project' ? 'project' : 'property',
-                  title,
-                  price: r.entity_type === 'project' ? (r.low_price || 0) : (r.sort_price || r.price || 0),
-                  image: img,
-                  location: r.location_text || '',
-                  area: r.area_sqft ? `${r.area_sqft} sqft` : undefined,
-                  bedrooms: r.bhk_type || undefined,
-                  bathrooms: r.bathrooms?.toString(),
-                },
-              });
+            // ES result individual markers — only at close zoom (z>13) where
+            // Supercluster needs them. At far zoom (z≤13), server-side cluster
+            // circles already represent the full population per tile.
+            const currentMapZoom = mapRef.current ? mapRef.current.getZoom() : 12;
+            if (currentMapZoom > 13) {
+              for (const r of (response.results || [])) {
+                const loc = r.location;
+                if (!loc?.lat || !loc?.lon) continue;
+                const img = r.image_url || r.primary_image || '';
+                const title = r.entity_type === 'project' ? (r.name || '') : (r.title || '');
+                mapFeatures.push({
+                  type: 'Feature' as const,
+                  geometry: { type: 'Point' as const, coordinates: [loc.lon, loc.lat] },
+                  properties: {
+                    id: r.id,
+                    type: r.entity_type === 'project' ? 'project' : 'property',
+                    title,
+                    price: r.entity_type === 'project' ? (r.low_price || 0) : (r.sort_price || r.price || 0),
+                    image: img,
+                    location: r.location_text || '',
+                    area: r.area_sqft ? `${r.area_sqft} sqft` : undefined,
+                    bedrooms: r.bhk_type || undefined,
+                    bathrooms: r.bathrooms?.toString(),
+                  },
+                });
+              }
             }
 
             const geojson: GeoJSON.FeatureCollection = {
@@ -732,14 +756,22 @@ export default function BrowsePage() {
         const totalCount = group.reduce((s: number, c: any) => s + (c.count || 0), 0);
         const totalWeightedLat = group.reduce((s: number, c: any) => s + (c.center_lat || c.lat || 0) * (c.count || 0), 0);
         const totalWeightedLon = group.reduce((s: number, c: any) => s + (c.center_lon || c.lon || 0) * (c.count || 0), 0);
+        // Combine entity-type counts from all merged clusters
+        const combinedTypes: Record<string, number> = {};
+        for (const c of group) {
+          for (const [k, v] of Object.entries(c.types || {})) {
+            combinedTypes[k] = (combinedTypes[k] || 0) + (v as number);
+          }
+        }
         merged.push({
           ...group[0],
           center_lat: totalWeightedLat / totalCount,
           center_lon: totalWeightedLon / totalCount,
           count: totalCount,
           avg_price: Math.round(group.reduce((s: number, c: any) => s + (c.avg_price || 0) * (c.count || 0), 0) / totalCount),
-          min_price: Math.min(...group.map((c: any) => c.min_price || Infinity)),
+          min_price: Math.min(...group.map((c: any) => c.min_price ?? Infinity)),
           max_price: Math.max(...group.map((c: any) => c.max_price || 0)),
+          types: combinedTypes,
         });
       }
     }
@@ -872,10 +904,14 @@ export default function BrowsePage() {
   }, [buildFeatures]);
 
   useEffect(() => {
-    // Always update clusters when properties/projects change.
-    // Far-zoom circles come from /api/map-data (same ES query as the list);
-    // this updates the close-zoom client-side clustering layer.
-    updateClusters();
+    // CLOSE ZOOM ONLY: client-side Supercluster over individual markers.
+    // At z≤13, cluster circles come from /api/map-data (server-side geotile_grid
+    // over the FULL filtered population) — never overwrite them with Supercluster
+    // clusters which only represent the first 500 results.
+    const zoom = mapRef.current ? mapRef.current.getZoom() : 12;
+    if (zoom > 13) {
+      updateClusters();
+    }
   }, [properties, projects, updateClusters]);
 
   useEffect(() => {
@@ -1059,13 +1095,13 @@ export default function BrowsePage() {
       // The initial fetchAllProperties from selectSuggestion already handles the data.
       if (geocodedBoundsRef.current) {
         geocodedBoundsRef.current = null;
-        if (currentZoom <= 13) {
+        if (currentZoom > 13) {
           updateClusters();
         }
         return;
       }
 
-      if (currentZoom <= 13) {
+      if (currentZoom > 13) {
         updateClusters();
       }
       if (searchAsIMoveRef.current) {
