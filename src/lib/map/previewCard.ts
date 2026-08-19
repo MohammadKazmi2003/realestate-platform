@@ -49,21 +49,17 @@ export function showPropertyPreview(
   lngLat: maplibregl.LngLat
 ): void {
   const el = ensurePreviewEl();
-  const imgSrc =
-    point.image && point.image !== ''
-      ? point.image
-      : 'https://placehold.co/300x200/DEE4ED/3D4A5C?text=No+Image';
-
-  const details = [point.bedrooms, point.area].filter(Boolean).join(' · ');
+  const entityLabel = point.type === 'project' ? 'Project' : 'Property';
+  const priceText = point.price > 0
+    ? (point.type === 'project' ? formatAedPrice(point.price) : formatPrice(point.price))
+    : 'Price on request';
 
   el.innerHTML = `
     <a href="${detailHref(point.type, point.id)}" target="_blank" rel="noopener noreferrer" class="map-preview-link">
-      <img src="${imgSrc}" class="map-preview-image" alt="${point.title || ''}" loading="lazy" />
       <div class="map-preview-content">
-        <div class="map-preview-price">${formatPrice(point.price)}</div>
+        <div class="map-preview-type">${entityLabel}</div>
+        <div class="map-preview-price">${priceText}</div>
         <div class="map-preview-title">${point.title || ''}</div>
-        ${details ? `<div class="map-preview-details">${details}</div>` : ''}
-        <div class="map-preview-location">${point.location || ''}</div>
       </div>
     </a>
   `;
@@ -127,6 +123,7 @@ export function showListingPreviewCard(
   const specsHtml = specs.length
     ? `<div class="map-listing-specs">${specs.map(s => `<span class="map-listing-spec">${s}</span>`).join('')}</div>`
     : '';
+  const showLocation = listing.location_text && !isDuplicateLabel(listing.title, listing.location_text);
 
   el.innerHTML = `
     <button class="map-listing-close" title="Close">×</button>
@@ -137,7 +134,7 @@ export function showListingPreviewCard(
     <div class="map-listing-body">
       <div class="map-listing-price">${priceText}</div>
       <div class="map-listing-title">${listing.title || ''}</div>
-      ${listing.location_text ? `<div class="map-listing-address">${listing.location_text}</div>` : ''}
+      ${showLocation ? `<div class="map-listing-address">${listing.location_text}</div>` : ''}
       ${specsHtml}
       ${listing.developer_name ? `<div class="map-listing-dev">${listing.developer_name}</div>` : ''}
       <a href="${detailHref(listing.entity_type, listing.id)}" target="_blank" rel="noopener noreferrer" class="map-listing-view">View Details →</a>
@@ -165,6 +162,12 @@ export function hideListingPreviewCard(): void {
 
 function titleCase(s: string): string {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function isDuplicateLabel(first?: string | null, second?: string | null): boolean {
+  if (!first || !second) return false;
+  return first.trim().replace(/\s+/g, ' ').toLowerCase()
+    === second.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 // Anchor the listing card NEXT TO the marker: vertically centered on the

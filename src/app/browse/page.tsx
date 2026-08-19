@@ -34,7 +34,10 @@ type ProjectBrowse = Project & {
 
 const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
 const MAX_LIST_ITEMS = 500;
-const DEFAULT_ZOOM = 11;
+// Default viewport: whole India visible (and Dubai, where projects are) so
+// both property and project markers are in view on first load. z4 fits
+// India's ~29° lat/lon span with margin at the default container size.
+const DEFAULT_ZOOM = 4;
 
 // Compact price label for map dots (Zillow-style "$449K").
 function formatPriceLabel(price: number): string {
@@ -167,7 +170,6 @@ export default function BrowsePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [sortedResultOrder, setSortedResultOrder] = useState<{ type: 'property' | 'project'; id: string }[]>([]);
   const [combinedNextCursor, setCombinedNextCursor] = useState<any[] | null>(null);
-  const isFetchingRef = useRef(false);
 
   const [boundaryPoints, setBoundaryPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
@@ -189,7 +191,6 @@ export default function BrowsePage() {
   const autocompleteAbortRef = useRef<AbortController | null>(null);
   const autocompleteReqIdRef = useRef(0);  // A5: stale-response guard for autocomplete
   const filtersRef = useRef(filters);
-  const pendingFetchRef = useRef<{ bounds: any; cursorOverride?: any; polygonOverride?: any } | null>(null);
 
   // Sidebar-hover → map highlight: stale-response guards + LRU marker cache
   const hoverReqIdRef = useRef(0);
@@ -339,11 +340,10 @@ export default function BrowsePage() {
   };
 
   const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: { lat: number; lng: number }[] | null) => {
-    if (isFetchingRef.current) {
-      pendingFetchRef.current = { bounds, cursorOverride, polygonOverride };
-      return;
-    }
-    isFetchingRef.current = true;
+    // Cancel-on-new: the latest request represents the viewport we actually
+    // need, so any in-flight request is aborted immediately instead of being
+    // queued. Aborted requests fail with AbortError and are a silent no-op,
+    // so stale responses can never paint the map or the sidebar list.
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -351,8 +351,12 @@ export default function BrowsePage() {
 
     const fetchId = ++fetchIdRef.current;
     const isAppend = cursorOverride?.append ?? false;
-    if (!isAppend) setLoading(true);
-    else setLoadingMore(true);
+    if (!isAppend) {
+      setLoading(true);
+      setLoadingMore(false);
+    } else {
+      setLoadingMore(true);
+    }
 
     const scope = searchScopeRef.current;
     const isListView = fullScreenResultsRef.current;
@@ -377,10 +381,15 @@ export default function BrowsePage() {
       params.polygon = activePolygon;
     }
     if (searchAsIMoveRef.current && bounds && !isListView) {
-      const minLat = bounds.getSouthWest().lat;
-      const maxLat = bounds.getNorthEast().lat;
-      const minLng = bounds.getSouthWest().lng;
-      const maxLng = bounds.getNorthEast().lng;
+      // Clamp viewport bounds to valid coordinate ranges before sending.
+      // At very low zooms the viewport can exceed the antimeridian (MapLibre
+      // returns e.g. east=291°) — ES rejects longitudes outside ±180 with a
+      // 400, which used to surface as an empty map.
+      let minLat = Math.max(-85.0511, Math.min(85.0511, bounds.getSouthWest().lat));
+      let maxLat = Math.max(-85.0511, Math.min(85.0511, bounds.getNorthEast().lat));
+      let minLng = Math.max(-180, Math.min(180, bounds.getSouthWest().lng));
+      let maxLng = Math.max(-180, Math.min(180, bounds.getNorthEast().lng));
+      if (minLng > maxLng) { minLng = -180; maxLng = 180; } // wrapped across the antimeridian
       if (isFinite(minLat) && isFinite(maxLat) && isFinite(minLng) && isFinite(maxLng)) {
         params.bounds = { minLat, maxLat, minLng, maxLng };
       }
@@ -467,6 +476,7 @@ export default function BrowsePage() {
           // Build map GeoJSON from the lightweight markers (up to ~500 dots,
           // Zillow-style). Markers come from the SAME filtered population as the
           // sidebar list, so map dots + list + badge stay consistent.
+          let mapGeoJson: GeoJSON.FeatureCollection | null = null;
           if (mapRef.current) {
             const mapFeatures: GeoJSON.Feature[] = [];
 
@@ -487,15 +497,19 @@ export default function BrowsePage() {
               });
             }
 
-            const geojson: GeoJSON.FeatureCollection = {
+            mapGeoJson = {
               type: 'FeatureCollection',
               features: mapFeatures,
             };
-            updateSourceData(mapRef.current, geojson);
-            updateCircleRadius(mapRef.current, mapRef.current.getZoom());
           }
 
           if (fetchId !== fetchIdRef.current) return;
+
+          // Only the newest response may paint dots on the map.
+          if (mapRef.current && mapGeoJson) {
+            updateSourceData(mapRef.current, mapGeoJson);
+            updateCircleRadius(mapRef.current, mapRef.current.getZoom());
+          }
 
           setProperties(props);
           setProjects(projs);
@@ -503,6 +517,11 @@ export default function BrowsePage() {
           setPropertyTotal(response.propertyTotal ?? 0);
           setProjectTotal(response.projectTotal ?? 0);
           setCombinedNextCursor(response.nextCursor ?? null);
+
+          // The location fetch has completed with the correct (geocoded)
+          // bounds, so the post-fitBounds moveend can now behave like a normal
+          // corrective fetch instead of being suppressed by the guard below.
+          geocodedBoundsRef.current = null;
         }
       } else if (scope === 'both' && isAppend) {
         // APPEND: Use existing /api/search endpoint for pagination
@@ -669,12 +688,9 @@ export default function BrowsePage() {
         }
       }
     } finally {
-      isFetchingRef.current = false;
-      if (pendingFetchRef.current) {
-        const pending = pendingFetchRef.current;
-        pendingFetchRef.current = null;
-        fetchAllProperties(pending.bounds, pending.cursorOverride, pending.polygonOverride);
-      }
+      // Keep abortRef pointing at the newest controller; if a newer request
+      // started, its own finally will clear it.
+      if (abortRef.current === controller) abortRef.current = null;
     }
     if (fetchId === fetchIdRef.current) {
       if (isAppend) setLoadingMore(false);
@@ -828,8 +844,6 @@ export default function BrowsePage() {
       map.getCanvas().style.cursor = 'pointer';
       const point: ClusterPoint = {
         id: props.id, type: props.type, title: props.title, price: props.price || 0,
-        image: props.image || '', location: props.location || '',
-        area: props.area, bedrooms: props.bedrooms,
         latitude: e.lngLat.lat, longitude: e.lngLat.lng,
       };
       showPropertyPreview(map, point, e.lngLat);
@@ -909,7 +923,13 @@ export default function BrowsePage() {
       map.on('click', 'highlighted-pin', onPointClick);
       map.on('click', onMapClick);
 
-      fetchPropertiesRef.current(map.getBounds());
+      // Initial data load. If a location search is in progress, it already
+      // fired a fetch with the correct geocoded bounds (and would abort this
+      // one anyway via cancel-on-new); fetching here with the pre-fitBounds
+      // viewport would only repaint stale, project-less markers.
+      if (!geocodedBoundsRef.current) {
+        fetchPropertiesRef.current(map.getBounds());
+      }
       // Static init (center/zoom set in constructor) does NOT fire moveend,
       // so the initialMoveEndRef guard would otherwise swallow the USER's
       // first pan/zoom. Reset it here, after the initial load fetch.

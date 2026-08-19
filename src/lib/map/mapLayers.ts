@@ -14,20 +14,15 @@ const LAYERS = {
 const PROPERTY_COLOR = '#2563EB';
 const PROJECT_COLOR = '#059669';
 
-// A single map point (marker dot or sidebar-hovered listing). Mirrors the
-// former ClusterPoint from clustering.ts.
+// Lightweight data available for a map point and its hover preview. This is
+// intentionally limited to fields returned by the marker query.
 export interface ClusterPoint {
   id: string;
   type: 'property' | 'project';
   title: string;
   price: number;
-  image?: string;
-  location?: string;
-  area?: string;
-  bedrooms?: string;
   latitude: number;
   longitude: number;
-  slug?: string;
 }
 
 export interface HoverPointData {
@@ -44,10 +39,36 @@ export interface HoverPointData {
 
 // Minimalist dot radius that grows gently with zoom.
 function getCircleRadius(zoom: number): number {
-  if (zoom < 12) return 5;
-  if (zoom < 14) return 6;
-  if (zoom < 16) return 7;
-  return 8;
+  if (zoom < 12) return 7;
+  if (zoom < 14) return 8;
+  if (zoom < 16) return 9;
+  return 10;
+}
+
+// Soft dark halo under each dot — gives the markers a subtle lift and depth
+// (Zillow-style) without looking flat or low-quality.
+const DOT_HALO_RADIUS = 4;
+const DOT_HALO_OPACITY = 0.28;
+const DOT_HALO_BLUR = 0.5;
+
+function dotPaint(color: string, zoom: number): any {
+  return {
+    'circle-color': color,
+    'circle-radius': getCircleRadius(zoom),
+    'circle-stroke-width': 2,
+    'circle-stroke-color': '#ffffff',
+    'circle-opacity': ['case', ['==', ['feature-state', 'hidden'], true], 0, 0.95],
+  };
+}
+
+function dotHaloPaint(zoom: number): any {
+  return {
+    'circle-color': '#0f172a',
+    'circle-radius': getCircleRadius(zoom) + DOT_HALO_RADIUS,
+    'circle-opacity': ['case', ['==', ['feature-state', 'hidden'], true], 0, DOT_HALO_OPACITY],
+    'circle-blur': DOT_HALO_BLUR,
+    'circle-stroke-width': 0,
+  };
 }
 
 // Generate the speech-bubble BACKGROUND image: a standard white rounded
@@ -158,21 +179,34 @@ export function setupMapLayers(map: maplibregl.Map): void {
     promoteId: 'id',
   });
 
-  // Clean minimalist dots — small, colored by entity type, subtle white stroke.
-  // The highlighted listing's own dot is hidden (opacity 0, feature-state)
-  // while its speech bubble is showing, so the marker reads as one unit.
+  // High-quality Zillow-style dots: a soft dark halo underneath a crisp,
+  // larger dot with a clean white outline. The highlighted listing's own dot
+  // (and halo) is hidden while its speech bubble is showing.
+  const propertyHalo = `${LAYERS.unclusteredProperties}-halo`;
+  const projectHalo = `${LAYERS.unclusteredProjects}-halo`;
+
+  map.addLayer({
+    id: propertyHalo,
+    type: 'circle',
+    source: SOURCE_ID,
+    filter: ['==', ['get', 'type'], 'property'],
+    paint: dotHaloPaint(map.getZoom()),
+  });
+
+  map.addLayer({
+    id: projectHalo,
+    type: 'circle',
+    source: SOURCE_ID,
+    filter: ['==', ['get', 'type'], 'project'],
+    paint: dotHaloPaint(map.getZoom()),
+  });
+
   map.addLayer({
     id: LAYERS.unclusteredProperties,
     type: 'circle',
     source: SOURCE_ID,
     filter: ['==', ['get', 'type'], 'property'],
-    paint: {
-      'circle-color': PROPERTY_COLOR,
-      'circle-radius': getCircleRadius(map.getZoom()),
-      'circle-stroke-width': 1.5,
-      'circle-stroke-color': '#ffffff',
-      'circle-opacity': ['case', ['==', ['feature-state', 'hidden'], true], 0, 0.95],
-    },
+    paint: dotPaint(PROPERTY_COLOR, map.getZoom()),
   });
 
   map.addLayer({
@@ -180,13 +214,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
     type: 'circle',
     source: SOURCE_ID,
     filter: ['==', ['get', 'type'], 'project'],
-    paint: {
-      'circle-color': PROJECT_COLOR,
-      'circle-radius': getCircleRadius(map.getZoom()),
-      'circle-stroke-width': 1.5,
-      'circle-stroke-color': '#ffffff',
-      'circle-opacity': ['case', ['==', ['feature-state', 'hidden'], true], 0, 0.95],
-    },
+    paint: dotPaint(PROJECT_COLOR, map.getZoom()),
   });
 
   // Zillow-style price labels on the densest dots. Collision detection hides
@@ -271,10 +299,19 @@ export function updateSourceData(
 
 export function updateCircleRadius(map: maplibregl.Map, zoom: number): void {
   const radius = getCircleRadius(zoom);
-  const layers = [LAYERS.unclusteredProperties, LAYERS.unclusteredProjects];
-  for (const layerId of layers) {
+  const haloRadius = radius + DOT_HALO_RADIUS;
+  const dots = [LAYERS.unclusteredProperties, LAYERS.unclusteredProjects];
+  const halos = [`${LAYERS.unclusteredProperties}-halo`, `${LAYERS.unclusteredProjects}-halo`];
+  for (const layerId of dots) {
     try {
       map.setPaintProperty(layerId, 'circle-radius', radius as any);
+    } catch {
+      // layer might not exist yet
+    }
+  }
+  for (const layerId of halos) {
+    try {
+      map.setPaintProperty(layerId, 'circle-radius', haloRadius as any);
     } catch {
       // layer might not exist yet
     }

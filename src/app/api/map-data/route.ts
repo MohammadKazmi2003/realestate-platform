@@ -60,6 +60,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid bounds' }, { status: 400 });
     }
 
+    // Clamp to valid coordinate ranges — ES rejects lat/lon outside these.
+    // Clients may send unwrapped longitudes (e.g. 291°) at very low zooms.
+    const normalizedBounds = {
+      minLat: Math.max(-85.0511, Math.min(85.0511, minLat)),
+      maxLat: Math.max(-85.0511, Math.min(85.0511, maxLat)),
+      minLng: Math.max(-180, Math.min(180, minLng)),
+      maxLng: Math.max(-180, Math.min(180, maxLng)),
+    };
+    if (normalizedBounds.minLng > normalizedBounds.maxLng) {
+      normalizedBounds.minLng = -180;
+      normalizedBounds.maxLng = 180;
+    }
+    body.bounds = normalizedBounds;
+
     // Cache key must include EVERY parameter that can change the map response.
     // Tile-based key: converts continuous viewport coordinates to discrete
     // tile coordinates with bounded cardinality → high hit rate for adjacent viewports.
@@ -68,7 +82,7 @@ export async function POST(req: NextRequest) {
       listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
       lat, lng, radiusKm, scope, sort, pageSize, cursor, polygon,
     });
-    const cacheKey = `md:v2:${boundsToTileKey({ minLat, maxLat, minLng, maxLng }, zoom)}:${filterHash}`;
+    const cacheKey = `md:v2:${boundsToTileKey(normalizedBounds, zoom)}:${filterHash}`;
 
     // Check cache first
     const cached = await cacheGet(cacheKey);
@@ -81,7 +95,12 @@ export async function POST(req: NextRequest) {
     // Request coalescing: if identical request is in-flight, wait for it
     if (pendingRequests.has(cacheKey)) {
       const result = await pendingRequests.get(cacheKey);
-      return NextResponse.json(result);
+      if (!result.ok) {
+        return NextResponse.json(result.body, { status: result.status });
+      }
+      return NextResponse.json(result.body, {
+        headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60' },
+      });
     }
 
     // Execute query — two parallel ES calls sharing the same filters: the 24-doc
@@ -92,10 +111,16 @@ export async function POST(req: NextRequest) {
     try {
       const result = await promise;
 
-      // Cache unified response (60s TTL)
-      await cacheSet(cacheKey, result, 60);
+      // NEVER cache error responses — a serialized NextResponse would store
+      // `{}` and be served as an empty map for the whole TTL after ES recovers.
+      if (!result.ok) {
+        return NextResponse.json(result.body, { status: result.status });
+      }
 
-      return NextResponse.json(result, {
+      // Cache unified response (60s TTL)
+      await cacheSet(cacheKey, result.body, 60);
+
+      return NextResponse.json(result.body, {
         headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60' },
       });
     } finally {
@@ -140,39 +165,47 @@ async function executeMapQuery(body: any) {
         queryESMapMarkers(esParams)
           .catch((err) => {
             logger.warn('ES map marker query failed', err);
-            return [];
+            return null;
           }),
       ])
-    : [null, []];
+    : [null, null];
 
   // Signal ES success to circuit breaker (if ES query succeeded)
-  if (searchResult) recordEsSuccess();
+  if (searchResult && markers) recordEsSuccess();
 
-  if (!searchResult) {
-    return NextResponse.json({
-      error: 'Search services temporarily unavailable',
-      results: [], markers: [], total: 0, totalRelation: undefined,
-      nextCursor: null,
-      propertyTotal: 0, projectTotal: 0,
-      zoom,
-    }, { status: 503 });
+  if (!searchResult || !markers) {
+    return {
+      ok: false,
+      status: 503,
+      body: {
+        error: 'Search services temporarily unavailable',
+        results: [], markers: [], total: 0, totalRelation: undefined,
+        nextCursor: null,
+        propertyTotal: 0, projectTotal: 0,
+        zoom,
+      },
+    };
   }
 
   return {
-    // For map dots — up to 500 lightweight markers (id, lat, lon, price)
-    markers,
+    ok: true,
+    status: 200,
+    body: {
+      // For map dots — up to 500 lightweight markers (id, lat, lon, price)
+      markers,
 
-    // For sidebar — lightweight listing fields
-    results: searchResult.results,
-    total: searchResult.total,
-    totalRelation: searchResult.totalRelation,
-    nextCursor: searchResult.nextCursor,
+      // For sidebar — lightweight listing fields
+      results: searchResult.results,
+      total: searchResult.total,
+      totalRelation: searchResult.totalRelation,
+      nextCursor: searchResult.nextCursor,
 
-    // For scope counts
-    propertyTotal: searchResult.propertyTotal,
-    projectTotal: searchResult.projectTotal,
+      // For scope counts
+      propertyTotal: searchResult.propertyTotal,
+      projectTotal: searchResult.projectTotal,
 
-    // Metadata
-    zoom,
+      // Metadata
+      zoom,
+    },
   };
 }
