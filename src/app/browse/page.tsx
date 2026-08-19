@@ -13,8 +13,8 @@ import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from 
 import { getLookup } from '@/lib/lookupCache';
 import type { Project } from '@/lib/types';
 import { MarkerLruCache } from '@/lib/markerCache';
-import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
-import { showPropertyPreview, hidePropertyPreview, showHoverPinLabel, hideHoverPinLabel, destroyPreviewCards } from '@/lib/map/previewCard';
+import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, setHighlightState, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
+import { showPropertyPreview, hidePropertyPreview, showListingPreviewCard, hideListingPreviewCard, destroyPreviewCards } from '@/lib/map/previewCard';
 import type { Feature } from 'geojson';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
@@ -42,6 +42,24 @@ function formatPriceLabel(price: number): string {
   if (price >= 10000000) return `₹${(price / 10000000).toFixed(1)}Cr`;
   if (price >= 100000) return `₹${(price / 100000).toFixed(0)}L`;
   return `₹${price.toLocaleString('en-IN')}`;
+}
+
+// Price label for the highlighted speech-bubble marker — projects are priced
+// in AED. Truncated so it always fits the fixed bubble width (~15 chars).
+function formatHighlightPrice(type: string | undefined, price?: number): string {
+  if (!price || price <= 0) return '';
+  let label: string;
+  if (type === 'project') {
+    label = price >= 1000000
+      ? `AED ${(price / 1000000).toFixed(2)}M`
+      : `AED ${price.toLocaleString()}`;
+  } else {
+    label = formatPriceLabel(price);
+  }
+  if (label.length > 15) {
+    label = `${label.slice(0, 14)}…`;
+  }
+  return label;
 }
 
 type AutocompleteSuggestion = {
@@ -179,6 +197,8 @@ export default function BrowsePage() {
   const hoverDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hoveredIdRef = useRef<{ id: string; type: 'property' | 'project' } | null>(null);
   const markerCacheRef = useRef(new MarkerLruCache(50));
+  // Marker click → rich listing card: stale-response guard
+  const clickReqIdRef = useRef(0);
 
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
@@ -681,17 +701,11 @@ export default function BrowsePage() {
   }) => {
     const map = mapRef.current;
     if (!map || fullScreenResultsRef.current) return;
-    setHighlightedPoint(map, data);
-
-    // Show the slim label only when the pinned point is on-screen.
-    const lngLat = new maplibregl.LngLat(data.lon, data.lat);
-    const pt = map.project(lngLat);
-    const rect = map.getContainer().getBoundingClientRect();
-    if (pt.x >= 0 && pt.x <= rect.width && pt.y >= 0 && pt.y <= rect.height) {
-      showHoverPinLabel(map, data, lngLat);
-    } else {
-      hideHoverPinLabel();
-    }
+    // The price label is rendered by the highlight's own symbol layer, so it
+    // stays locked to the bubble at every zoom/pan (never detaches or clips).
+    setHighlightedPoint(map, { ...data, price_label: formatHighlightPrice(data.type, data.price) });
+    // Hide the listing's base dot so the bubble reads as one clean unit.
+    setHighlightState(map, data.id);
   }, []);
 
   useEffect(() => {
@@ -766,8 +780,10 @@ export default function BrowsePage() {
     hoverReqIdRef.current++;
     if (hoverAbortRef.current) hoverAbortRef.current.abort();
     if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
-    if (mapRef.current) setHighlightedPoint(mapRef.current, null);
-    hideHoverPinLabel();
+    if (mapRef.current) {
+      setHighlightedPoint(mapRef.current, null);
+      setHighlightState(mapRef.current, null);
+    }
   }, []);
 
   const combinedList = useMemo(() => {
@@ -828,11 +844,32 @@ export default function BrowsePage() {
       const feature = e.features?.[0];
       if (!feature) return;
       const props = feature.properties as any;
-      if (props.type === 'project') {
-        router.push(`/projects/${props.id}`);
-      } else {
-        router.push(`/property/${props.id}`);
-      }
+      if (!props?.id) return;
+      // Don't let the click bubble to the map's background-click close handler.
+      e.originalEvent?.stopPropagation?.();
+
+      const map = mapRef.current;
+      if (!map) return;
+      // MapLibre reuses the event object, so capture the marker's coordinates
+      // NOW — the async fetch below must not read `e.lngLat` later.
+      const geom = feature.geometry as GeoJSON.Point | undefined;
+      const pointLngLat = geom?.coordinates
+        ? new maplibregl.LngLat(geom.coordinates[0], geom.coordinates[1])
+        : e.lngLat;
+
+      const reqId = ++clickReqIdRef.current;
+      fetch(`/api/listings/${encodeURIComponent(props.id)}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => {
+          if (reqId !== clickReqIdRef.current) return;
+          if (!data || data.lat == null || data.lon == null) return;
+          showListingPreviewCard(map, data, pointLngLat);
+        })
+        .catch(() => { /* silent — no card */ });
+    };
+
+    const onMapClick = () => {
+      hideListingPreviewCard();
     };
 
     // Fix Maptiler empty sprite URL issue — prevents "Image '' could not be loaded" errors
@@ -868,6 +905,9 @@ export default function BrowsePage() {
       map.on('mouseleave', 'unclustered-projects', onPointMouseLeave);
       map.on('click', 'unclustered-properties', onPointClick);
       map.on('click', 'unclustered-projects', onPointClick);
+      // Clicking the highlighted price-marker also opens the card
+      map.on('click', 'highlighted-pin', onPointClick);
+      map.on('click', onMapClick);
 
       fetchPropertiesRef.current(map.getBounds());
       // Static init (center/zoom set in constructor) does NOT fire moveend,
@@ -909,6 +949,10 @@ export default function BrowsePage() {
         return;
       }
 
+      // The listing card is DOM-anchored at the clicked marker's screen
+      // position; hide it once the map moves so it never floats over nothing.
+      hideListingPreviewCard();
+
       // If we just completed a geocoded location fitBounds, skip the redundant fetch.
       // The initial fetchAllProperties from selectSuggestion already handles the data.
       if (geocodedBoundsRef.current) {
@@ -943,6 +987,8 @@ export default function BrowsePage() {
       map.off('mouseleave', 'unclustered-projects', onPointMouseLeave);
       map.off('click', 'unclustered-properties', onPointClick);
       map.off('click', 'unclustered-projects', onPointClick);
+      map.off('click', 'highlighted-pin', onPointClick);
+      map.off('click', onMapClick);
       removeMapLayers(map);
       destroyPreviewCards();
       map.remove();

@@ -204,6 +204,10 @@ const MARKER_SOURCE_FIELDS = [
 
 // Maximum map dots per viewport (Zillow-style cap).
 const MARKER_LIMIT = 500;
+// When scope='both', split the marker budget between the two entity types so
+// one type can never crowd out the other (e.g. 1270 projects vs 103 properties
+// at a country-level viewport would otherwise fill all 500 slots with projects).
+const MARKER_SPLIT = 250;
 
 export async function queryESListings(params: any) {
   const es = getElasticsearchClient();
@@ -266,32 +270,46 @@ export async function queryESMapMarkers(params: any) {
   const es = getElasticsearchClient();
   const { sort = 'relevance', scope = 'both', lat, lng } = params;
 
-  const { must, filters } = buildFilters(params, scope);
+  async function run(indexes: string | string[], limit: number, entityType?: string) {
+    const { must, filters } = buildFilters(params, scope);
+    if (entityType) {
+      filters.push({ term: { entity_type: entityType } });
+    }
 
-  const esQuery: any = {
-    index: indexForScope(scope),
-    size: MARKER_LIMIT,
-    track_total_hits: false,
-    query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
-    sort: buildSortClause(sort, lat, lng, scope),
-    _source: MARKER_SOURCE_FIELDS,
-  };
-
-  const esResponse = await es.search(esQuery);
-
-  const markers = (esResponse.hits.hits || []).map((hit: any) => {
-    const src = hit._source || {};
-    const loc = src.location || {};
-    const isProject = src.entity_type === 'project';
-    return {
-      id: src.id,
-      entity_type: src.entity_type,
-      lat: loc.lat ?? null,
-      lon: loc.lon ?? null,
-      price: isProject ? (src.low_price || 0) : (src.sort_price || src.price || 0),
-      title: src.title || src.name || '',
+    const esQuery: any = {
+      index: indexes,
+      size: limit,
+      track_total_hits: false,
+      query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+      sort: buildSortClause(sort, lat, lng, scope),
+      _source: MARKER_SOURCE_FIELDS,
     };
-  });
 
-  return markers;
+    const esResponse = await es.search(esQuery);
+
+    return (esResponse.hits.hits || []).map((hit: any) => {
+      const src = hit._source || {};
+      const loc = src.location || {};
+      const isProject = src.entity_type === 'project';
+      return {
+        id: src.id,
+        entity_type: src.entity_type,
+        lat: loc.lat ?? null,
+        lon: loc.lon ?? null,
+        price: isProject ? (src.low_price || 0) : (src.sort_price || src.price || 0),
+        title: src.title || src.name || '',
+      };
+    });
+  }
+
+  if (scope === 'both') {
+    // Two capped queries so both property AND project dots always render.
+    const [properties, projects] = await Promise.all([
+      run([ES_INDEX_ALIAS], MARKER_SPLIT, 'property'),
+      run([PROJECTS_INDEX_ALIAS], MARKER_SPLIT, 'project'),
+    ]);
+    return [...properties, ...projects];
+  }
+
+  return run(indexForScope(scope), MARKER_LIMIT);
 }

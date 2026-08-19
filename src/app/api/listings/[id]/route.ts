@@ -51,15 +51,27 @@ export async function GET(
     }
 
     const src = hit._source as any;
+    const isProject = src.entity_type === 'project';
     const result = {
       id: src.id ?? id,
       entity_type: src.entity_type,
       lat: src.location?.lat ?? null,
       lon: src.location?.lon ?? null,
       title: src.title || src.name || '',
-      price: src.entity_type === 'project' ? (src.low_price || 0) : (src.sort_price || src.price || 0),
+      price: isProject ? (src.low_price || 0) : (src.sort_price || src.price || 0),
+      low_price: src.low_price || null,
+      high_price: src.high_price || null,
       image_url: src.image_url || src.primary_image || null,
       location_text: src.location_text || null,
+      area_sqft: src.area_sqft ?? null,
+      area_unit: src.area_unit || null,
+      bhk_type: src.bhk_type || null,
+      bathrooms: src.bathrooms ?? null,
+      balconies: src.balconies ?? null,
+      property_type: src.property_type || null,
+      developer_name: src.developer_name || null,
+      construction_phase: src.construction_phase || null,
+      delivery_date: src.delivery_date || null,
     };
 
     await cacheSet(cacheKey, result, 300);

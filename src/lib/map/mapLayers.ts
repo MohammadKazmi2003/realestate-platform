@@ -2,18 +2,17 @@ import maplibregl from 'maplibre-gl';
 
 const SOURCE_ID = 'browse-points';
 const HIGHLIGHT_SOURCE_ID = 'highlight-point';
+const HIGHLIGHT_PIN_IMAGE = 'price-marker-icon';
 
 const LAYERS = {
   unclusteredProperties: 'unclustered-properties',
   unclusteredProjects: 'unclustered-projects',
   markerPrice: 'marker-price',
-  highlightedPoint: 'highlighted-point',
-  highlightedPointRing: 'highlighted-point-ring',
+  highlightedPin: 'highlighted-pin',
 } as const;
 
 const PROPERTY_COLOR = '#2563EB';
 const PROJECT_COLOR = '#059669';
-const HIGHLIGHT_COLOR = '#EF4444';
 
 // A single map point (marker dot or sidebar-hovered listing). Mirrors the
 // former ClusterPoint from clustering.ts.
@@ -37,16 +36,115 @@ export interface HoverPointData {
   lon: number;
   title?: string;
   price?: number;
+  price_label?: string;
   image?: string;
   location?: string;
   type?: 'property' | 'project';
 }
 
+// Minimalist dot radius that grows gently with zoom.
 function getCircleRadius(zoom: number): number {
-  if (zoom < 12) return 6;
-  if (zoom < 14) return 8;
-  if (zoom < 16) return 10;
-  return 12;
+  if (zoom < 12) return 5;
+  if (zoom < 14) return 6;
+  if (zoom < 16) return 7;
+  return 8;
+}
+
+// Generate the speech-bubble BACKGROUND image: a standard white rounded
+// rectangle with a sharp triangular stem at the bottom whose TIP points at the
+// map coordinate. The price is NOT baked into this raster — it is rendered on
+// top as a real MapLibre vector text label so it stays crisp at every zoom/DPR.
+// The WIDTH hugs the label (a small fixed padding on each side) so the bubble
+// stays compact; the HEIGHT is fixed so the stem tip anchor never moves.
+const BUBBLE_FONT = "700 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+const BUBBLE_PADDING = 6;
+const BUBBLE_MIN_WIDTH = 48;
+const BUBBLE_HEIGHT = 48;
+
+function createBubbleImageData(width: number, _priceLabel: string): ImageData {
+  const W = width;
+  const H = BUBBLE_HEIGHT;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new ImageData(W, H);
+
+  const bubbleX = 0;
+  const bubbleW = W;
+  const bubbleY = 1;
+  const bubbleH = 30;
+  const bubbleY2 = bubbleY + bubbleH;
+  const stemW = 18;
+  const tipX = W / 2;
+  const tipY = H - 1; // stem tip = the map coordinate anchor
+  const radius = 8;
+  const stemLeft = tipX - stemW / 2;
+  const stemRight = tipX + stemW / 2;
+
+  // Speech-bubble outline: rounded rect + sharp downward stem, drawn as ONE
+  // path so the fill, border, and shadow form a single connected marker.
+  const bubblePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(bubbleX + radius, bubbleY);
+    ctx.arcTo(bubbleX + bubbleW, bubbleY, bubbleX + bubbleW, bubbleY + bubbleH, radius);
+    ctx.arcTo(bubbleX + bubbleW, bubbleY + bubbleH, bubbleX, bubbleY + bubbleH, radius);
+    ctx.lineTo(stemRight, bubbleY2);
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(stemLeft, bubbleY2);
+    ctx.arcTo(bubbleX, bubbleY + bubbleH, bubbleX, bubbleY, radius);
+    ctx.arcTo(bubbleX, bubbleY, bubbleX + bubbleW, bubbleY, radius);
+    ctx.closePath();
+  };
+
+  // Shadow — offsets the whole marker so it floats above the map
+  ctx.save();
+  ctx.shadowColor = 'rgba(15, 23, 42, 0.35)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 3;
+  ctx.fillStyle = '#ffffff';
+  bubblePath();
+  ctx.fill();
+  ctx.restore();
+
+  // Crisp border — miter join keeps the stem tip a sharp point
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.14)';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'miter';
+  ctx.miterLimit = 4;
+  bubblePath();
+  ctx.stroke();
+
+  return ctx.getImageData(0, 0, W, H);
+}
+
+// Generate a snug bubble image for the given price label. Returns its key
+// (measured width) and ImageData; distinct widths are cached as distinct
+// images (map.updateImage requires identical sizes, so per-width addImage is
+// the way to vary bubble width per highlight).
+function createBubbleImage(priceLabel: string): { width: number; imageData: ImageData } {
+  const width = getBubbleWidth(priceLabel);
+  return { width, imageData: createBubbleImageData(width, priceLabel) };
+}
+
+function getBubbleWidth(priceLabel: string): number {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return 48;
+  ctx.font = BUBBLE_FONT;
+  const textW = priceLabel ? Math.ceil(ctx.measureText(priceLabel).width) : 0;
+  return Math.max(textW + BUBBLE_PADDING * 2, 48);
+}
+
+// Ensure a bubble image exists for the given price label; returns the image
+// name to use as the highlight feature's `icon_image`.
+function getBubbleImage(map: maplibregl.Map, priceLabel: string): string {
+  const { width, imageData } = createBubbleImage(priceLabel);
+  const name = `bubble-${width}`;
+  if (!map.hasImage(name)) {
+    map.addImage(name, imageData);
+  }
+  return name;
 }
 
 export function setupMapLayers(map: maplibregl.Map): void {
@@ -55,8 +153,14 @@ export function setupMapLayers(map: maplibregl.Map): void {
   map.addSource(SOURCE_ID, {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
+    // Markers carry their id in properties.id — promote it so feature-state
+    // (used to hide a marker while its speech bubble is showing) works.
+    promoteId: 'id',
   });
 
+  // Clean minimalist dots — small, colored by entity type, subtle white stroke.
+  // The highlighted listing's own dot is hidden (opacity 0, feature-state)
+  // while its speech bubble is showing, so the marker reads as one unit.
   map.addLayer({
     id: LAYERS.unclusteredProperties,
     type: 'circle',
@@ -65,9 +169,9 @@ export function setupMapLayers(map: maplibregl.Map): void {
     paint: {
       'circle-color': PROPERTY_COLOR,
       'circle-radius': getCircleRadius(map.getZoom()),
-      'circle-stroke-width': 2.5,
+      'circle-stroke-width': 1.5,
       'circle-stroke-color': '#ffffff',
-      'circle-opacity': 0.95,
+      'circle-opacity': ['case', ['==', ['feature-state', 'hidden'], true], 0, 0.95],
     },
   });
 
@@ -79,9 +183,9 @@ export function setupMapLayers(map: maplibregl.Map): void {
     paint: {
       'circle-color': PROJECT_COLOR,
       'circle-radius': getCircleRadius(map.getZoom()),
-      'circle-stroke-width': 2.5,
+      'circle-stroke-width': 1.5,
       'circle-stroke-color': '#ffffff',
-      'circle-opacity': 0.95,
+      'circle-opacity': ['case', ['==', ['feature-state', 'hidden'], true], 0, 0.95],
     },
   });
 
@@ -95,7 +199,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
       'text-field': ['coalesce', ['get', 'price_label'], ''],
       'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
       'text-size': 11,
-      'text-offset': [0, -1.4],
+      'text-offset': [0, -1.3],
       'text-anchor': 'bottom',
       'symbol-sort-key': ['get', 'sort_key'],
       'text-allow-overlap': false,
@@ -114,29 +218,43 @@ export function setupMapLayers(map: maplibregl.Map): void {
     data: { type: 'FeatureCollection', features: [] },
   });
 
-  // Soft halo under the highlighted dot so it reads as "pinned".
-  map.addLayer({
-    id: LAYERS.highlightedPointRing,
-    type: 'circle',
-    source: HIGHLIGHT_SOURCE_ID,
-    paint: {
-      'circle-color': HIGHLIGHT_COLOR,
-      'circle-radius': 26,
-      'circle-opacity': 0.22,
-      'circle-stroke-width': 0,
-    },
-  });
+  // Default bubble image (empty label) — fallback for the coalesce below.
+  if (!map.hasImage(HIGHLIGHT_PIN_IMAGE)) {
+    const { imageData } = createBubbleImage('');
+    map.addImage(HIGHLIGHT_PIN_IMAGE, imageData);
+  }
 
+  // The speech-bubble marker: white bubble icon (anchored at its stem tip =
+  // the listing's exact location) with the PRICE rendered as real vector text
+  // centered inside the bubble — crisp at every zoom, never rasterized. The
+  // icon image is picked per highlight via `icon_image`, so the bubble width
+  // hugs the price label instead of being oversized.
   map.addLayer({
-    id: LAYERS.highlightedPoint,
-    type: 'circle',
+    id: LAYERS.highlightedPin,
+    type: 'symbol',
     source: HIGHLIGHT_SOURCE_ID,
+    layout: {
+      'icon-image': ['coalesce', ['get', 'icon_image'], HIGHLIGHT_PIN_IMAGE],
+      'icon-anchor': 'bottom',
+      'icon-size': 1,
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'text-field': ['coalesce', ['get', 'price_label'], ''],
+      'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+      'text-size': 13,
+      'text-anchor': 'center',
+      // Bubble body center sits ~32px above the anchor point (icon 48px tall,
+      // body 30px) — in ems of the 13px text. Constant because bubble height
+      // never changes, only the width.
+      'text-offset': [0, -2.4],
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+    },
     paint: {
-      'circle-color': HIGHLIGHT_COLOR,
-      'circle-radius': 16,
-      'circle-stroke-width': 3,
-      'circle-stroke-color': '#ffffff',
-      'circle-opacity': 0.95,
+      'text-color': '#0f172a',
+      'text-halo-color': '#ffffff',
+      'text-halo-width': 1,
+      'text-halo-blur': 0.5,
     },
   });
 }
@@ -163,10 +281,21 @@ export function updateCircleRadius(map: maplibregl.Map, zoom: number): void {
   }
 }
 
-// Set (or clear) the single highlighted point. Uses its own source so it
-// survives the frequent full-source overwrites of `browse-points` during
-// pan/zoom/fetch. `point` carries explicit coordinates, so it works even when
-// the hovered listing's marker isn't among the currently rendered dots.
+// While a listing's speech bubble is shown, hide its base dot so the marker
+// reads as one clean unit (the stem tip already marks the exact coordinate).
+export function setHighlightState(map: maplibregl.Map, id: string | null): void {
+  if (!id) {
+    map.removeFeatureState({ source: SOURCE_ID });
+    return;
+  }
+  map.setFeatureState({ source: SOURCE_ID, id }, { hidden: true });
+}
+
+// Set (or clear) the single highlighted speech-bubble marker. Uses its own
+// source so it survives the frequent full-source overwrites of `browse-points`
+// during pan/zoom/fetch. `point` carries explicit coordinates, so it works
+// even when the hovered listing's marker isn't among the rendered dots. The
+// price is carried in `price_label` and rendered as vector text by the layer.
 export function setHighlightedPoint(
   map: maplibregl.Map,
   point: HoverPointData | null
@@ -179,12 +308,15 @@ export function setHighlightedPoint(
     return;
   }
 
+  // Snug bubble image for this label — cached per measured width.
+  const iconImage = getBubbleImage(map, point.price_label || '');
+
   source.setData({
     type: 'FeatureCollection',
     features: [{
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [point.lon, point.lat] },
-      properties: { ...point },
+      properties: { ...point, icon_image: iconImage },
     }],
   });
 }
