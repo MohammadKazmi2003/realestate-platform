@@ -12,9 +12,9 @@ import { cn } from '@/lib/utils';
 import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
 import type { Project } from '@/lib/types';
-import { MapClustering, type ClusterPoint, type ResultFeature } from '@/lib/map/clustering';
-import { setupMapLayers, updateSourceData, updateCircleRadius, highlightFeature, removeMapLayers } from '@/lib/map/mapLayers';
-import { showPropertyPreview, hidePropertyPreview, showClusterPreview, hideClusterPreview, destroyPreviewCards } from '@/lib/map/previewCard';
+import { MarkerLruCache } from '@/lib/markerCache';
+import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
+import { showPropertyPreview, hidePropertyPreview, showHoverPinLabel, hideHoverPinLabel, destroyPreviewCards } from '@/lib/map/previewCard';
 import type { Feature } from 'geojson';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
@@ -35,7 +35,14 @@ type ProjectBrowse = Project & {
 const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
 const MAX_LIST_ITEMS = 500;
 const DEFAULT_ZOOM = 11;
-const PROJECT_MARKER_COLOR = '#059669';
+
+// Compact price label for map dots (Zillow-style "$449K").
+function formatPriceLabel(price: number): string {
+  if (!price || price <= 0) return '';
+  if (price >= 10000000) return `₹${(price / 10000000).toFixed(1)}Cr`;
+  if (price >= 100000) return `₹${(price / 100000).toFixed(0)}L`;
+  return `₹${price.toLocaleString('en-IN')}`;
+}
 
 type AutocompleteSuggestion = {
   type: 'location' | 'property' | 'project' | 'geocoded';
@@ -95,23 +102,9 @@ function perpendicularDistance(p: { lat: number; lng: number }, a: { lat: number
   return Math.sqrt((p.lng - closestX) ** 2 + (p.lat - closestY) ** 2);
 }
 
-// B4: point-in-polygon test (ray casting) for client-side boundary filtering
-function pointInPolygonClient(lat: number, lng: number, polygon: { lat: number; lng: number }[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i].lng, yi = polygon[i].lat;
-    const xj = polygon[j].lng, yj = polygon[j].lat;
-    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
 export default function BrowsePage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const clusteringRef = useRef<MapClustering | null>(null);
   const router = useRouter();
 
   const [properties, setProperties] = useState<PropertyBrowse[]>([]);
@@ -179,6 +172,13 @@ export default function BrowsePage() {
   const autocompleteReqIdRef = useRef(0);  // A5: stale-response guard for autocomplete
   const filtersRef = useRef(filters);
   const pendingFetchRef = useRef<{ bounds: any; cursorOverride?: any; polygonOverride?: any } | null>(null);
+
+  // Sidebar-hover → map highlight: stale-response guards + LRU marker cache
+  const hoverReqIdRef = useRef(0);
+  const hoverAbortRef = useRef<AbortController | null>(null);
+  const hoverDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hoveredIdRef = useRef<{ id: string; type: 'property' | 'project' } | null>(null);
+  const markerCacheRef = useRef(new MarkerLruCache(50));
 
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
@@ -338,8 +338,8 @@ export default function BrowsePage() {
     const isListView = fullScreenResultsRef.current;
     const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
     const activeFilters = filtersRef.current;
-    // Page size: 24 always. Clusters come from ES geotile_grid aggregation
-    // (counts ALL docs per tile), not from the docs returned here.
+    // Page size: 24 always. Map dots come from the markers array returned by
+    // /api/map-data (up to 500 per viewport), not from the 24 list docs here.
     const params: any = { pageSize: 24, sort: sortByRef.current };
 
     if (activeFilters.location) params.location = activeFilters.location;
@@ -444,61 +444,27 @@ export default function BrowsePage() {
             }
           }
 
-          // Build map GeoJSON: ES result individual markers + server cluster circles.
-          // Clusters come from the SAME ES query as the listing results (geotile_grid
-          // over the identical filtered population) — consistent under ANY filter.
+          // Build map GeoJSON from the lightweight markers (up to ~500 dots,
+          // Zillow-style). Markers come from the SAME filtered population as the
+          // sidebar list, so map dots + list + badge stay consistent.
           if (mapRef.current) {
             const mapFeatures: GeoJSON.Feature[] = [];
 
-            if (response.clusters?.length > 0) {
-              // Each cluster has its own centroid (from separate property/project
-              // geotile_grid aggs) and a cluster_type tag — render directly.
-              for (let i = 0; i < response.clusters.length; i++) {
-                const c = response.clusters[i];
-                if (c.count <= 0) continue;
-                const label = c.count >= 10000 ? `${Math.round(c.count / 1000)}k`
-                  : c.count >= 1000 ? `${(c.count / 1000).toFixed(1)}k`
-                  : c.count.toString();
-                mapFeatures.push({
-                  type: 'Feature' as const,
-                  geometry: { type: 'Point' as const, coordinates: [c.lon, c.lat] },
-                  properties: {
-                    point_count: c.count,
-                    point_count_abbreviated: label,
-                    cluster_type: c.cluster_type,
-                    avg_price: c.avg_price, min_price: c.min_price, max_price: c.max_price,
-                    _index: i,
-                  },
-                });
-              }
-            }
-
-            // ES result individual markers — only at close zoom (z>13) where
-            // Supercluster needs them. At far zoom (z≤13), server-side cluster
-            // circles already represent the full population per tile.
-            const currentMapZoom = mapRef.current ? mapRef.current.getZoom() : 12;
-            if (currentMapZoom > 13) {
-              for (const r of (response.results || [])) {
-                const loc = r.location;
-                if (!loc?.lat || !loc?.lon) continue;
-                const img = r.image_url || r.primary_image || '';
-                const title = r.entity_type === 'project' ? (r.name || '') : (r.title || '');
-                mapFeatures.push({
-                  type: 'Feature' as const,
-                  geometry: { type: 'Point' as const, coordinates: [loc.lon, loc.lat] },
-                  properties: {
-                    id: r.id,
-                    type: r.entity_type === 'project' ? 'project' : 'property',
-                    title,
-                    price: r.entity_type === 'project' ? (r.low_price || 0) : (r.sort_price || r.price || 0),
-                    image: img,
-                    location: r.location_text || '',
-                    area: r.area_sqft ? `${r.area_sqft} sqft` : undefined,
-                    bedrooms: r.bhk_type || undefined,
-                    bathrooms: r.bathrooms?.toString(),
-                  },
-                });
-              }
+            for (const m of (response.markers || [])) {
+              if (m.lat == null || m.lon == null) continue;
+              const isProject = m.entity_type === 'project';
+              mapFeatures.push({
+                type: 'Feature' as const,
+                geometry: { type: 'Point' as const, coordinates: [m.lon, m.lat] },
+                properties: {
+                  id: m.id,
+                  type: isProject ? 'project' : 'property',
+                  title: m.title || '',
+                  price: m.price || 0,
+                  price_label: formatPriceLabel(m.price),
+                  sort_key: m.price || 0,
+                },
+              });
             }
 
             const geojson: GeoJSON.FeatureCollection = {
@@ -700,66 +666,32 @@ export default function BrowsePage() {
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const highlightMarker = useCallback((id: string | null) => {
-    if (mapRef.current) {
-      highlightFeature(mapRef.current, id);
+  // Pin a dot at a listing's coordinates (used by sidebar hover). The dedicated
+  // highlight source survives every browse-points overwrite, and explicit
+  // coordinates mean we can pin listings whose marker isn't currently rendered.
+  const applyHoverMarker = useCallback((data: {
+    id: string;
+    type: 'property' | 'project';
+    lat: number;
+    lon: number;
+    title?: string;
+    price?: number;
+    image?: string;
+    location?: string;
+  }) => {
+    const map = mapRef.current;
+    if (!map || fullScreenResultsRef.current) return;
+    setHighlightedPoint(map, data);
+
+    // Show the slim label only when the pinned point is on-screen.
+    const lngLat = new maplibregl.LngLat(data.lon, data.lat);
+    const pt = map.project(lngLat);
+    const rect = map.getContainer().getBoundingClientRect();
+    if (pt.x >= 0 && pt.x <= rect.width && pt.y >= 0 && pt.y <= rect.height) {
+      showHoverPinLabel(map, data, lngLat);
+    } else {
+      hideHoverPinLabel();
     }
-  }, []);
-
-  const mergeOverlappingClusters = useCallback((clusters: any[], minPixelDistance: number, map: maplibregl.Map) => {
-    if (clusters.length <= 1) return clusters;
-
-    const sorted = [...clusters].sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
-    const merged: any[] = [];
-    const used = new Set<number>();
-
-    for (let i = 0; i < sorted.length; i++) {
-      if (used.has(i)) continue;
-
-      const group = [sorted[i]];
-      const pi = map.project(
-        new maplibregl.LngLat(sorted[i].center_lon || sorted[i].lon, sorted[i].center_lat || sorted[i].lat)
-      );
-
-      for (let j = i + 1; j < sorted.length; j++) {
-        if (used.has(j)) continue;
-        const pj = map.project(
-          new maplibregl.LngLat(sorted[j].center_lon || sorted[j].lon, sorted[j].center_lat || sorted[j].lat)
-        );
-        const dx = pi.x - pj.x;
-        const dy = pi.y - pj.y;
-        if (Math.sqrt(dx * dx + dy * dy) < minPixelDistance) {
-          group.push(sorted[j]);
-          used.add(j);
-        }
-      }
-
-      if (group.length === 1) {
-        merged.push(group[0]);
-      } else {
-        const totalCount = group.reduce((s: number, c: any) => s + (c.count || 0), 0);
-        const totalWeightedLat = group.reduce((s: number, c: any) => s + (c.center_lat || c.lat || 0) * (c.count || 0), 0);
-        const totalWeightedLon = group.reduce((s: number, c: any) => s + (c.center_lon || c.lon || 0) * (c.count || 0), 0);
-        // Combine entity-type counts from all merged clusters
-        const combinedTypes: Record<string, number> = {};
-        for (const c of group) {
-          for (const [k, v] of Object.entries(c.types || {})) {
-            combinedTypes[k] = (combinedTypes[k] || 0) + (v as number);
-          }
-        }
-        merged.push({
-          ...group[0],
-          center_lat: totalWeightedLat / totalCount,
-          center_lon: totalWeightedLon / totalCount,
-          count: totalCount,
-          avg_price: Math.round(group.reduce((s: number, c: any) => s + (c.avg_price || 0) * (c.count || 0), 0) / totalCount),
-          min_price: Math.min(...group.map((c: any) => c.min_price ?? Infinity)),
-          max_price: Math.max(...group.map((c: any) => c.max_price || 0)),
-          types: combinedTypes,
-        });
-      }
-    }
-    return merged;
   }, []);
 
   useEffect(() => {
@@ -768,11 +700,75 @@ export default function BrowsePage() {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
       if (abortRef.current) abortRef.current.abort();
       if (autocompleteAbortRef.current) autocompleteAbortRef.current.abort();
+      if (hoverAbortRef.current) hoverAbortRef.current.abort();
+      if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
     };
   }, []);
 
   const propertyMap = useMemo(() => new Map(properties.map(p => [p.id, p])), [properties]);
   const projectMap = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
+
+  // Sidebar card hover → highlight its marker. Fast path is a synchronous state
+  // lookup (cards always carry lat/lon); only when the listing isn't in state
+  // do we fall back to a debounced by-id fetch (cached in an LRU + Redis).
+  const handleCardHover = useCallback((id: string, type: 'property' | 'project') => {
+    hoveredIdRef.current = { id, type };
+
+    const local = type === 'property' ? propertyMap.get(id) : projectMap.get(id);
+    if (local && local.latitude != null && local.longitude != null) {
+      applyHoverMarker({
+        id,
+        type,
+        lat: local.latitude,
+        lon: local.longitude,
+        title: type === 'property' ? (local as PropertyBrowse).title ?? '' : (local as ProjectBrowse).name,
+        price: type === 'property' ? (local as PropertyBrowse).price ?? 0 : (local as ProjectBrowse).low_price ?? 0,
+        image: type === 'property' ? (local as PropertyBrowse).images?.[0]?.image_url : (local as ProjectBrowse).primary_image ?? undefined,
+        location: type === 'property' ? (local as PropertyBrowse).location_text ?? '' : (local as ProjectBrowse).location_name ?? '',
+      });
+      return;
+    }
+
+    const cacheKey = `${type}:${id}`;
+    const cached = markerCacheRef.current.get(cacheKey);
+    if (cached) {
+      applyHoverMarker(cached);
+      return;
+    }
+
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+    hoverDebounceRef.current = setTimeout(() => {
+      const reqId = ++hoverReqIdRef.current;
+      if (hoverAbortRef.current) hoverAbortRef.current.abort();
+      const controller = new AbortController();
+      hoverAbortRef.current = controller;
+      fetch(`/api/listings/${encodeURIComponent(id)}`, { signal: controller.signal })
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => {
+          if (reqId !== hoverReqIdRef.current) return;
+          if (hoveredIdRef.current?.id !== id) return;
+          if (!data || data.lat == null || data.lon == null) return;
+          const entry = {
+            id, type,
+            lat: data.lat, lon: data.lon,
+            title: data.title, price: data.price,
+            image: data.image_url, location: data.location_text,
+          };
+          markerCacheRef.current.set(cacheKey, entry);
+          applyHoverMarker(entry);
+        })
+        .catch(() => { /* AbortError or network error — silent no-op */ });
+    }, 150);
+  }, [propertyMap, projectMap, applyHoverMarker]);
+
+  const handleCardLeave = useCallback(() => {
+    hoveredIdRef.current = null;
+    hoverReqIdRef.current++;
+    if (hoverAbortRef.current) hoverAbortRef.current.abort();
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+    if (mapRef.current) setHighlightedPoint(mapRef.current, null);
+    hideHoverPinLabel();
+  }, []);
 
   const combinedList = useMemo(() => {
     if (searchScope === 'both') {
@@ -781,122 +777,6 @@ export default function BrowsePage() {
     if (searchScope === 'projects') return projects.map(p => ({ type: 'project' as const, data: p }));
     return properties.map(p => ({ type: 'property' as const, data: p }));
   }, [properties, projects, searchScope]);
-
-  const buildFeatures = useCallback((): ClusterPoint[] => {
-    const features: ClusterPoint[] = [];
-    for (const p of properties) {
-      if (p.latitude != null && p.longitude != null && !isNaN(p.latitude) && !isNaN(p.longitude)) {
-        features.push({
-          id: p.id, type: 'property', title: p.title || '', price: p.price || 0,
-          image: p.images?.[0]?.image_url || '', location: p.location_text || '',
-          area: p.area ? `${p.area} ${p.area_unit || 'sqft'}` : undefined,
-          bedrooms: p.bhk_type_label || undefined, bathrooms: p.bathrooms?.toString(),
-          latitude: p.latitude, longitude: p.longitude,
-        });
-      }
-    }
-    for (const p of projects) {
-      if (p.latitude != null && p.longitude != null && !isNaN(p.latitude) && !isNaN(p.longitude)) {
-        features.push({
-          id: p.id, type: 'project', title: p.name, price: p.low_price || 0,
-          image: p.primary_image || '', location: p.location_name || '',
-          latitude: p.latitude, longitude: p.longitude,
-        });
-      }
-    }
-    return features;
-  }, [properties, projects]);
-
-  const updateClusters = useCallback(() => {
-    const map = mapRef.current;
-    const clustering = clusteringRef.current;
-    if (!map || !clustering) return;
-
-    const bounds = map.getBounds();
-    const zoom = Math.round(map.getZoom());  // B9: single rounded zoom for consistency
-
-    // CLOSE ZOOM ONLY: client-side clustering via supercluster in a Web Worker
-    // (keeps main thread free for 60fps map rendering).
-    // At far zoom (z ≤ 13) the cluster circles come from /api/map-data — the
-    // same ES query that feeds the sidebar list, so map + list + badge are
-    // consistent by construction.
-    let features = buildFeatures();
-
-    // B4: If a boundary is active, filter points by polygon BEFORE clustering.
-    // Server-side clusters use centroid approximation; here we can be exact.
-    const poly = boundaryActiveRef.current && drawPointsRef.current.length >= 3
-      ? drawPointsRef.current
-      : null;
-    if (poly) {
-      features = features.filter(p =>
-        pointInPolygonClient(p.latitude, p.longitude, poly)
-      );
-    }
-
-    const bbox: [number, number, number, number] = [
-      bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
-    ];
-
-    // Fallback: run on main thread if worker unavailable (dev mode, SSR, etc.)
-    if (typeof Worker === 'undefined') {
-      clustering.load(features);
-      const clusters = clustering.getClusters(bbox, zoom);
-      const geojson: GeoJSON.FeatureCollection = {
-        type: 'FeatureCollection',
-        features: clusters.map((f, i) => ({
-          type: 'Feature' as const,
-          geometry: f.geometry,
-          properties: { ...f.properties, _index: i },
-        })),
-      };
-      updateSourceData(map, geojson);
-      updateCircleRadius(map, zoom);
-      return;
-    }
-
-    const worker = new Worker(new URL('@/lib/map/clusterWorker', import.meta.url));
-    worker.postMessage({ type: 'cluster', features, bbox, zoom });
-    worker.onmessage = (e: MessageEvent) => {
-      const clusters: any[] = e.data.clusters || [];
-      const geojson: GeoJSON.FeatureCollection = {
-        type: 'FeatureCollection',
-        features: clusters.map((f: any, i: number) => ({
-          type: 'Feature' as const,
-          geometry: f.geometry,
-          properties: { ...f.properties, _index: i },
-        })),
-      };
-      updateSourceData(map, geojson);
-      updateCircleRadius(map, zoom);
-      worker.terminate();
-    };
-    worker.onerror = () => {
-      // Worker failed, fall back to main thread
-      clustering.load(features);
-      const clusters = clustering.getClusters(bbox, zoom);
-      const geojson: GeoJSON.FeatureCollection = {
-        type: 'FeatureCollection',
-        features: clusters.map((f, i) => ({
-          type: 'Feature' as const,
-          geometry: f.geometry,
-          properties: { ...f.properties, _index: i },
-        })),
-      };
-      updateSourceData(map, geojson);
-      updateCircleRadius(map, zoom);
-    };
-  }, [buildFeatures]);
-
-  useEffect(() => {
-    // CLOSE ZOOM ONLY: client-side Supercluster over individual markers.
-    // At z≤13, cluster circles come from /api/map-data (server-side geotile_grid
-    // over the FULL filtered population) — never overwrite them with Supercluster
-    // clusters which only represent the first 500 results.
-    const zoom = mapRef.current ? mapRef.current.getZoom() : 12;
-    if (zoom > 13) {
-      updateClusters();
-    }
-  }, [properties, projects, updateClusters]);
 
   useEffect(() => {
     const init = async () => {
@@ -929,7 +809,6 @@ export default function BrowsePage() {
       const feature = e.features?.[0];
       if (!feature) return;
       const props = feature.properties as any;
-      if (props.cluster) return;
       map.getCanvas().style.cursor = 'pointer';
       const point: ClusterPoint = {
         id: props.id, type: props.type, title: props.title, price: props.price || 0,
@@ -954,46 +833,6 @@ export default function BrowsePage() {
       } else {
         router.push(`/property/${props.id}`);
       }
-    };
-
-    const onClusterMouseMove = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
-      const feature = e.features?.[0];
-      if (!feature || !clusteringRef.current) return;
-      const props = feature.properties as any;
-      if (!props.cluster) return;
-      map.getCanvas().style.cursor = 'pointer';
-      const totalCount = props.point_count || 0;
-      const currentZoom = map.getZoom();
-      if (currentZoom <= 13) {
-        showClusterPreview(map, [], totalCount, e.lngLat, () => {
-          map.flyTo({ center: e.lngLat.toArray() as [number, number], zoom: map.getZoom() + 2, duration: 500 });
-        }, props.avg_price, props.min_price, props.max_price);
-      } else {
-        const leaves = clusteringRef.current.getLeaves(props.cluster_id, 5);
-        const leafPoints: ClusterPoint[] = leaves.map((l) => ({
-          id: l.properties.id, type: l.properties.type, title: l.properties.title,
-          price: l.properties.price || 0, image: l.properties.image || '',
-          location: l.properties.location || '',
-          latitude: l.geometry.coordinates[1], longitude: l.geometry.coordinates[0],
-        }));
-        showClusterPreview(map, leafPoints, totalCount, e.lngLat, () => {
-          map.flyTo({ center: e.lngLat.toArray() as [number, number], zoom: map.getZoom() + 2, duration: 500 });
-        }, props.avg_price, props.min_price, props.max_price);
-      }
-    };
-
-    const onClusterMouseLeave = () => {
-      map.getCanvas().style.cursor = '';
-      hideClusterPreview();
-    };
-
-    const onClusterClick = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
-      const feature = e.features?.[0];
-      if (!feature || !clusteringRef.current) return;
-      const props = feature.properties as any;
-      if (!props.cluster) return;
-      const zoom = clusteringRef.current.getClusterExpansionZoom(props.cluster_id);
-      map.flyTo({ center: (feature.geometry as any).coordinates, zoom: zoom + 1 });
     };
 
     // Fix Maptiler empty sprite URL issue — prevents "Image '' could not be loaded" errors
@@ -1022,7 +861,6 @@ export default function BrowsePage() {
       }
 
       setupMapLayers(map);
-      clusteringRef.current = new MapClustering();
 
       map.on('mousemove', 'unclustered-properties', onPointMouseMove);
       map.on('mousemove', 'unclustered-projects', onPointMouseMove);
@@ -1030,9 +868,6 @@ export default function BrowsePage() {
       map.on('mouseleave', 'unclustered-projects', onPointMouseLeave);
       map.on('click', 'unclustered-properties', onPointClick);
       map.on('click', 'unclustered-projects', onPointClick);
-      map.on('mousemove', 'clusters', onClusterMouseMove);
-      map.on('mouseleave', 'clusters', onClusterMouseLeave);
-      map.on('click', 'clusters', onClusterClick);
 
       fetchPropertiesRef.current(map.getBounds());
       // Static init (center/zoom set in constructor) does NOT fire moveend,
@@ -1073,21 +908,14 @@ export default function BrowsePage() {
         initialMoveEndRef.current = false;
         return;
       }
-      const currentZoom = Math.round(map.getZoom());  // B9: single rounded zoom
 
       // If we just completed a geocoded location fitBounds, skip the redundant fetch.
       // The initial fetchAllProperties from selectSuggestion already handles the data.
       if (geocodedBoundsRef.current) {
         geocodedBoundsRef.current = null;
-        if (currentZoom > 13) {
-          updateClusters();
-        }
         return;
       }
 
-      if (currentZoom > 13) {
-        updateClusters();
-      }
       if (searchAsIMoveRef.current) {
         // 400ms debounce for pan-triggered searches (spec §8: 300-500ms + cancel)
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
@@ -1115,12 +943,8 @@ export default function BrowsePage() {
       map.off('mouseleave', 'unclustered-projects', onPointMouseLeave);
       map.off('click', 'unclustered-properties', onPointClick);
       map.off('click', 'unclustered-projects', onPointClick);
-      map.off('mousemove', 'clusters', onClusterMouseMove);
-      map.off('mouseleave', 'clusters', onClusterMouseLeave);
-      map.off('click', 'clusters', onClusterClick);
       removeMapLayers(map);
       destroyPreviewCards();
-      clusteringRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -1761,7 +1585,7 @@ export default function BrowsePage() {
                     const prop = propertyMap.get(entry.id);
                     if (!prop) return null;
                     return (
-                      <div key={prop.id} onMouseEnter={() => highlightMarker(prop.id)} onMouseLeave={() => highlightMarker(null)}>
+                      <div key={prop.id} onMouseEnter={() => handleCardHover(prop.id, 'property')} onMouseLeave={handleCardLeave}>
                         <PropertyCard property={prop} />
                       </div>
                     );
@@ -1769,7 +1593,7 @@ export default function BrowsePage() {
                     const proj = projectMap.get(entry.id);
                     if (!proj) return null;
                     return (
-                      <div key={`proj_${proj.id}`} onMouseEnter={() => highlightMarker(`proj_${proj.id}`)} onMouseLeave={() => highlightMarker(null)}>
+                      <div key={`proj_${proj.id}`} onMouseEnter={() => handleCardHover(proj.id, 'project')} onMouseLeave={handleCardLeave}>
                         <ProjectCard project={proj} />
                       </div>
                     );
@@ -1785,7 +1609,7 @@ export default function BrowsePage() {
                     viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
                   )}>
                     {properties.map(property => (
-                      <div key={property.id} onMouseEnter={() => highlightMarker(property.id)} onMouseLeave={() => highlightMarker(null)}>
+                      <div key={property.id} onMouseEnter={() => handleCardHover(property.id, 'property')} onMouseLeave={handleCardLeave}>
                         <PropertyCard property={property} />
                       </div>
                     ))}
@@ -1801,7 +1625,7 @@ export default function BrowsePage() {
                       <div className="border-t border-shadow-dark/10 pt-3 mt-3 col-span-full" />
                     )}
                     {projects.map(proj => (
-                      <div key={proj.id} onMouseEnter={() => highlightMarker(`proj_${proj.id}`)} onMouseLeave={() => highlightMarker(null)}>
+                      <div key={proj.id} onMouseEnter={() => handleCardHover(proj.id, 'project')} onMouseLeave={handleCardLeave}>
                         <ProjectCard project={proj} />
                       </div>
                     ))}

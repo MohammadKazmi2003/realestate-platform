@@ -7,16 +7,6 @@ function sanitize(s: string | undefined, maxLen = 200): string | undefined {
   return s;
 }
 
-function roundBounds(b: any) {
-  if (!b) return b;
-  return {
-    minLat: Math.round(b.minLat * 100) / 100,
-    maxLat: Math.round(b.maxLat * 100) / 100,
-    minLng: Math.round(b.minLng * 100) / 100,
-    maxLng: Math.round(b.maxLng * 100) / 100,
-  };
-}
-
 function buildSortClause(sort: string, lat?: number, lng?: number, scope?: string) {
   if (scope === 'both') {
     if (sort === 'price_asc') {
@@ -40,6 +30,15 @@ function buildSortClause(sort: string, lat?: number, lng?: number, scope?: strin
       { _score: { order: 'desc' } },
     ];
   }
+  if (scope === 'projects') {
+    if (sort === 'price_asc') return [{ low_price: { order: 'asc' } }, { _score: { order: 'desc' } }];
+    if (sort === 'price_desc') return [{ low_price: { order: 'desc' } }, { _score: { order: 'desc' } }];
+    if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
+    return [
+      { _script: { type: 'number', script: { source: "doc['low_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
+      { _score: { order: 'desc' } },
+    ];
+  }
   if (sort === 'price_asc') return [{ price: { order: 'asc' } }, { _score: { order: 'desc' } }];
   if (sort === 'price_desc') return [{ price: { order: 'desc' } }, { _score: { order: 'desc' } }];
   if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
@@ -55,71 +54,28 @@ function buildSortClause(sort: string, lat?: number, lng?: number, scope?: strin
   ];
 }
 
-// Map geotile precision from zoom. The same query that feeds the sidebar list
-// also produces the map cluster circles, so list + map can never diverge.
-export function zoomToPrecision(zoom: number): number {
-  if (zoom <= 5) return 2;
-  if (zoom <= 8) return 3;
-  if (zoom <= 11) return 4;
-  if (zoom <= 13) return 5;
-  return 6;
+// Which alias/aliases to query for a given scope.
+function indexForScope(scope: string) {
+  if (scope === 'both') return [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS];
+  if (scope === 'projects') return PROJECTS_INDEX_ALIAS;
+  return ES_INDEX_ALIAS;
 }
 
-// scaled_float (×100) metric aggregations return raw scaled values — divide
-// by the scaling factor to get real prices (matches es-config mappings).
-const PRICE_SCALING = 100;
-
-function buildAggregations(scope: string, zoom?: number, bounds?: any) {
-  // Map-data endpoint only needs entity-type counts for scope='both'.
-  const aggs: any = {};
-  if (scope === 'both') {
-    aggs.by_entity_type = { terms: { field: 'entity_type', size: 5 } };
-  }
-  // Two SEPARATE geotile_grid aggregations — one filtered to properties,
-  // one to projects — so each entity type gets its own geographic cluster
-  // centroids at the locations where that entity actually exists.
-  if (zoom != null && bounds?.minLat != null) {
-    const tileBounds = {
-      top_left: { lat: bounds.maxLat, lon: bounds.minLng },
-      bottom_right: { lat: bounds.minLat, lon: bounds.maxLng },
-    };
-    const precision = zoomToPrecision(zoom);
-    const tileAggs = {
-      center: { geo_centroid: { field: 'location' } },
-      avg_price: { avg: { field: 'sort_price' } },
-      min_price: { min: { field: 'sort_price' } },
-      max_price: { max: { field: 'sort_price' } },
-    };
-    if (scope === 'both') {
-      aggs.property_clusters = {
-        filter: { term: { entity_type: 'property' } },
-        aggs: {
-          clusters: { geotile_grid: { field: 'location', precision, bounds: tileBounds }, aggs: { ...tileAggs } },
-        },
-      };
-      aggs.project_clusters = {
-        filter: { term: { entity_type: 'project' } },
-        aggs: {
-          clusters: { geotile_grid: { field: 'location', precision, bounds: tileBounds }, aggs: { ...tileAggs } },
-        },
-      };
-    } else {
-      aggs.clusters = {
-        geotile_grid: { field: 'location', precision, bounds: tileBounds },
-        aggs: { ...tileAggs },
-      };
-    }
-  }
-  return aggs;
+// Price field used for range filtering per scope (projects store low_price).
+function priceFieldForScope(scope: string) {
+  if (scope === 'both') return 'sort_price';
+  if (scope === 'projects') return 'low_price';
+  return 'price';
 }
 
-export async function queryESListings(params: any) {
-  const es = getElasticsearchClient();
+// Shared query/filter construction. The sidebar list (queryESListings), the map
+// markers (queryESMapMarkers) and the totals all use the SAME filtered
+// population, so the list, the badge, and the map dots can never diverge.
+function buildFilters(params: any, scope: string): { must: any[]; filters: any[] } {
   const {
     query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType,
     listingPurpose, amenities = [], furnishings = [], bathrooms, minArea, maxArea,
-    lat, lng, radiusKm, bounds, polygon, cursor, pageSize = 24, sort = 'relevance', scope = 'both',
-    zoom,
+    lat, lng, radiusKm, bounds, polygon,
   } = params;
 
   const query = sanitize(rawQuery)?.toLowerCase().trim();
@@ -162,7 +118,7 @@ export async function queryESListings(params: any) {
     const range: any = {};
     if (minPrice) range.gte = minPrice;
     if (maxPrice) range.lte = maxPrice;
-    commonFilters.push({ range: { [scope === 'both' ? 'sort_price' : 'price']: range } });
+    commonFilters.push({ range: { [priceFieldForScope(scope)]: range } });
   }
 
   if (propertyType) propertyFilters.push({ term: { property_type: propertyType } });
@@ -216,24 +172,53 @@ export async function queryESListings(params: any) {
     filters.push(...propertyFilters);
   }
 
+  return { must, filters };
+}
+
+function buildAggregations(scope: string) {
+  // Entity-type counts for the scope badge (properties vs projects).
+  const aggs: any = {};
+  if (scope === 'both') {
+    aggs.by_entity_type = { terms: { field: 'entity_type', size: 5 } };
+  }
+  return aggs;
+}
+
+const LISTING_SOURCE_FIELDS = [
+  'id', 'title', 'name', 'slug', 'entity_type',
+  'location', 'location_text',
+  'price', 'sort_price', 'low_price', 'high_price',
+  'area_sqft', 'area_unit',
+  'property_type', 'bhk_type',
+  'bathrooms', 'balconies',
+  'image_url', 'primary_image', 'all_images',
+  'construction_phase', 'delivery_date', 'developer_name',
+  'status', 'project_name',
+];
+
+// Lightweight fields needed to draw one map dot per listing.
+const MARKER_SOURCE_FIELDS = [
+  'id', 'entity_type', 'location',
+  'price', 'sort_price', 'low_price', 'title', 'name',
+];
+
+// Maximum map dots per viewport (Zillow-style cap).
+const MARKER_LIMIT = 500;
+
+export async function queryESListings(params: any) {
+  const es = getElasticsearchClient();
+  const { cursor, pageSize = 24, sort = 'relevance', scope = 'both', lat, lng } = params;
+
+  const { must, filters } = buildFilters(params, scope);
+
   const esQuery: any = {
-    index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
+    index: indexForScope(scope),
     size: pageSize,
     query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
     sort: buildSortClause(sort, lat, lng, scope),
-    aggs: buildAggregations(scope, zoom, bounds),
+    aggs: buildAggregations(scope),
     // Only return fields used by the browse page — cuts response size by ~55%
-    _source: [
-      'id', 'title', 'name', 'slug', 'entity_type',
-      'location', 'location_text',
-      'price', 'sort_price', 'low_price', 'high_price',
-      'area_sqft', 'area_unit',
-      'property_type', 'bhk_type',
-      'bathrooms', 'balconies',
-      'image_url', 'primary_image', 'all_images',
-      'construction_phase', 'delivery_date', 'developer_name',
-      'status', 'project_name',
-    ],
+    _source: LISTING_SOURCE_FIELDS,
   };
 
   if (cursor) esQuery.search_after = cursor;
@@ -258,54 +243,55 @@ export async function queryESListings(params: any) {
       if (b.key === 'property') propertyTotal = b.doc_count;
       if (b.key === 'project') projectTotal = b.doc_count;
     }
+  } else if (scope === 'projects') {
+    projectTotal = total;
   } else {
     propertyTotal = total;
-  }
-
-  // When scope='both', two separate aggregations produce clusters tagged
-  // by entity type so the map renders property clusters and project clusters
-  // at their own geographic centroids.
-  let clusters: any[];
-  if (scope === 'both') {
-    const propClusters = parseClusterBuckets(
-      (esResponse.aggregations as any)?.property_clusters?.clusters?.buckets,
-      'property',
-    );
-    const projClusters = parseClusterBuckets(
-      (esResponse.aggregations as any)?.project_clusters?.clusters?.buckets,
-      'project',
-    );
-    clusters = [...propClusters, ...projClusters];
-  } else {
-    clusters = parseClusterBuckets((esResponse.aggregations as any)?.clusters?.buckets);
   }
 
   return {
     results,
     total,
     totalRelation,
-    clusters,
-    precision: zoom != null ? zoomToPrecision(zoom) : undefined,
     propertyTotal,
     projectTotal,
     nextCursor: results.length >= pageSize ? results[results.length - 1]._sort : null,
-    aggregations: esResponse.aggregations || {},
   };
 }
 
-// Map clusters: geotile_grid buckets → lightweight {tile, lat, lon, count, cluster_type}.
-export function parseClusterBuckets(buckets: any[], clusterType?: string): any[] {
-  return (buckets || []).map((bucket: any) => {
-    const center = bucket.center?.location;
+// Up to MARKER_LIMIT lightweight dots for the map viewport. Same filters and
+// sort as the sidebar list so dots match the list ordering. No scoring cost
+// beyond the bbox (filter context) and no aggregations — fast BKD range scan.
+export async function queryESMapMarkers(params: any) {
+  const es = getElasticsearchClient();
+  const { sort = 'relevance', scope = 'both', lat, lng } = params;
+
+  const { must, filters } = buildFilters(params, scope);
+
+  const esQuery: any = {
+    index: indexForScope(scope),
+    size: MARKER_LIMIT,
+    track_total_hits: false,
+    query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+    sort: buildSortClause(sort, lat, lng, scope),
+    _source: MARKER_SOURCE_FIELDS,
+  };
+
+  const esResponse = await es.search(esQuery);
+
+  const markers = (esResponse.hits.hits || []).map((hit: any) => {
+    const src = hit._source || {};
+    const loc = src.location || {};
+    const isProject = src.entity_type === 'project';
     return {
-      tile: bucket.key,
-      lat: center?.lat ?? 0,
-      lon: center?.lon ?? 0,
-      count: bucket.doc_count || 0,
-      cluster_type: clusterType || 'combined',
-      avg_price: Math.round((bucket.avg_price?.value || 0) / PRICE_SCALING),
-      min_price: Math.round((bucket.min_price?.value || 0) / PRICE_SCALING),
-      max_price: Math.round((bucket.max_price?.value || 0) / PRICE_SCALING),
+      id: src.id,
+      entity_type: src.entity_type,
+      lat: loc.lat ?? null,
+      lon: loc.lon ?? null,
+      price: isProject ? (src.low_price || 0) : (src.sort_price || src.price || 0),
+      title: src.title || src.name || '',
     };
   });
+
+  return markers;
 }

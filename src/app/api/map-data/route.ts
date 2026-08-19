@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isEsAvailable, recordEsSuccess } from '@/lib/elasticsearch';
-import { queryESListings } from '@/lib/esQueryBuilder';
+import { queryESListings, queryESMapMarkers } from '@/lib/esQueryBuilder';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { checkMapRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      bounds, zoom = 10, filters = {}, scope = 'both',
+      bounds, zoom = 10, scope = 'both',
       sort = 'relevance', pageSize = 24, cursor,
       query, location, minPrice, maxPrice, propertyType, bhkType,
       listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
       listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
       lat, lng, radiusKm, scope, sort, pageSize, cursor, polygon,
     });
-    const cacheKey = `md:${boundsToTileKey({ minLat, maxLat, minLng, maxLng }, zoom)}:${filterHash}`;
+    const cacheKey = `md:v2:${boundsToTileKey({ minLat, maxLat, minLng, maxLng }, zoom)}:${filterHash}`;
 
     // Check cache first
     const cached = await cacheGet(cacheKey);
@@ -84,7 +84,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(result);
     }
 
-    // Execute query — single ES call: filters + viewport + total + geotile_grid
+    // Execute query — two parallel ES calls sharing the same filters: the 24-doc
+    // sidebar list (with totals agg) + up to 500 slim map markers.
     const promise = executeMapQuery(body);
     pendingRequests.set(cacheKey, promise);
 
@@ -109,7 +110,7 @@ export async function POST(req: NextRequest) {
 
 async function executeMapQuery(body: any) {
   const {
-    bounds, zoom = 10, filters = {}, scope = 'both',
+    bounds, zoom = 10, scope = 'both',
     sort = 'relevance', pageSize = 24, cursor,
     query, location, minPrice, maxPrice, propertyType, bhkType,
     listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
@@ -118,20 +119,31 @@ async function executeMapQuery(body: any) {
 
   const esAvailable = await isEsAvailable();
 
-  // ES is the single source of truth: filters + viewport (BKD geo index)
-  // + total count + geotile_grid clusters all come from ONE query, so the
-  // list, badge, and map circles describe the exact same filtered population.
-  const searchResult = esAvailable
-    ? await queryESListings({
-        query, location, minPrice, maxPrice, propertyType, bhkType,
-        listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
-        lat, lng, radiusKm, bounds, polygon, cursor, pageSize, sort, scope,
-        zoom,
-      }).catch((err) => {
-        logger.warn('ES listing query failed', err);
-        return null;
-      })
-    : null;
+  const esParams = {
+    query, location, minPrice, maxPrice, propertyType, bhkType,
+    listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
+    lat, lng, radiusKm, bounds, polygon, sort, scope,
+  };
+
+  // ES is the single source of truth: the sidebar list (queryESListings) and
+  // the map dots (queryESMapMarkers) run against the SAME filters, so the
+  // list, badge, and map markers describe the exact same filtered population.
+  // Two lightweight queries in parallel: 24 full docs for the list + up to 500
+  // slim markers for the map dots.
+  const [searchResult, markers] = esAvailable
+    ? await Promise.all([
+        queryESListings({ ...esParams, cursor, pageSize })
+          .catch((err) => {
+            logger.warn('ES listing query failed', err);
+            return null;
+          }),
+        queryESMapMarkers(esParams)
+          .catch((err) => {
+            logger.warn('ES map marker query failed', err);
+            return [];
+          }),
+      ])
+    : [null, []];
 
   // Signal ES success to circuit breaker (if ES query succeeded)
   if (searchResult) recordEsSuccess();
@@ -139,21 +151,16 @@ async function executeMapQuery(body: any) {
   if (!searchResult) {
     return NextResponse.json({
       error: 'Search services temporarily unavailable',
-      clusters: [], clusterTotal: 0,
-      results: [], total: 0, totalRelation: undefined,
-      nextCursor: null, aggregations: {},
+      results: [], markers: [], total: 0, totalRelation: undefined,
+      nextCursor: null,
       propertyTotal: 0, projectTotal: 0,
-      zoom, precision: undefined,
+      zoom,
     }, { status: 503 });
   }
 
-  const clusters = searchResult.clusters || [];
-  const clusterTotal = clusters.reduce((sum: number, c: any) => sum + (c.count || 0), 0);
-
   return {
-    // For map markers — lightweight cluster buckets only (no heavy docs)
-    clusters,
-    clusterTotal,
+    // For map dots — up to 500 lightweight markers (id, lat, lon, price)
+    markers,
 
     // For sidebar — lightweight listing fields
     results: searchResult.results,
@@ -161,15 +168,11 @@ async function executeMapQuery(body: any) {
     totalRelation: searchResult.totalRelation,
     nextCursor: searchResult.nextCursor,
 
-    // For filter badges
-    aggregations: searchResult.aggregations,
-
     // For scope counts
     propertyTotal: searchResult.propertyTotal,
     projectTotal: searchResult.projectTotal,
 
     // Metadata
     zoom,
-    precision: searchResult.precision,
   };
 }

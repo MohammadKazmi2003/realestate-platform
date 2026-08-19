@@ -1,11 +1,11 @@
 import type maplibregl from 'maplibre-gl';
-import type { ClusterPoint } from './clustering';
+import type { ClusterPoint, HoverPointData } from './mapLayers';
 
 const CARD_CLASS = 'map-preview-card';
-const CLUSTER_PANEL_CLASS = 'map-cluster-panel';
+const HOVER_LABEL_CLASS = 'map-hover-label';
 
 let previewEl: HTMLDivElement | null = null;
-let clusterPanelEl: HTMLDivElement | null = null;
+let hoverLabelEl: HTMLDivElement | null = null;
 
 function formatPrice(price: number): string {
   if (price >= 10000000) return `₹${(price / 10000000).toFixed(1)}Cr`;
@@ -23,14 +23,19 @@ function ensurePreviewEl(): HTMLDivElement {
   return previewEl;
 }
 
-function ensureClusterPanelEl(): HTMLDivElement {
-  if (!clusterPanelEl) {
-    clusterPanelEl = document.createElement('div');
-    clusterPanelEl.className = CLUSTER_PANEL_CLASS;
-    clusterPanelEl.style.display = 'none';
-    document.body.appendChild(clusterPanelEl);
+function ensureHoverLabelEl(): HTMLDivElement {
+  if (!hoverLabelEl) {
+    hoverLabelEl = document.createElement('div');
+    hoverLabelEl.className = HOVER_LABEL_CLASS;
+    hoverLabelEl.style.display = 'none';
+    document.body.appendChild(hoverLabelEl);
   }
-  return clusterPanelEl;
+  return hoverLabelEl;
+}
+
+function detailLink(point: ClusterPoint | HoverPointData): string {
+  const base = point.type === 'project' ? '/projects/' : '/property/';
+  return `${base}${point.id}`;
 }
 
 export function showPropertyPreview(
@@ -47,7 +52,7 @@ export function showPropertyPreview(
   const details = [point.bedrooms, point.area].filter(Boolean).join(' · ');
 
   el.innerHTML = `
-    <a href="/property/${point.id}" target="_blank" rel="noopener noreferrer" class="map-preview-link">
+    <a href="${detailLink(point)}" target="_blank" rel="noopener noreferrer" class="map-preview-link">
       <img src="${imgSrc}" class="map-preview-image" alt="${point.title || ''}" loading="lazy" />
       <div class="map-preview-content">
         <div class="map-preview-price">${formatPrice(point.price)}</div>
@@ -68,68 +73,26 @@ export function hidePropertyPreview(): void {
   }
 }
 
-export function showClusterPreview(
+// Slim label shown next to the pinned dot when a sidebar card is hovered.
+export function showHoverPinLabel(
   map: maplibregl.Map,
-  leaves: ClusterPoint[],
-  totalCount: number,
-  lngLat: maplibregl.LngLat,
-  onViewAll: () => void,
-  avgPrice?: number,
-  minPrice?: number,
-  maxPrice?: number
+  point: HoverPointData,
+  lngLat: maplibregl.LngLat
 ): void {
-  const el = ensureClusterPanelEl();
-
-  const priceRange = minPrice && maxPrice && minPrice > 0
-    ? `${formatPrice(minPrice)} — ${formatPrice(maxPrice)}`
-    : avgPrice
-      ? `Avg ${formatPrice(avgPrice)}`
-      : '';
-
-  const cardsHtml = leaves
-    .slice(0, 5)
-    .map((p) => {
-      const imgSrc =
-        p.image && p.image !== ''
-          ? p.image
-          : 'https://placehold.co/120x80/DEE4ED/3D4A5C?text=No+Image';
-      return `
-      <a href="/property/${p.id}" target="_blank" rel="noopener noreferrer" class="map-cluster-card">
-        <img src="${imgSrc}" class="map-cluster-card-img" alt="${p.title || ''}" loading="lazy" />
-        <div class="map-cluster-card-info">
-          <div class="map-cluster-card-price">${formatPrice(p.price)}</div>
-          <div class="map-cluster-card-title">${p.title || ''}</div>
-        </div>
-      </a>
-    `;
-    })
-    .join('');
-
+  const el = ensureHoverLabelEl();
   el.innerHTML = `
-    <div class="map-cluster-header">
-      <span class="map-cluster-count">${totalCount} listings</span>
-      ${priceRange ? `<span class="map-cluster-price">${priceRange}</span>` : ''}
-    </div>
-    <div class="map-cluster-cards">${cardsHtml}</div>
-    <button class="map-cluster-view-all">View all ${totalCount} properties →</button>
+    <a href="${detailLink(point)}" target="_blank" rel="noopener noreferrer" class="map-hover-label-link">
+      ${point.price != null && point.price > 0 ? `<span class="map-hover-label-price">${formatPrice(point.price)}</span>` : ''}
+      ${point.title ? `<span class="map-hover-label-title">${point.title}</span>` : ''}
+    </a>
   `;
-
-  const viewAllBtn = el.querySelector('.map-cluster-view-all');
-  if (viewAllBtn) {
-    viewAllBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onViewAll();
-    });
-  }
-
   el.style.display = 'block';
-  positionElement(map, el, lngLat, { offsetX: 12, offsetY: -20 });
+  positionElement(map, el, lngLat, { offsetX: 14, offsetY: -46 });
 }
 
-export function hideClusterPreview(): void {
-  if (clusterPanelEl) {
-    clusterPanelEl.style.display = 'none';
+export function hideHoverPinLabel(): void {
+  if (hoverLabelEl) {
+    hoverLabelEl.style.display = 'none';
   }
 }
 
@@ -168,8 +131,8 @@ export function destroyPreviewCards(): void {
     previewEl.remove();
     previewEl = null;
   }
-  if (clusterPanelEl) {
-    clusterPanelEl.remove();
-    clusterPanelEl = null;
+  if (hoverLabelEl) {
+    hoverLabelEl.remove();
+    hoverLabelEl = null;
   }
 }

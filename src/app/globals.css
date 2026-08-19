@@ -100,6 +100,36 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Slim label shown at the pinned dot when a sidebar card is hovered */
+.map-hover-label {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  padding: 4px 10px;
+  pointer-events: auto;
+  max-width: 220px;
+}
+.map-hover-label-link {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-decoration: none;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.map-hover-label-price {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+.map-hover-label-title {
+  font-size: 0.75rem;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Cluster preview panel */
 .map-cluster-panel {
   width: 360px;
