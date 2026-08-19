@@ -133,6 +133,7 @@ export default function BrowsePage() {
   const [projectTotal, setProjectTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [mobileView, setMobileView] = useState<'list' | 'map'>('list');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filterOpen, setFilterOpen] = useState(true);
   const [fullScreenResults, setFullScreenResults] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'compact'>('list');
@@ -1024,6 +1025,7 @@ export default function BrowsePage() {
       isDraggingRef.current = true;
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
+      setSidebarOpen(true);
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!isDraggingRef.current) return;
@@ -1046,6 +1048,19 @@ export default function BrowsePage() {
       document.removeEventListener('mouseup', onMouseUp);
     };
   }, []);
+
+  // MapLibre needs an explicit resize after the sidebar width changes so the
+  // map fills the newly available space without stale projection dimensions.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const frame = requestAnimationFrame(() => map.resize());
+    const timer = window.setTimeout(() => map.resize(), 320);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [sidebarOpen, panelWidth, fullScreenResults]);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     // A6: functional update — never rebuild from possibly-stale filtersRef
@@ -1362,20 +1377,6 @@ export default function BrowsePage() {
     { value: 'both', label: 'Both', icon: null },
   ];
 
-  const chevronDown = (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
-  );
-
-  const filterIcon = (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="4" y1="6" x2="20" y2="6" />
-      <line x1="4" y1="12" x2="20" y2="12" />
-      <line x1="4" y1="18" x2="20" y2="18" />
-    </svg>
-  );
-
   const viewListIcon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
@@ -1394,6 +1395,22 @@ export default function BrowsePage() {
     </svg>
   );
 
+  const activeFilterCount = Object.values(filters).filter(value => value.trim().length > 0).length
+    + (boundaryActive ? 1 : 0);
+
+  const sidebarToggleIcon = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="9" y1="4" x2="9" y2="20" />
+    </svg>
+  );
+
+  const chevronDown = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+
   return (
     <div className="flex flex-col h-screen bg-bg-color">
       <Header />
@@ -1401,35 +1418,56 @@ export default function BrowsePage() {
 
         {/* LEFT PANEL: Collapsible Filters + Results */}
         <aside className={cn(
-          "bg-bg-color border-r border-shadow-dark/20 flex flex-col transition-all duration-300 ease-in-out",
+          "bg-bg-color border-r border-shadow-dark/20 flex flex-col min-w-0 overflow-hidden transition-all duration-300 ease-in-out",
           "md:flex",
           mobileView === 'list' ? "flex" : "hidden"
         )}
-          style={{ width: fullScreenResults ? '100%' : `${panelWidth}px`, maxWidth: fullScreenResults ? '100%' : `${panelWidth}px`, flex: fullScreenResults ? '1 1 auto' : '0 0 auto' }}
+          style={{
+            width: fullScreenResults ? '100%' : sidebarOpen ? `${panelWidth}px` : '0px',
+            maxWidth: fullScreenResults ? '100%' : sidebarOpen ? `${panelWidth}px` : '0px',
+            flex: fullScreenResults ? '1 1 auto' : sidebarOpen ? '0 0 auto' : '0 0 0px',
+          }}
         >
 
-          {/* FILTER TOGGLE HEADER */}
-          <div className="p-4 pb-2">
-            <button
-              onClick={() => setFilterOpen(!filterOpen)}
-              className="w-full flex items-center justify-between px-4 py-3 rounded-2xl shadow-neumorphic-outset text-sm font-semibold text-text-color-dark hover:bg-shadow-dark/5 transition-colors"
-            >
-              <span className="flex items-center gap-2">
-                {filterIcon}
-                Filters
-              </span>
-              <span className={`transition-transform duration-300 ${filterOpen ? 'rotate-180' : ''}`}>
-                {chevronDown}
-              </span>
-            </button>
-          </div>
+           {/* SIDEBAR TOGGLE + FILTER ACCORDION */}
+            <div className="p-4 pb-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSidebarOpen(false)}
+                  aria-label="Hide filters sidebar"
+                  title="Hide filters sidebar"
+                  className="flex h-11 items-center justify-center rounded-2xl px-3 text-text-color-dark shadow-neumorphic-outset hover:bg-shadow-dark/5 transition-colors"
+                >
+                  {sidebarToggleIcon}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterOpen(!filterOpen)}
+                  aria-expanded={filterOpen}
+                  className="flex-1 flex items-center justify-between px-4 py-3 rounded-2xl shadow-neumorphic-outset text-sm font-semibold text-text-color-dark hover:bg-shadow-dark/5 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    Filters
+                    {activeFilterCount > 0 && (
+                      <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white">
+                        {activeFilterCount}
+                      </span>
+                    )}
+                  </span>
+                  <span className={`transition-transform duration-300 ${filterOpen ? 'rotate-180' : ''}`}>
+                    {chevronDown}
+                  </span>
+                </button>
+              </div>
+            </div>
 
-          {/* FILTER CONTENT (accordion) */}
-          <div className={cn(
-            "transition-all duration-300 ease-in-out overflow-hidden",
-            filterOpen ? "max-h-[700px] opacity-100" : "max-h-0 opacity-0"
-          )}>
-            <div className="px-4 pb-2">
+           {/* FILTER CONTENT (accordion) */}
+            <div className={cn(
+              "transition-all duration-300 ease-in-out overflow-hidden",
+              filterOpen ? "max-h-[700px] opacity-100" : "max-h-0 opacity-0"
+            )}>
+             <div className="px-4 pb-2">
               <div className="shadow-neumorphic-outset rounded-3xl p-4 space-y-4">
 
                 {/* Scope Selector */}
@@ -1744,6 +1782,22 @@ export default function BrowsePage() {
         )}>
           <div ref={mapContainer} className="w-full h-full" />
           {loading && <div className="absolute top-4 right-4 bg-bg-color p-2 rounded-full shadow-neumorphic-outset"><FaSpinner className="animate-spin text-blue-500" /></div>}
+          {!sidebarOpen && !fullScreenResults && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Show filters sidebar"
+              className="hidden md:flex absolute top-4 left-4 z-20 items-center gap-2 rounded-2xl bg-bg-color/95 px-4 py-3 text-sm font-semibold text-text-color-dark shadow-neumorphic-outset backdrop-blur-sm hover:bg-white transition-colors"
+            >
+              {sidebarToggleIcon}
+              <span>Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+          )}
         </main>
       </div>
 
