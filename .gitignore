@@ -65,10 +65,14 @@ components.json
 # Test artifacts
 test_results.json
 chatbot_test_results.json
+test-results/
+playwright-report/
+.playwright-cli/
 
-# opencode
-.opencode/
-
+# opencode - keep skills tracked, ignore cache/node_modules
+.opencode/*
+!.opencode/skills/
+!.opencode/skills/**/*
 # local opencode tooling (kept out of git on purpose)
 opencode.json
 playwright.config.ts
