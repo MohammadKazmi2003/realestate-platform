@@ -30,7 +30,7 @@ function compactFallback(amount: number, currency: string): string {
   }
 }
 
-/** Zillow-style short label ($449K / ₹55L / AED 1.20M). No 'Price on request' — returns '' for empty. */
+/** Zillow-style short label ($449K / ₹55L / AED 1.2M). No 'Price on request' — returns '' for empty. */
 export function formatMoneyCompact(
   amount: number | null | undefined,
   currency?: string,
@@ -46,7 +46,10 @@ export function formatMoneyCompact(
   }
   for (const step of cfg.steps) {
     if (amount >= step.gte) {
-      const n = (amount / step.div).toFixed(step.digits);
+      // digits is max decimals: strip trailing zeros so extra precision
+      // never pads whole values (1.50Cr → 1.5Cr, 1Cr stays 1Cr).
+      const raw = (amount / step.div).toFixed(step.digits);
+      const n = raw.includes('.') ? raw.replace(/\.?0+$/, '') : raw;
       return withSymbol ? `${cfg.symbol}${n}${step.suffix}` : `${n}${step.suffix}`;
     }
   }

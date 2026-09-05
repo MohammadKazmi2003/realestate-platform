@@ -7,6 +7,20 @@ export interface MoneyStep {
   suffix: string;
 }
 
+export interface PriceTier {
+  upTo: number;
+  step: number;
+}
+
+export interface PriceScale {
+  min: number;
+  max: number;
+  ceilLabel?: string;
+  tiers: PriceTier[];
+}
+
+export type PricePurpose = 'sale' | 'rent';
+
 export interface FilterNormalizationConfig {
   priceSteps: Record<string, number>;
   areaStep: number;
@@ -41,6 +55,7 @@ export interface TenantConfig {
   map: { center: [number, number]; zoom: number; geocodeCountries: string };
   features: { projects: boolean };
   filterNormalization: FilterNormalizationConfig;
+  priceScales?: Record<string, Record<PricePurpose, PriceScale>>;
 }
 
 // Buyer white-labels register their file here (one line per tenant).
@@ -55,6 +70,56 @@ function parseCenter(raw: string | undefined, fallback: [number, number]): [numb
   const parts = raw.split(',').map((s) => Number(s.trim()));
   if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return fallback;
   return [parts[0], parts[1]];
+}
+
+function sanitizePriceScales(
+  raw: unknown,
+  priceSteps: Record<string, number>
+): Record<string, Record<PricePurpose, PriceScale>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, Record<PricePurpose, PriceScale>> = {};
+  for (const [code, purposes] of Object.entries(raw as Record<string, unknown>)) {
+    if (code.startsWith('$') || !purposes || typeof purposes !== 'object') continue;
+    const cleanPurposes: Partial<Record<PricePurpose, PriceScale>> = {};
+    for (const purpose of ['sale', 'rent'] as const) {
+      const s = (purposes as Record<string, unknown>)[purpose];
+      if (!s || typeof s !== 'object') continue;
+      const rec = s as Record<string, unknown>;
+      const min = Number(rec.min);
+      const max = Number(rec.max);
+      const tiersRaw = Array.isArray(rec.tiers) ? rec.tiers : [];
+      const tiers: PriceTier[] = [];
+      for (const t of tiersRaw) {
+        if (!t || typeof t !== 'object') continue;
+        const upTo = Number((t as Record<string, unknown>).upTo);
+        const step = Number((t as Record<string, unknown>).step);
+        if (!Number.isFinite(upTo) || !Number.isFinite(step) || upTo <= 0 || step <= 0) continue;
+        tiers.push({ upTo, step });
+      }
+      tiers.sort((a, b) => a.upTo - b.upTo);
+      if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min || tiers.length === 0) continue;
+      // Last tier must cover max so every value has a step.
+      const last = tiers[tiers.length - 1];
+      if (last.upTo < max) tiers.push({ upTo: max, step: last.step });
+      cleanPurposes[purpose] = {
+        min: Math.max(0, min),
+        max,
+        ceilLabel: typeof rec.ceilLabel === 'string' ? rec.ceilLabel : undefined,
+        tiers,
+      };
+    }
+    // Require at least sale; rent falls back to sale when absent so older
+    // configs keep working without duplication.
+    if (cleanPurposes.sale) {
+      out[code] = { sale: cleanPurposes.sale, rent: cleanPurposes.rent ?? cleanPurposes.sale };
+    } else if (Object.keys(priceSteps).includes(code)) {
+      const step = priceSteps[code];
+      const max = Math.max(step * 400, step);
+      const fallback: PriceScale = { min: 0, max, tiers: [{ upTo: max, step }] };
+      out[code] = { sale: fallback, rent: fallback };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function loadTenant(): TenantConfig {
@@ -73,6 +138,10 @@ function loadTenant(): TenantConfig {
     ...DEFAULT_FILTER_NORMALIZATION,
     ...(base.filterNormalization || {}),
   };
+  const priceScales = sanitizePriceScales(
+    (base as Record<string, unknown>).priceScales,
+    filterNormalization.priceSteps
+  );
   return {
     ...base,
     brand: {
@@ -89,6 +158,7 @@ function loadTenant(): TenantConfig {
       geocodeCountries: process.env.NEXT_PUBLIC_GEOCODE_COUNTRIES ?? base.map.geocodeCountries,
     },
     filterNormalization,
+    ...(priceScales ? { priceScales } : {}),
   };
 }
 

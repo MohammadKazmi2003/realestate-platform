@@ -7,6 +7,8 @@ import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
 import { tenant } from '@/lib/tenant';
+import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
+import { purposeFromListingPurpose } from '@/lib/priceScale';
 
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
@@ -84,6 +86,8 @@ type FilterSidebarProps = {
   furnishingStatuses: FurnishingStatus[];
   allAmenities: Amenity[];
   onFilterChange: (key: keyof Filters, value: any) => void;
+  onPriceRange: (v: PriceRangeValue) => void;
+  pricePurpose: 'sale' | 'rent';
   onClearFilters: () => void;
   amenitySearchTerm: string;
   onAmenitySearchChange: (term: string) => void;
@@ -93,7 +97,7 @@ type FilterSidebarProps = {
 
 const FilterSidebar = ({
   isOpen, onClose, filters, propertyTypes, bhkTypes, listingPurposes,
-  furnishingStatuses, allAmenities, onFilterChange, onClearFilters,
+  furnishingStatuses, allAmenities, onFilterChange, onPriceRange, pricePurpose, onClearFilters,
   amenitySearchTerm, onAmenitySearchChange, showAllAmenities, onToggleShowAllAmenities,
 }: FilterSidebarProps) => {
   const filteredAmenities = useMemo(() =>
@@ -176,12 +180,17 @@ const FilterSidebar = ({
 
         <FilterSection label="Price & Area">
           <div>
-            <label className="text-sm text-text-color-light block mb-1">Price Range ({tenant.propertyCurrency})</label>
-            <div className="flex gap-2">
-              <input type="number" placeholder="Min" value={filters.minPrice} onChange={e => onFilterChange('minPrice', e.target.value)} className="neumorphic-input w-full" />
-              <span className="text-text-color-light self-center">-</span>
-              <input type="number" placeholder="Max" value={filters.maxPrice} onChange={e => onFilterChange('maxPrice', e.target.value)} className="neumorphic-input w-full" />
-            </div>
+            <PriceRangeFilter
+              id="list-price"
+              currency={tenant.propertyCurrency}
+              purpose={pricePurpose}
+              value={{
+                min: filters.minPrice ? Number(filters.minPrice) || undefined : undefined,
+                max: filters.maxPrice ? Number(filters.maxPrice) || undefined : undefined,
+              }}
+              onChange={onPriceRange}
+              onCommit={onPriceRange}
+            />
           </div>
           <div>
             <label className="text-sm text-text-color-light block mb-1">Carpet Area ({tenant.areaUnit})</label>
@@ -452,6 +461,19 @@ export default function ListPage() {
     debouncedFetchProperties();
   };
 
+  const handlePriceRange = (v: PriceRangeValue) => {
+    setFilters(prev => ({
+      ...prev,
+      minPrice: v.min != null ? String(v.min) : '',
+      maxPrice: v.max != null ? String(v.max) : '',
+    }));
+    debouncedFetchProperties();
+  };
+
+  const pricePurpose = purposeFromListingPurpose(
+    filters.listingPurposeId ? lookupMaps.listingPurposeIdToName[Number(filters.listingPurposeId)] : undefined
+  );
+
   const handleSortChange = (value: SortOption) => {
     setSort(value);
     debouncedFetchProperties();
@@ -540,6 +562,8 @@ export default function ListPage() {
           furnishingStatuses={furnishingStatuses}
           allAmenities={allAmenities}
           onFilterChange={handleFilterChange}
+          onPriceRange={handlePriceRange}
+          pricePurpose={pricePurpose}
           onClearFilters={clearFilters}
           amenitySearchTerm={amenitySearchTerm}
           onAmenitySearchChange={setAmenitySearchTerm}

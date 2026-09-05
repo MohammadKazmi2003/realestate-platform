@@ -6,6 +6,7 @@ import { getLookup, getCachedRpc } from '@/lib/lookupCache';
 import Header from '@/app/components/Header';
 import { ProjectCard } from '@/app/components/ProjectCard';
 import { tenant } from '@/lib/tenant';
+import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
 import { Loader2, X, Search, SlidersHorizontal } from 'lucide-react';
 import { Project } from '@/lib/types';
 
@@ -32,6 +33,7 @@ type FilterSidebarProps = {
   filters: Filters;
   lookupData: LookupData;
   onFilterChange: (filterName: keyof Filters, value: any) => void;
+  onPriceRange: (v: PriceRangeValue) => void;
   onClearFilters: () => void;
   amenitySearchTerm: string;
   onAmenitySearchChange: (term: string) => void;
@@ -40,7 +42,7 @@ type FilterSidebarProps = {
 };
 
 const FilterSidebar = ({
-  isOpen, onClose, filters, lookupData, onFilterChange, onClearFilters,
+  isOpen, onClose, filters, lookupData, onFilterChange, onPriceRange, onClearFilters,
   amenitySearchTerm, onAmenitySearchChange, showAllAmenities, onToggleShowAllAmenities
 }: FilterSidebarProps) => {
   const filteredAmenities = useMemo(() =>
@@ -74,11 +76,17 @@ const FilterSidebar = ({
           </div>
         </div>
         <div>
-          <label className="font-semibold block mb-2 text-text-color-dark">Price Range ({tenant.projectCurrency})</label>
-          <div className="flex gap-2">
-            <input type="number" placeholder="Min" value={filters.minPrice} onChange={e => onFilterChange('minPrice', e.target.value)} className="neumorphic-input w-full" />
-            <input type="number" placeholder="Max" value={filters.maxPrice} onChange={e => onFilterChange('maxPrice', e.target.value)} className="neumorphic-input w-full" />
-          </div>
+          <PriceRangeFilter
+            id="projects-price"
+            currency={tenant.projectCurrency}
+            purpose="sale"
+            value={{
+              min: filters.minPrice ? Number(filters.minPrice) || undefined : undefined,
+              max: filters.maxPrice ? Number(filters.maxPrice) || undefined : undefined,
+            }}
+            onChange={onPriceRange}
+            onCommit={onPriceRange}
+          />
         </div>
         <div>
           <label className="font-semibold block mb-2 text-text-color-dark">Completion Status</label>
@@ -314,6 +322,17 @@ export default function ProjectsPage() {
     debouncedFetch();
   };
 
+  const handlePriceRange = (v: PriceRangeValue) => {
+    setCurrentPage(1);
+    cursorRef.current = {};
+    setFilters(prev => ({
+      ...prev,
+      minPrice: v.min != null ? String(v.min) : '',
+      maxPrice: v.max != null ? String(v.max) : '',
+    }));
+    debouncedFetch();
+  };
+
   const activeFilterCount =
     filters.completionStatus.length + filters.bedrooms.length +
     (filters.minPrice ? 1 : 0) + (filters.maxPrice ? 1 : 0) +
@@ -366,6 +385,7 @@ export default function ProjectsPage() {
           filters={filters}
           lookupData={lookupData}
           onFilterChange={handleFilterChange}
+          onPriceRange={handlePriceRange}
           onClearFilters={clearFilters}
           amenitySearchTerm={amenitySearchTerm}
           onAmenitySearchChange={setAmenitySearchTerm}

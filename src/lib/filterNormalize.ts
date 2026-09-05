@@ -14,6 +14,13 @@
 
 import { tenant } from './tenant';
 import { buildFilterHash } from './mapTiles';
+import {
+  getPriceScale,
+  purposeFromListingPurpose,
+  snapDown as snapPriceDown,
+  snapUp as snapPriceUp,
+  type PriceScale,
+} from './priceScale';
 
 export interface MapBounds {
   minLat: number;
@@ -72,30 +79,51 @@ export interface NormalizedMapFilters {
   polygon?: { lat: number; lng: number }[];
 }
 
-// Price bucket step for a scope. scope=both mixes currencies in one slider,
-// so it uses the finest involved step — snapping stays tight and still only
-// ever widens (min floors, max ceils).
-function priceStepForScope(scope?: string): number {
-  const steps = tenant.filterNormalization.priceSteps;
-  const prop = steps[tenant.propertyCurrency] ?? 500000;
-  const proj = steps[tenant.projectCurrency] ?? 50000;
-  if (scope === 'projects') return proj;
-  if (scope === 'properties') return prop;
-  return Math.min(prop, proj);
+// Tier-aware price snapping. scope=both (or unknown) mixes currencies and
+// sale/rent bands in one result set, so we snap against every candidate
+// scale and keep the WIDEST outcome (min→lowest floor, max→highest ceil).
+// Single-scope queries snap against their own currency/purpose scale.
+// Slider values arrive pre-snapped; this stays as the widen-only safety net
+// for hand-typed/API values and feeds BOTH the ES query and the hash.
+function priceScalesForScope(scope?: string, listingPurpose?: string): PriceScale[] {
+  const purpose = purposeFromListingPurpose(listingPurpose);
+  if (scope === 'projects') return [getPriceScale(tenant.projectCurrency, 'sale')];
+  if (scope === 'properties') return [getPriceScale(tenant.propertyCurrency, purpose)];
+  const scales = [
+    getPriceScale(tenant.propertyCurrency, 'sale'),
+    getPriceScale(tenant.propertyCurrency, 'rent'),
+    getPriceScale(tenant.projectCurrency, 'sale'),
+    getPriceScale(tenant.projectCurrency, 'rent'),
+  ];
+  // De-dupe identical scale references for the common single-currency case.
+  return Array.from(new Set(scales));
 }
 
-function snapDown(v: number, step: number): number {
-  return cleanFloat(Math.floor(v / step) * step);
+function snapPriceDownWiden(v: number, scales: PriceScale[]): number {
+  let out = v;
+  for (const s of scales) out = Math.min(out, snapPriceDown(s, v));
+  return out;
 }
 
-function snapUp(v: number, step: number): number {
-  return cleanFloat(Math.ceil(v / step) * step);
+function snapPriceUpWiden(v: number, scales: PriceScale[]): number {
+  let out = v;
+  for (const s of scales) out = Math.max(out, snapPriceUp(s, v));
+  return out;
 }
 
 // Kill binary float dust (e.g. 24.900000000000002) so snapped values are
 // stable, comparable, and hash-identical across runtimes.
 function cleanFloat(v: number): number {
   return Math.round(v * 1e6) / 1e6;
+}
+
+// Fixed-step snap for area/radius (unchanged legacy behavior).
+function snapStepDown(v: number, step: number): number {
+  return cleanFloat(Math.floor(v / step) * step);
+}
+
+function snapStepUp(v: number, step: number): number {
+  return cleanFloat(Math.ceil(v / step) * step);
 }
 
 function cleanText(s: string | undefined): string | undefined {
@@ -198,15 +226,15 @@ function orderedForHash(f: NormalizedMapFilters): Record<string, unknown> {
 
 export function normalizeFilters(raw: RawMapFilters): NormalizedMapFilters {
   const cfg = tenant.filterNormalization;
-  const step = priceStepForScope(raw.scope);
+  const scales = priceScalesForScope(raw.scope, raw.listingPurpose);
   const out: NormalizedMapFilters = {};
   out.query = cleanText(raw.query);
   out.location = cleanText(raw.location);
   if (raw.minPrice != null && Number.isFinite(raw.minPrice) && raw.minPrice > 0) {
-    out.minPrice = snapDown(raw.minPrice, step);
+    out.minPrice = snapPriceDownWiden(raw.minPrice, scales);
   }
   if (raw.maxPrice != null && Number.isFinite(raw.maxPrice) && raw.maxPrice > 0) {
-    out.maxPrice = snapUp(raw.maxPrice, step);
+    out.maxPrice = snapPriceUpWiden(raw.maxPrice, scales);
   }
   if (raw.propertyType) out.propertyType = raw.propertyType;
   if (raw.bhkType) out.bhkType = raw.bhkType;
@@ -218,15 +246,15 @@ export function normalizeFilters(raw: RawMapFilters): NormalizedMapFilters {
   out.furnishings = arrayFields.has('furnishings') ? normArray(raw.furnishings) : raw.furnishings;
   if (raw.bathrooms != null) out.bathrooms = raw.bathrooms;
   if (raw.minArea != null && Number.isFinite(raw.minArea) && raw.minArea > 0) {
-    out.minArea = snapDown(raw.minArea, cfg.areaStep);
+    out.minArea = snapStepDown(raw.minArea, cfg.areaStep);
   }
   if (raw.maxArea != null && Number.isFinite(raw.maxArea) && raw.maxArea > 0) {
-    out.maxArea = snapUp(raw.maxArea, cfg.areaStep);
+    out.maxArea = snapStepUp(raw.maxArea, cfg.areaStep);
   }
   if (raw.lat != null) out.lat = raw.lat;
   if (raw.lng != null) out.lng = raw.lng;
   if (raw.radiusKm != null && Number.isFinite(raw.radiusKm) && raw.radiusKm > 0) {
-    out.radiusKm = snapUp(raw.radiusKm, cfg.radiusStep);
+    out.radiusKm = snapStepUp(raw.radiusKm, cfg.radiusStep);
   }
   if (raw.scope) out.scope = raw.scope;
   if (raw.sort) out.sort = raw.sort;

@@ -16,6 +16,7 @@ import { MarkerLruCache } from '@/lib/markerCache';
 import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, setHighlightState, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
 import { tenant } from '@/lib/tenant';
 import { formatMoneyCompact } from '@/lib/format';
+import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
 import { showPropertyPreview, hidePropertyPreview, showListingPreviewCard, hideListingPreviewCard, destroyPreviewCards, listingCardId, repositionListingCard } from '@/lib/map/previewCard';
 import type { Feature } from 'geojson';
 
@@ -369,6 +370,9 @@ export default function BrowsePage() {
             image_url: m.image_url || null,
             bhk_type: m.bhk_type || null,
             bathrooms: m.bathrooms ?? null,
+            balconies: m.balconies ?? null,
+            furnishing_status: m.furnishing_status || null,
+            listing_purpose: m.listing_purpose || null,
             area_sqft: m.area_sqft ?? null,
             area_unit: m.area_unit || null,
             location_text: m.location_text || null,
@@ -840,6 +844,9 @@ export default function BrowsePage() {
         image_url: props.image_url ?? null,
         bhk_type: props.bhk_type ?? null,
         bathrooms: props.bathrooms ?? null,
+        balconies: props.balconies ?? null,
+        furnishing_status: props.furnishing_status ?? null,
+        listing_purpose: props.listing_purpose ?? null,
         area_sqft: props.area_sqft ?? null,
         area_unit: props.area_unit ?? null,
         location_text: props.location_text ?? null,
@@ -893,6 +900,9 @@ export default function BrowsePage() {
         area_unit: props.area_unit || null,
         bhk_type: props.bhk_type || null,
         bathrooms: props.bathrooms ?? null,
+        balconies: props.balconies ?? null,
+        furnishing_status: props.furnishing_status || null,
+        listing_purpose: props.listing_purpose || null,
       }, pointLngLat);
 
       // Click-response cache: second click on the same marker skips the fetch.
@@ -915,6 +925,9 @@ export default function BrowsePage() {
           area_unit: clickCached.area_unit || null,
           bhk_type: clickCached.bhk_type || null,
           bathrooms: clickCached.bathrooms ?? null,
+          balconies: clickCached.balconies ?? null,
+          furnishing_status: clickCached.furnishing_status || null,
+          listing_purpose: clickCached.listing_purpose || null,
           property_type: clickCached.property_type || null,
           developer_name: clickCached.developer_name || null,
           construction_phase: clickCached.construction_phase || null,
@@ -950,6 +963,9 @@ export default function BrowsePage() {
             all_images: data.all_images || (data.image_url ? [data.image_url] : []),
             bhk_type: data.bhk_type || null,
             bathrooms: data.bathrooms ?? null,
+            balconies: data.balconies ?? null,
+            furnishing_status: data.furnishing_status || null,
+            listing_purpose: data.listing_purpose || null,
             area_sqft: data.area_sqft ?? null,
             area_unit: data.area_unit || null,
             location_text: data.location_text || null,
@@ -1202,6 +1218,35 @@ export default function BrowsePage() {
         searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
       );
     }, 500);  // 500ms debounce for filter changes
+  };
+
+  // Zillow-style price slider: live drag updates state only; commit (drag-end
+  // / input blur) debounces the ES fetch like other quick filters.
+  const priceRangeValue: PriceRangeValue = {
+    min: filters.minPrice ? Number(filters.minPrice) || undefined : undefined,
+    max: filters.maxPrice ? Number(filters.maxPrice) || undefined : undefined,
+  };
+  const priceCurrency = searchScope === 'projects' ? tenant.projectCurrency : tenant.propertyCurrency;
+  const handlePriceChange = (v: PriceRangeValue) => {
+    const next = {
+      minPrice: v.min != null ? String(v.min) : '',
+      maxPrice: v.max != null ? String(v.max) : '',
+    };
+    setFilters(prev => ({ ...prev, ...next }));
+    filtersRef.current = { ...filtersRef.current, ...next };
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
+  };
+  const handlePriceCommit = (v: PriceRangeValue) => {
+    handlePriceChange(v);
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchPropertiesRef.current(
+        searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+      );
+    }, 500);
   };
 
   const handleApplyFiltersWithLocation = async (locationText: string) => {
@@ -1620,10 +1665,14 @@ export default function BrowsePage() {
                 </div>
 
                 {/* Price Range */}
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="number" name="minPrice" placeholder="Min Price" value={filters.minPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
-                  <input type="number" name="maxPrice" placeholder="Max Price" value={filters.maxPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
-                </div>
+                <PriceRangeFilter
+                  id="browse-price"
+                  currency={priceCurrency}
+                  purpose="sale"
+                  value={priceRangeValue}
+                  onChange={handlePriceChange}
+                  onCommit={handlePriceCommit}
+                />
 
                 {/* BHK + Property Type */}
                 <div className="grid grid-cols-2 gap-2">
