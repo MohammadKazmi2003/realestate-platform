@@ -55,6 +55,8 @@ export const searchQuerySchema = z.object({
   maxPrice: z.number().min(0).optional(),
   propertyType: z.string().max(50).optional(),
   bhkType: z.string().max(50).optional(),
+  minBedrooms: z.number().min(0).max(20).optional(),
+  maxBedrooms: z.number().min(0).max(20).optional(),
   listingPurpose: z.string().max(50).optional(),
   amenities: z.array(z.string()).optional(),
   furnishings: z.array(z.string()).optional(),

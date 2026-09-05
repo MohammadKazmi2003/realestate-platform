@@ -140,6 +140,15 @@ async function buildPropertyDocument(property) {
   const areaData = landRes.data || residentialRes.data || commercialRes.data || {};
   const bhkLabel = residentialRes.data?.bhk_types?.label || null;
   const furnishingStatus = residentialRes.data?.lookup_furnishing_statuses?.name || null;
+  // Dual-write: keep bhk_type (India tenants) and derive generic bedrooms int
+  // for bedrooms-model tenants ('2 BHK'→2, '1.5 BHK'→1, '6+ BHK'→6, 'Studio'→0).
+  // Old docs without bedrooms backfill lazily on next full-sync.
+  const bedrooms = (() => {
+    if (!bhkLabel) return null;
+    if (/^studio/i.test(bhkLabel.trim())) return 0;
+    const m = bhkLabel.match(/(\d+(\.\d+)?)/);
+    return m ? Math.floor(parseFloat(m[1])) : null;
+  })();
 
   const doc = {
     id: property.id,
@@ -160,6 +169,7 @@ async function buildPropertyDocument(property) {
     ownership_type: '',
     bhk_type: bhkLabel || '',
     bhk_type_id: residentialRes.data?.bhk_type_id || null,
+    bedrooms,
     bathrooms: residentialRes.data?.bathrooms || 0,
     balconies: residentialRes.data?.balconies || 0,
     area_sqft: areaData.carpet_area || areaData.plot_area || 0,

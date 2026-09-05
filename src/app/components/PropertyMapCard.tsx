@@ -1,5 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
+import { formatMoney, formatArea } from '@/lib/format';
+import { tenant } from '@/lib/tenant';
 
 type Property = {
   id: string;
@@ -15,9 +17,9 @@ const PropertyMapCard: React.FC<Property> = ({ id, title, location, price, area_
       <div className="font-bold text-lg">{title}</div>
       <div className="text-sm text-gray-600">{location}</div>
       <div className="text-md text-green-700 font-semibold">
-        {price !== undefined ? `₹${price.toLocaleString()}` : 'Price not available'}
+        {price !== undefined ? formatMoney(price, tenant.propertyCurrency) : 'Price not available'}
       </div>
-      <div className="text-sm text-gray-800">{area_sqft} sqft</div>
+      <div className="text-sm text-gray-800">{formatArea(area_sqft, null) || ''}</div>
     </Link>
   );
 };

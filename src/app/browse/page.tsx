@@ -14,7 +14,9 @@ import { getLookup } from '@/lib/lookupCache';
 import type { Project } from '@/lib/types';
 import { MarkerLruCache } from '@/lib/markerCache';
 import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, setHighlightState, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
-import { showPropertyPreview, hidePropertyPreview, showListingPreviewCard, hideListingPreviewCard, destroyPreviewCards } from '@/lib/map/previewCard';
+import { tenant } from '@/lib/tenant';
+import { formatMoneyCompact } from '@/lib/format';
+import { showPropertyPreview, hidePropertyPreview, showListingPreviewCard, hideListingPreviewCard, destroyPreviewCards, listingCardId, repositionListingCard } from '@/lib/map/previewCard';
 import type { Feature } from 'geojson';
 
 type PropertyBrowse = PropertyCardProps['property'] & {
@@ -25,40 +27,28 @@ type PropertyBrowse = PropertyCardProps['property'] & {
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
 type SearchScope = 'properties' | 'projects' | 'both';
-type SortOption = 'relevance' | 'popular' | 'newest' | 'price_asc' | 'price_desc';
+type SortOption = 'popular' | 'newest' | 'price_asc' | 'price_desc';
 
 type ProjectBrowse = Project & {
   latitude: number | null;
   longitude: number | null;
 };
 
-const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
+const DEFAULT_CENTER: [number, number] = tenant.map.center;
 const MAX_LIST_ITEMS = 500;
-// Default viewport: whole India visible (and Dubai, where projects are) so
-// both property and project markers are in view on first load. z4 fits
-// India's ~29° lat/lon span with margin at the default container size.
-const DEFAULT_ZOOM = 4;
-
-// Compact price label for map dots (Zillow-style "$449K").
-function formatPriceLabel(price: number): string {
-  if (!price || price <= 0) return '';
-  if (price >= 10000000) return `₹${(price / 10000000).toFixed(1)}Cr`;
-  if (price >= 100000) return `₹${(price / 100000).toFixed(0)}L`;
-  return `₹${price.toLocaleString('en-IN')}`;
-}
+// Default viewport fits the tenant's home market with margin at the default
+// container size (default tenant: whole India + Dubai projects at z4).
+const DEFAULT_ZOOM = tenant.map.zoom;
 
 // Price label for the highlighted speech-bubble marker — projects are priced
-// in AED. Truncated so it always fits the fixed bubble width (~15 chars).
+// in the tenant's project currency. Truncated so it always fits the fixed
+// bubble width (~15 chars).
 function formatHighlightPrice(type: string | undefined, price?: number): string {
   if (!price || price <= 0) return '';
-  let label: string;
-  if (type === 'project') {
-    label = price >= 1000000
-      ? `AED ${(price / 1000000).toFixed(2)}M`
-      : `AED ${price.toLocaleString()}`;
-  } else {
-    label = formatPriceLabel(price);
-  }
+  let label = formatMoneyCompact(
+    price,
+    type === 'project' ? tenant.projectCurrency : tenant.propertyCurrency
+  );
   if (label.length > 15) {
     label = `${label.slice(0, 14)}…`;
   }
@@ -131,13 +121,15 @@ export default function BrowsePage() {
   const [properties, setProperties] = useState<PropertyBrowse[]>([]);
   const [projects, setProjects] = useState<ProjectBrowse[]>([]);
   const [projectTotal, setProjectTotal] = useState(0);
+  const [markerCount, setMarkerCount] = useState(0);
+  const [projectGroups, setProjectGroups] = useState<{ name: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [mobileView, setMobileView] = useState<'list' | 'map'>('list');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filterOpen, setFilterOpen] = useState(true);
   const [fullScreenResults, setFullScreenResults] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'compact'>('list');
-  const [sortBy, setSortBy] = useState<SortOption>('relevance');
+  const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [panelWidth, setPanelWidth] = useState(450);
   const sortByRef = useRef(sortBy);
   const resizerRef = useRef<HTMLDivElement>(null);
@@ -193,14 +185,17 @@ export default function BrowsePage() {
   const autocompleteReqIdRef = useRef(0);  // A5: stale-response guard for autocomplete
   const filtersRef = useRef(filters);
 
-  // Sidebar-hover → map highlight: stale-response guards + LRU marker cache
-  const hoverReqIdRef = useRef(0);
-  const hoverAbortRef = useRef<AbortController | null>(null);
-  const hoverDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Sidebar-hover → map highlight (fetch-free; hover renders card data only).
   const hoveredIdRef = useRef<{ id: string; type: 'property' | 'project' } | null>(null);
-  const markerCacheRef = useRef(new MarkerLruCache(50));
+  // Click-response cache: full listing details with gallery (filled by click
+  // fetches only — hover never touches the network or this cache's fill path).
+  const markerCacheRef = useRef(new MarkerLruCache(100));
   // Marker click → rich listing card: stale-response guard
   const clickReqIdRef = useRef(0);
+  // MapLibre fires the map-level 'click' even when a point layer was clicked
+  // (originalEvent.stopPropagation can't stop synthetic dispatch), so pin
+  // clicks set this window during which the background-click closer stands down.
+  const suppressMapClickUntil = useRef(0);
 
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
@@ -352,6 +347,38 @@ export default function BrowsePage() {
 
     const fetchId = ++fetchIdRef.current;
     const isAppend = cursorOverride?.append ?? false;
+    // Paint density dots from a markers array (shared by full + tiles modes).
+    const paintMarkers = (map: maplibregl.Map, markers: any[]) => {
+      const mapFeatures: GeoJSON.Feature[] = [];
+      for (const m of markers) {
+        if (m.lat == null || m.lon == null) continue;
+        const isProject = m.entity_type === 'project';
+        mapFeatures.push({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [m.lon, m.lat] },
+          properties: {
+            id: m.id,
+            type: isProject ? 'project' : 'property',
+            title: m.title || '',
+            price: m.price || 0,
+            price_label: formatMoneyCompact(
+              m.price,
+              isProject ? tenant.projectCurrency : tenant.propertyCurrency
+            ),
+            sort_key: m.price || 0,
+            image_url: m.image_url || null,
+            bhk_type: m.bhk_type || null,
+            bathrooms: m.bathrooms ?? null,
+            area_sqft: m.area_sqft ?? null,
+            area_unit: m.area_unit || null,
+            location_text: m.location_text || null,
+            is_new: !!m.is_new,
+          },
+        });
+      }
+      updateSourceData(map, { type: 'FeatureCollection', features: mapFeatures });
+      updateCircleRadius(map, map.getZoom());
+    };
     if (!isAppend) {
       setLoading(true);
       setLoadingMore(false);
@@ -402,7 +429,10 @@ export default function BrowsePage() {
 
     try {
       if (!isAppend) {
-        // FRESH LOAD: Use combined /api/map-data endpoint (clusters + listings in 1 request)
+        // FRESH LOAD: combined /api/map-data endpoint queried with the EXACT
+        // viewport bounds — one viewport, one query, full-viewport coverage.
+        // Never substitute a sub-region (tile) fetch here: that was the
+        // one-sided-dots regression.
         const currentZoom = mapRef.current ? Math.round(mapRef.current.getZoom()) : 12;
         const combinedParams: any = {
           bounds: params.bounds,
@@ -462,10 +492,16 @@ export default function BrowsePage() {
                 low_price: r.low_price || 0,
                 high_price: r.high_price || 0,
                 construction_phase: r.construction_phase || '',
+                construction_progress_percent: r.construction_progress_percent ?? null,
                 delivery_date: r.delivery_date || null,
                 developer_name: r.developer_name || '',
                 primary_image: r.image_url || null,
                 location_name: r.location_text || null,
+                bedrooms_list: Array.isArray(r.bedrooms_list) ? r.bedrooms_list : [],
+                unit_count: r.unit_count ?? null,
+                payment_plan_summary: r.payment_plan_summary || null,
+                amenities: Array.isArray(r.amenities) ? r.amenities.slice(0, 6) : [],
+                amenities_total: r.amenities_total ?? (Array.isArray(r.amenities) ? r.amenities.length : 0),
                 latitude: loc.lat ?? null,
                 longitude: loc.lon ?? null,
               };
@@ -477,39 +513,11 @@ export default function BrowsePage() {
           // Build map GeoJSON from the lightweight markers (up to ~500 dots,
           // Zillow-style). Markers come from the SAME filtered population as the
           // sidebar list, so map dots + list + badge stay consistent.
-          let mapGeoJson: GeoJSON.FeatureCollection | null = null;
-          if (mapRef.current) {
-            const mapFeatures: GeoJSON.Feature[] = [];
-
-            for (const m of (response.markers || [])) {
-              if (m.lat == null || m.lon == null) continue;
-              const isProject = m.entity_type === 'project';
-              mapFeatures.push({
-                type: 'Feature' as const,
-                geometry: { type: 'Point' as const, coordinates: [m.lon, m.lat] },
-                properties: {
-                  id: m.id,
-                  type: isProject ? 'project' : 'property',
-                  title: m.title || '',
-                  price: m.price || 0,
-                  price_label: formatPriceLabel(m.price),
-                  sort_key: m.price || 0,
-                },
-              });
-            }
-
-            mapGeoJson = {
-              type: 'FeatureCollection',
-              features: mapFeatures,
-            };
-          }
-
           if (fetchId !== fetchIdRef.current) return;
 
           // Only the newest response may paint dots on the map.
-          if (mapRef.current && mapGeoJson) {
-            updateSourceData(mapRef.current, mapGeoJson);
-            updateCircleRadius(mapRef.current, mapRef.current.getZoom());
+          if (mapRef.current) {
+            paintMarkers(mapRef.current, response.markers || []);
           }
 
           setProperties(props);
@@ -517,6 +525,8 @@ export default function BrowsePage() {
           setSortedResultOrder(order);
           setPropertyTotal(response.propertyTotal ?? 0);
           setProjectTotal(response.projectTotal ?? 0);
+          setMarkerCount((response.markers || []).length);
+          setProjectGroups(response.projectGroups || []);
           setCombinedNextCursor(response.nextCursor ?? null);
 
           // The location fetch has completed with the correct (geocoded)
@@ -586,10 +596,16 @@ export default function BrowsePage() {
                 low_price: r.low_price || 0,
                 high_price: r.high_price || 0,
                 construction_phase: r.construction_phase || '',
+                construction_progress_percent: r.construction_progress_percent ?? null,
                 delivery_date: r.delivery_date || null,
                 developer_name: r.developer_name || '',
                 primary_image: r.image_url || null,
                 location_name: r.location_text || null,
+                bedrooms_list: Array.isArray(r.bedrooms_list) ? r.bedrooms_list : [],
+                unit_count: r.unit_count ?? null,
+                payment_plan_summary: r.payment_plan_summary || null,
+                amenities: Array.isArray(r.amenities) ? r.amenities.slice(0, 6) : [],
+                amenities_total: r.amenities_total ?? (Array.isArray(r.amenities) ? r.amenities.length : 0),
                 latitude: loc.lat ?? null,
                 longitude: loc.lon ?? null,
               };
@@ -629,10 +645,16 @@ export default function BrowsePage() {
           low_price: r.low_price || 0,
           high_price: r.high_price || 0,
           construction_phase: r.construction_phase || '',
+          construction_progress_percent: r.construction_progress_percent ?? null,
           delivery_date: r.delivery_date || null,
           developer_name: r.developer_name || '',
           primary_image: r.primary_image || null,
           location_name: r.location_name || null,
+          bedrooms_list: Array.isArray(r.bedrooms_list) ? r.bedrooms_list : [],
+          unit_count: r.unit_count ?? null,
+          payment_plan_summary: r.payment_plan_summary || null,
+          amenities: Array.isArray(r.amenities) ? r.amenities.slice(0, 6) : [],
+          amenities_total: r.amenities_total ?? (Array.isArray(r.amenities) ? r.amenities.length : 0),
           latitude: r.latitude ?? null,
           longitude: r.longitude ?? null,
         }));
@@ -731,72 +753,41 @@ export default function BrowsePage() {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
       if (abortRef.current) abortRef.current.abort();
       if (autocompleteAbortRef.current) autocompleteAbortRef.current.abort();
-      if (hoverAbortRef.current) hoverAbortRef.current.abort();
-      if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
     };
   }, []);
 
   const propertyMap = useMemo(() => new Map(properties.map(p => [p.id, p])), [properties]);
   const projectMap = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
 
-  // Sidebar card hover → highlight its marker. Fast path is a synchronous state
-  // lookup (cards always carry lat/lon); only when the listing isn't in state
-  // do we fall back to a debounced by-id fetch (cached in an LRU + Redis).
-  const handleCardHover = useCallback((id: string, type: 'property' | 'project') => {
-    hoveredIdRef.current = { id, type };
-
-    const local = type === 'property' ? propertyMap.get(id) : projectMap.get(id);
-    if (local && local.latitude != null && local.longitude != null) {
-      applyHoverMarker({
-        id,
-        type,
-        lat: local.latitude,
-        lon: local.longitude,
-        title: type === 'property' ? (local as PropertyBrowse).title ?? '' : (local as ProjectBrowse).name,
-        price: type === 'property' ? (local as PropertyBrowse).price ?? 0 : (local as ProjectBrowse).low_price ?? 0,
-        image: type === 'property' ? (local as PropertyBrowse).images?.[0]?.image_url : (local as ProjectBrowse).primary_image ?? undefined,
-        location: type === 'property' ? (local as PropertyBrowse).location_text ?? '' : (local as ProjectBrowse).location_name ?? '',
-      });
-      return;
-    }
-
-    const cacheKey = `${type}:${id}`;
-    const cached = markerCacheRef.current.get(cacheKey);
-    if (cached) {
-      applyHoverMarker(cached);
-      return;
-    }
-
-    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
-    hoverDebounceRef.current = setTimeout(() => {
-      const reqId = ++hoverReqIdRef.current;
-      if (hoverAbortRef.current) hoverAbortRef.current.abort();
-      const controller = new AbortController();
-      hoverAbortRef.current = controller;
-      fetch(`/api/listings/${encodeURIComponent(id)}`, { signal: controller.signal })
-        .then(res => (res.ok ? res.json() : null))
-        .then(data => {
-          if (reqId !== hoverReqIdRef.current) return;
-          if (hoveredIdRef.current?.id !== id) return;
-          if (!data || data.lat == null || data.lon == null) return;
-          const entry = {
-            id, type,
-            lat: data.lat, lon: data.lon,
-            title: data.title, price: data.price,
-            image: data.image_url, location: data.location_text,
-          };
-          markerCacheRef.current.set(cacheKey, entry);
-          applyHoverMarker(entry);
-        })
-        .catch(() => { /* AbortError or network error — silent no-op */ });
-    }, 150);
-  }, [propertyMap, projectMap, applyHoverMarker]);
+  // Sidebar card hover → highlight its marker. Rendered strictly from the card's
+  // own data (which the list already holds) — hover NEVER fetches. Cards without
+  // coordinates simply skip the highlight.
+  const handleCardHover = useCallback((data: {
+    id: string;
+    type: 'property' | 'project';
+    lat: number | null;
+    lon: number | null;
+    title?: string;
+    price?: number;
+    image?: string;
+    location?: string;
+  }) => {
+    hoveredIdRef.current = { id: data.id, type: data.type };
+    if (data.lat == null || data.lon == null) return;
+    applyHoverMarker({
+      id: data.id,
+      type: data.type,
+      lat: data.lat,
+      lon: data.lon,
+      title: data.title,
+      price: data.price,
+      image: data.image,
+      location: data.location,
+    });
+  }, [applyHoverMarker]);
 
   const handleCardLeave = useCallback(() => {
     hoveredIdRef.current = null;
-    hoverReqIdRef.current++;
-    if (hoverAbortRef.current) hoverAbortRef.current.abort();
-    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
     if (mapRef.current) {
       setHighlightedPoint(mapRef.current, null);
       setHighlightState(mapRef.current, null);
@@ -846,6 +837,13 @@ export default function BrowsePage() {
       const point: ClusterPoint = {
         id: props.id, type: props.type, title: props.title, price: props.price || 0,
         latitude: e.lngLat.lat, longitude: e.lngLat.lng,
+        image_url: props.image_url ?? null,
+        bhk_type: props.bhk_type ?? null,
+        bathrooms: props.bathrooms ?? null,
+        area_sqft: props.area_sqft ?? null,
+        area_unit: props.area_unit ?? null,
+        location_text: props.location_text ?? null,
+        is_new: !!props.is_new,
       };
       showPropertyPreview(map, point, e.lngLat);
     };
@@ -862,6 +860,10 @@ export default function BrowsePage() {
       if (!props?.id) return;
       // Don't let the click bubble to the map's background-click close handler.
       e.originalEvent?.stopPropagation?.();
+      // Belt-and-braces: MapLibre dispatches layer clicks AND the map click for
+      // the same press (proven in-browser), so the background closer below
+      // stands down briefly for every pin click.
+      suppressMapClickUntil.current = Date.now() + 350;
 
       const map = mapRef.current;
       if (!map) return;
@@ -873,18 +875,115 @@ export default function BrowsePage() {
         : e.lngLat;
 
       const reqId = ++clickReqIdRef.current;
+      const isProject = props.type === 'project';
+      // Instant card from tile data (single image) so the map never flashes
+      // empty; upgraded to full fetched details with gallery below.
+      showListingPreviewCard(map, {
+        id: props.id,
+        entity_type: isProject ? 'project' : 'property',
+        lat: pointLngLat.lat,
+        lon: pointLngLat.lng,
+        title: props.title || '',
+        price: isProject ? 0 : (props.price || 0),
+        low_price: isProject ? (props.price || 0) : null,
+        high_price: null,
+        image_url: props.image_url || null,
+        location_text: props.location_text || null,
+        area_sqft: props.area_sqft ?? null,
+        area_unit: props.area_unit || null,
+        bhk_type: props.bhk_type || null,
+        bathrooms: props.bathrooms ?? null,
+      }, pointLngLat);
+
+      // Click-response cache: second click on the same marker skips the fetch.
+      const clickKey = `${props.type}:${props.id}`;
+      const clickCached = markerCacheRef.current.get(clickKey);
+      if (clickCached?.all_images && clickCached.all_images.length > 0) {
+          showListingPreviewCard(map, {
+          id: clickCached.id,
+          entity_type: clickCached.type,
+          lat: pointLngLat.lat,
+          lon: pointLngLat.lng,
+          title: clickCached.title || '',
+          price: clickCached.price || 0,
+          low_price: clickCached.low_price ?? null,
+          high_price: clickCached.high_price ?? null,
+          image_url: clickCached.image || null,
+          all_images: clickCached.all_images,
+          location_text: clickCached.location_text || clickCached.location || null,
+          area_sqft: clickCached.area_sqft ?? null,
+          area_unit: clickCached.area_unit || null,
+          bhk_type: clickCached.bhk_type || null,
+          bathrooms: clickCached.bathrooms ?? null,
+          property_type: clickCached.property_type || null,
+          developer_name: clickCached.developer_name || null,
+          construction_phase: clickCached.construction_phase || null,
+          delivery_date: clickCached.delivery_date || null,
+          amenities: clickCached.amenities || [],
+          amenities_total: clickCached.amenities_total ?? (clickCached.amenities || []).length,
+          bedrooms_list: clickCached.bedrooms_list || [],
+          unit_count: clickCached.unit_count ?? null,
+          payment_plan_summary: clickCached.payment_plan_summary || null,
+          construction_progress_percent: clickCached.construction_progress_percent ?? null,
+        }, pointLngLat);
+        return;
+      }
+
+      // Full details are fetched on click only — hover paths never fetch.
+      // The card only upgrades if it is still open for THIS pin (X, background
+      // click, or a newer pin click invalidates the upgrade).
       fetch(`/api/listings/${encodeURIComponent(props.id)}`)
         .then(res => (res.ok ? res.json() : null))
         .then(data => {
           if (reqId !== clickReqIdRef.current) return;
+          if (listingCardId() !== props.id) return;
           if (!data || data.lat == null || data.lon == null) return;
+          markerCacheRef.current.set(clickKey, {
+            id: props.id,
+            type: props.type,
+            lat: data.lat,
+            lon: data.lon,
+            title: data.title,
+            price: data.price,
+            image: data.image_url,
+            location: data.location_text,
+            all_images: data.all_images || (data.image_url ? [data.image_url] : []),
+            bhk_type: data.bhk_type || null,
+            bathrooms: data.bathrooms ?? null,
+            area_sqft: data.area_sqft ?? null,
+            area_unit: data.area_unit || null,
+            location_text: data.location_text || null,
+            low_price: data.low_price ?? null,
+            high_price: data.high_price ?? null,
+            developer_name: data.developer_name || null,
+            construction_phase: data.construction_phase || null,
+            delivery_date: data.delivery_date || null,
+            property_type: data.property_type || null,
+            amenities: Array.isArray(data.amenities) ? data.amenities.slice(0, 6) : [],
+            amenities_total: data.amenities_total ?? (Array.isArray(data.amenities) ? data.amenities.length : 0),
+            bedrooms_list: Array.isArray(data.bedrooms_list) ? data.bedrooms_list : [],
+            unit_count: data.unit_count ?? null,
+            payment_plan_summary: data.payment_plan_summary || null,
+            construction_progress_percent: data.construction_progress_percent ?? null,
+          });
           showListingPreviewCard(map, data, pointLngLat);
         })
-        .catch(() => { /* silent — no card */ });
+        .catch(() => { /* silent — instant tile card stays */ });
     };
 
     const onMapClick = () => {
+      // Pin clicks dispatch here too — stand down while suppressed so the
+      // just-opened card isn't closed in the same tick.
+      if (Date.now() < suppressMapClickUntil.current) return;
+      clickReqIdRef.current++;
       hideListingPreviewCard();
+    };
+
+    const onEscapeKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        clickReqIdRef.current++;
+        hideListingPreviewCard();
+      }
     };
 
     // Fix Maptiler empty sprite URL issue — prevents "Image '' could not be loaded" errors
@@ -970,9 +1069,11 @@ export default function BrowsePage() {
         return;
       }
 
-      // The listing card is DOM-anchored at the clicked marker's screen
-      // position; hide it once the map moves so it never floats over nothing.
-      hideListingPreviewCard();
+      // The fixed click card stays open across pans (Zillow-style) — it is
+      // re-anchored on every 'move' below. It closes only via X, background
+      // click, another pin click, or Escape. In-flight click fetches stay valid
+      // because the card's geographic anchor never changes.
+      repositionListingCard(map);
 
       // If we just completed a geocoded location fitBounds, skip the redundant fetch.
       // The initial fetchAllProperties from selectSuggestion already handles the data.
@@ -982,7 +1083,10 @@ export default function BrowsePage() {
       }
 
       if (searchAsIMoveRef.current) {
-        // 400ms debounce for pan-triggered searches (spec §8: 300-500ms + cancel)
+        // 400ms debounce for pan-triggered searches (spec §8: 300-500ms + cancel).
+        // Pans re-query the full endpoint with exact viewport bounds — the
+        // response paints dots AND refreshes list/totals together, so the
+        // sidebar can never desync from the map.
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = setTimeout(() => {
           fetchPropertiesRef.current(map.getBounds());
@@ -990,11 +1094,18 @@ export default function BrowsePage() {
       }
     };
 
+    // Keep the open click card glued to its geographic anchor while panning.
+    const onMove = () => {
+      repositionListingCard(map);
+    };
+
     map.on('load', onLoad);
     map.on('mousedown', onMouseDown);
     map.on('mousemove', onMouseMove);
     map.on('mouseup', onMouseUp);
     map.on('moveend', onMoveEnd);
+    map.on('move', onMove);
+    document.addEventListener('keydown', onEscapeKey);
 
     return () => {
       map.off('load', onLoad);
@@ -1002,6 +1113,8 @@ export default function BrowsePage() {
       map.off('mousemove', onMouseMove);
       map.off('mouseup', onMouseUp);
       map.off('moveend', onMoveEnd);
+      map.off('move', onMove);
+      document.removeEventListener('keydown', onEscapeKey);
       map.off('mousemove', 'unclustered-properties', onPointMouseMove);
       map.off('mousemove', 'unclustered-projects', onPointMouseMove);
       map.off('mouseleave', 'unclustered-properties', onPointMouseLeave);
@@ -1650,9 +1763,8 @@ export default function BrowsePage() {
                       }}
                       className="neumorphic-input !w-auto !min-w-[130px] text-xs py-1.5"
                     >
-                      <option value="relevance">Relevance</option>
-                      <option value="popular">Most Popular</option>
                       <option value="newest">Newest</option>
+                      <option value="popular">Most Popular</option>
                       <option value="price_asc">Price Low → High</option>
                       <option value="price_desc">Price High → Low</option>
                     </select>
@@ -1689,7 +1801,7 @@ export default function BrowsePage() {
                     const prop = propertyMap.get(entry.id);
                     if (!prop) return null;
                     return (
-                      <div key={prop.id} onMouseEnter={() => handleCardHover(prop.id, 'property')} onMouseLeave={handleCardLeave}>
+                      <div key={prop.id} onMouseEnter={() => handleCardHover({ id: prop.id, type: 'property', lat: prop.latitude, lon: prop.longitude, title: prop.title ?? '', price: prop.price ?? 0, image: prop.images?.[0]?.image_url, location: prop.location_text ?? '' })} onMouseLeave={handleCardLeave}>
                         <PropertyCard property={prop} />
                       </div>
                     );
@@ -1697,7 +1809,7 @@ export default function BrowsePage() {
                     const proj = projectMap.get(entry.id);
                     if (!proj) return null;
                     return (
-                      <div key={`proj_${proj.id}`} onMouseEnter={() => handleCardHover(proj.id, 'project')} onMouseLeave={handleCardLeave}>
+                      <div key={`proj_${proj.id}`} onMouseEnter={() => handleCardHover({ id: proj.id, type: 'project', lat: proj.latitude, lon: proj.longitude, title: proj.name, price: proj.low_price ?? 0, image: proj.primary_image ?? undefined, location: proj.location_name ?? '' })} onMouseLeave={handleCardLeave}>
                         <ProjectCard project={proj} />
                       </div>
                     );
@@ -1713,7 +1825,7 @@ export default function BrowsePage() {
                     viewMode === 'compact' ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2" : "",
                   )}>
                     {properties.map(property => (
-                      <div key={property.id} onMouseEnter={() => handleCardHover(property.id, 'property')} onMouseLeave={handleCardLeave}>
+                      <div key={property.id} onMouseEnter={() => handleCardHover({ id: property.id, type: 'property', lat: property.latitude, lon: property.longitude, title: property.title ?? '', price: property.price ?? 0, image: property.images?.[0]?.image_url, location: property.location_text ?? '' })} onMouseLeave={handleCardLeave}>
                         <PropertyCard property={property} />
                       </div>
                     ))}
@@ -1729,7 +1841,7 @@ export default function BrowsePage() {
                       <div className="border-t border-shadow-dark/10 pt-3 mt-3 col-span-full" />
                     )}
                     {projects.map(proj => (
-                      <div key={proj.id} onMouseEnter={() => handleCardHover(proj.id, 'project')} onMouseLeave={handleCardLeave}>
+                      <div key={proj.id} onMouseEnter={() => handleCardHover({ id: proj.id, type: 'project', lat: proj.latitude, lon: proj.longitude, title: proj.name, price: proj.low_price ?? 0, image: proj.primary_image ?? undefined, location: proj.location_name ?? '' })} onMouseLeave={handleCardLeave}>
                         <ProjectCard project={proj} />
                       </div>
                     ))}
@@ -1782,6 +1894,23 @@ export default function BrowsePage() {
         )}>
           <div ref={mapContainer} className="w-full h-full" />
           {loading && <div className="absolute top-4 right-4 bg-bg-color p-2 rounded-full shadow-neumorphic-outset"><FaSpinner className="animate-spin text-blue-500" /></div>}
+          {/* Zillow-style visible/total counter + community pills */}
+          {!loading && (propertyTotal + projectTotal) > 0 && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1.5 pointer-events-none">
+              <div className="rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
+                {markerCount} of {(propertyTotal + projectTotal).toLocaleString()} homes
+              </div>
+              {projectGroups.length > 0 && (
+                <div className="flex flex-wrap justify-center gap-1 max-w-md pointer-events-auto">
+                  {projectGroups.slice(0, 3).map(g => (
+                    <span key={g.name} className="rounded-full bg-red-800/90 px-2 py-0.5 text-[11px] font-semibold text-white">
+                      {g.count} in {g.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {!sidebarOpen && !fullScreenResults && (
             <button
               type="button"

@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { LogOut, LogIn, Home, Heart, List, PlusSquare, Building2, User, Shield, Briefcase, Calendar as CalendarIcon, MessageCircle, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { ChatAssistant } from './ChatAssistant'
+import { tenant } from '@/lib/tenant'
 
 export default function Header() {
   const router = useRouter()
@@ -30,7 +31,7 @@ export default function Header() {
       <div className="flex-1 flex justify-start">
         <Link href="/" className="text-xl font-bold text-text-color-dark hover:text-opacity-80 transition-colors flex items-center gap-2">
           <Home size={24}/>
-          <span className="hidden sm:inline">Soft Homes</span>
+          <span className="hidden sm:inline">{tenant.brand.name}</span>
         </Link>
       </div>
       

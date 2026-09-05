@@ -12,6 +12,8 @@ import { FullScreenImageViewer } from '@/app/components/FullScreenImageViewer';
 import { LocationMap } from '@/app/components/LocationMap';
 import { FaBed, FaBath, FaBuilding, FaTags, FaRulerCombined, FaRegClock, FaRegHandshake, FaRegFileAlt, FaChair, FaAward, FaTree } from 'react-icons/fa';
 import { Heart, MapPin, Loader2, Briefcase, CheckCircle, Building2, User, DoorOpen } from 'lucide-react';
+import { formatMoney, formatArea } from '@/lib/format';
+import { tenant } from '@/lib/tenant';
 
 type Props = {
   property: PropertyDataType;
@@ -135,7 +137,7 @@ export default function PropertyDetailClient({ property }: Props) {
 
             <section>
                 <p className="text-4xl font-bold text-success-color mb-2">
-                    ₹{property.price?.toLocaleString() ?? 'Price on request'}
+                    {property.price ? formatMoney(property.price, tenant.propertyCurrency) : 'Price on request'}
                     {property.is_price_negotiable && <span className="text-sm font-normal text-text-color-light ml-2">(Negotiable)</span>}
                 </p>
                 <p className="text-text-color-light">{property.description}</p>
@@ -147,7 +149,7 @@ export default function PropertyDetailClient({ property }: Props) {
                     {residentialDetails && (
                         <>
                             <DetailItem icon={FaBed} label="Configuration" value={residentialDetails.bhk_types?.label} />
-                            <DetailItem icon={FaRulerCombined} label="Carpet Area" value={residentialDetails.carpet_area ? `${residentialDetails.carpet_area} sqft` : null} />
+                            <DetailItem icon={FaRulerCombined} label="Carpet Area" value={formatArea(residentialDetails.carpet_area, null)} />
                             <DetailItem icon={FaBath} label="Bathrooms" value={residentialDetails.bathrooms} />
                             <DetailItem icon={DoorOpen} label="Balconies" value={residentialDetails.balconies} />
                             <DetailItem icon={FaTags} label="Furnishing" value={residentialDetails.lookup_furnishing_statuses?.name} />
@@ -158,7 +160,7 @@ export default function PropertyDetailClient({ property }: Props) {
                          <>
                          <DetailItem icon={Briefcase} label="Commercial Type" value={commercialDetails.lookup_commercial_sub_types?.name} />
                          <DetailItem icon={FaBuilding} label="Office Type" value={commercialDetails.office_type?.name} />
-                         <DetailItem icon={FaRulerCombined} label="Carpet Area" value={commercialDetails.carpet_area ? `${commercialDetails.carpet_area} sqft` : null} />
+                          <DetailItem icon={FaRulerCombined} label="Carpet Area" value={formatArea(commercialDetails.carpet_area, null)} />
                          <DetailItem icon={Building2} label="Floor" value={commercialDetails.total_floors ? `Floor ${commercialDetails.property_on_floor} of ${commercialDetails.total_floors}` : null} />
                          <DetailItem icon={FaChair} label="Minimum Seats" value={commercialDetails.min_seats} />
                          <DetailItem icon={FaChair} label="Maximum Seats" value={commercialDetails.max_seats} />
@@ -174,7 +176,7 @@ export default function PropertyDetailClient({ property }: Props) {
                     )}
                     {landDetails && (
                          <>
-                             <DetailItem icon={FaRulerCombined} label="Plot Area" value={landDetails.plot_area ? `${landDetails.plot_area} ${landDetails.area_unit || 'sqft'}`: null} />
+                              <DetailItem icon={FaRulerCombined} label="Plot Area" value={landDetails.plot_area ? formatArea(landDetails.plot_area, landDetails.area_unit) : null} />
                              <DetailItem icon={FaTree} label="Boundary Wall" value={landDetails.is_boundary_wall_made ? 'Yes' : 'No'} />
                          </>
                      )}

@@ -12,6 +12,7 @@ import { XCircle, Loader2, UploadCloud, Trash2, Building, Home, LandPlot } from 
 import { updatePropertyAndManageImages } from '@/lib/actions';
 import { unstable_noStore as noStore } from 'next/cache';
 import type { PropertyDataType, LookupItem as BaseLookupType } from '@/lib/types';
+import { tenant } from '@/lib/tenant';
 import dynamic from 'next/dynamic';
 
 const LocationPicker = dynamic(() => import('@/app/components/LocationPicker'), {
@@ -307,7 +308,7 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
                     <div><label className="block text-sm font-medium text-text-color-light mb-1">Description</label><textarea name="description" value={commonData.description} onChange={createHandleChange(setCommonData)} rows={4} required className="neumorphic-input"/></div>
                     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <div><label className="block text-sm font-medium text-text-color-light mb-1">WhatsApp Phone Number</label><input name="phone_number" type="tel" pattern="[0-9]{10}" title="Enter a 10-digit phone number" value={commonData.phone_number} onChange={createHandleChange(setCommonData)} required className="neumorphic-input"/></div>
-                        <div><label className="block text-sm font-medium text-text-color-light mb-1">Price (INR)</label><input name="price" type="number" min="0" value={commonData.price} onChange={createHandleChange(setCommonData)} required className="neumorphic-input"/></div>
+                        <div><label className="block text-sm font-medium text-text-color-light mb-1">Price ({tenant.propertyCurrency})</label><input name="price" type="number" min="0" value={commonData.price} onChange={createHandleChange(setCommonData)} required className="neumorphic-input"/></div>
                         <div><label className="block text-sm font-medium text-text-color-light mb-1">Listing For</label><select name="listing_purpose_id" value={commonData.listing_purpose_id} onChange={createHandleChange(setCommonData)} required className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.listingPurposes.map(lp => <option key={lp.id} value={lp.id}>{lp.name}</option>)}</select></div>
                     </div>
                 </div>

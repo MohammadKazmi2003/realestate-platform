@@ -1,0 +1,56 @@
+{
+  "$comment": "Tenant configuration — one file per country / white-label buyer. Selected at build time via NEXT_PUBLIC_TENANT (default: 'default'). Every value here replaces a former hardcoding so new markets launch without code changes. Buyer stacks are fully isolated (own DB + ES + deploy), so no tenant_id plumbing is needed.",
+  "slug": "default",
+  "brand": {
+    "name": "Soft Homes"
+  },
+  "locale": "en-IN",
+  "currency": "INR",
+  "propertyCurrency": "INR",
+  "projectCurrency": "AED",
+  "moneyCompact": {
+    "INR": {
+      "symbol": "₹",
+      "steps": [
+        { "gte": 10000000, "div": 10000000, "digits": 1, "suffix": "Cr" },
+        { "gte": 100000, "div": 100000, "digits": 0, "suffix": "L" }
+      ]
+    },
+    "AED": {
+      "symbol": "AED ",
+      "steps": [
+        { "gte": 1000000, "div": 1000000, "digits": 2, "suffix": "M" },
+        { "gte": 1000, "div": 1000, "digits": 0, "suffix": "K" }
+      ]
+    },
+    "USD": {
+      "symbol": "$",
+      "steps": [
+        { "gte": 1000000000, "div": 1000000000, "digits": 1, "suffix": "B" },
+        { "gte": 1000000, "div": 1000000, "digits": 1, "suffix": "M" },
+        { "gte": 1000, "div": 1000, "digits": 0, "suffix": "K" }
+      ]
+    }
+  },
+  "bedsModel": "bhk",
+  "bedsLabel": "BHK",
+  "areaUnit": "sqft",
+  "map": {
+    "center": [77.0266, 28.4595],
+    "zoom": 4,
+    "geocodeCountries": ""
+  },
+  "features": {
+    "projects": true
+  },
+  "filterNormalization": {
+    "$comment": "Cache-key normalization: snap continuous inputs to buckets so near-identical searches share one ES query. Price snaps WIDEN (min floors, max ceils) so results stay a superset — applied to BOTH the ES query and the hash, never hash-only. Steps are per display currency; scope=both uses the finest involved step.",
+    "priceSteps": { "INR": 500000, "AED": 50000, "USD": 25000 },
+    "areaStep": 100,
+    "radiusStep": 5,
+    "arrayFields": ["amenities", "furnishings"],
+    "stripFromMarkerKey": ["sort", "pageSize", "cursor"],
+    "polygonMaxPoints": 50,
+    "polygonPrecision": 4
+  }
+}

@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     const {
       query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
       amenities = [], furnishings = [], bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds,
-      polygon, cursor, pageSize = 24, sort = 'relevance', scope = 'properties',
+      polygon, cursor, pageSize = 24, sort = 'newest', scope = 'properties',
     } = parsed.data;
 
     const query = sanitize(rawQuery)?.toLowerCase().trim();

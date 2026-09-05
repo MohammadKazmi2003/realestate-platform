@@ -90,17 +90,39 @@ async function setupAlias() {
   console.log(`Alias ${ES_ALIAS} -> ${INDEX_NAME}`);
 }
 
-async function buildProjectDocument(project) {
-  const [developerRes, imageRes, locationRes, amenityRes] = await Promise.all([
+async function buildProjectDocument(project, unitsByProject) {
+  const unitsPromise = unitsByProject
+    ? Promise.resolve({ data: unitsByProject[project.id] || [] })
+    : supabase.from('unit_configurations').select('bedrooms').eq('project_id', project.id);
+  const [developerRes, imageRes, locationRes, amenityRes, unitsRes] = await Promise.all([
     supabase.from('developers').select('name').eq('id', project.developer_id).maybeSingle(),
-    supabase.from('project_images').select('storage_path_original').eq('project_id', project.id).order('is_primary', { ascending: false }).order('id', { ascending: true }).limit(1).maybeSingle(),
+    // Full gallery (primary first, cap 10) — the click carousel needs every
+    // photo, not just the cover. Was limit(1): the reason project cards and
+    // the map gallery showed a single image despite ~6.5 photos per project.
+    supabase.from('project_images').select('storage_path_original').eq('project_id', project.id).order('is_primary', { ascending: false }).order('id', { ascending: true }).limit(10),
     supabase.from('project_locations').select('locations(name)').eq('project_id', project.id).order('level', { referencedTable: 'locations', ascending: false }).limit(1).maybeSingle(),
     supabase.from('project_amenities').select('amenities(name)').eq('project_id', project.id),
+    unitsPromise,
   ]);
 
   const amenities = (amenityRes.data || [])
     .map((a) => a.amenities?.name || '')
     .filter(Boolean);
+
+  const gallery = (imageRes.data || [])
+    .map((r) => r.storage_path_original)
+    .filter((u) => typeof u === 'string' && u.length > 0);
+
+  // Unit summary for cards: distinct bedroom counts + total configs.
+  // Display formatting (BHK vs Beds) happens per tenant at render time.
+  const bedrooms_list = Array.from(
+    new Set(
+      (unitsRes.data || [])
+        .map((u) => u.bedrooms)
+        .filter((b) => Number.isInteger(b) && b >= 0)
+    )
+  ).sort((a, b) => a - b);
+  const unit_count = (unitsRes.data || []).length;
 
   const doc = {
     id: project.id,
@@ -120,7 +142,12 @@ async function buildProjectDocument(project) {
       ? { lat: Number(project.latitude), lon: Number(project.longitude) }
       : null,
     amenities,
-    image_url: imageRes.data?.storage_path_original || null,
+    image_url: gallery[0] || null,
+    all_images: gallery,
+    bedrooms_list,
+    unit_count,
+    payment_plan_summary: project.payment_plan_summary || null,
+    construction_progress_percent: project.construction_progress_percent ?? null,
     created_at: project.created_at,
     suggest: [
       project.name?.trim(),
@@ -162,6 +189,36 @@ async function bulkIndex() {
 
   console.log('Starting bulk project index...');
 
+  // One paginated prefetch for all unit configs instead of one query per
+  // project. NOTE: PostgREST caps a single response at 1000 rows and there
+  // are 4000+ unit rows — an unpaginated select silently drops every project
+  // past row 1000 (empty bedrooms_list). Always page to exhaustion.
+  // null = fetch failed → buildProjectDocument falls back per project.
+  let unitsByProject = null;
+  try {
+    const allUnits = [];
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data: page, error: pageError } = await supabase
+        .from('unit_configurations')
+        .select('project_id, bedrooms')
+        .range(from, from + PAGE - 1);
+      if (pageError) throw pageError;
+      allUnits.push(...(page || []));
+      if (!page || page.length < PAGE) break;
+    }
+    if (allUnits.length > 0) {
+      unitsByProject = {};
+      for (const u of allUnits) {
+        (unitsByProject[u.project_id] = unitsByProject[u.project_id] || []).push(u);
+      }
+    }
+    console.log(`Prefetched ${allUnits.length} unit configurations.`);
+  } catch (err) {
+    console.warn('Unit prefetch failed, falling back to per-project fetch:', err.message?.split('\n')[0]);
+    unitsByProject = null;
+  }
+
   while (true) {
     const { data: projects, error } = await supabase
       .from('projects')
@@ -172,7 +229,7 @@ async function bulkIndex() {
 
     const body = [];
     for (const proj of projects) {
-      const doc = await buildProjectDocument(proj);
+      const doc = await buildProjectDocument(proj, unitsByProject);
       body.push({ index: { _index: ES_ALIAS, _id: proj.id } });
       body.push(doc);
       total++;

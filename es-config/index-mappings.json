@@ -2,7 +2,7 @@
   "settings": {
     "number_of_shards": 1,
     "number_of_replicas": 1,
-    "refresh_interval": "1s",
+    "refresh_interval": "30s",
     "analysis": {
       "filter": {
         "synonym_filter": {
@@ -89,6 +89,7 @@
       "ownership_type": { "type": "keyword" },
       "bhk_type": { "type": "keyword" },
       "bhk_type_id": { "type": "integer" },
+      "bedrooms": { "type": "integer" },
       "bathrooms": { "type": "integer" },
       "balconies": { "type": "integer" },
       "area_sqft": { "type": "float" },

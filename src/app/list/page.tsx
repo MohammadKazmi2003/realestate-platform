@@ -6,13 +6,14 @@ import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
+import { tenant } from '@/lib/tenant';
 
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
 type ListingPurpose = { id: number; name: string; };
 type FurnishingStatus = { id: number; name: string; };
 type Amenity = { id: number; name: string; category?: string; };
-type SortOption = 'relevance' | 'popular' | 'newest' | 'price_asc' | 'price_desc';
+type SortOption = 'popular' | 'newest' | 'price_asc' | 'price_desc';
 
 const BATHROOM_OPTIONS = [1, 2, 3, 4, 5, 6];
 const INITIAL_AMENITIES_COUNT = 8;
@@ -175,7 +176,7 @@ const FilterSidebar = ({
 
         <FilterSection label="Price & Area">
           <div>
-            <label className="text-sm text-text-color-light block mb-1">Price Range (₹)</label>
+            <label className="text-sm text-text-color-light block mb-1">Price Range ({tenant.propertyCurrency})</label>
             <div className="flex gap-2">
               <input type="number" placeholder="Min" value={filters.minPrice} onChange={e => onFilterChange('minPrice', e.target.value)} className="neumorphic-input w-full" />
               <span className="text-text-color-light self-center">-</span>
@@ -183,7 +184,7 @@ const FilterSidebar = ({
             </div>
           </div>
           <div>
-            <label className="text-sm text-text-color-light block mb-1">Carpet Area (sqft)</label>
+            <label className="text-sm text-text-color-light block mb-1">Carpet Area ({tenant.areaUnit})</label>
             <div className="flex gap-2">
               <input type="number" placeholder="Min" value={filters.minArea} onChange={e => onFilterChange('minArea', e.target.value)} className="neumorphic-input w-full" />
               <span className="text-text-color-light self-center">-</span>
@@ -290,7 +291,7 @@ export default function ListPage() {
     furnishingStatusIds: [],
     amenityIds: [],
   });
-  const [sort, setSort] = useState<SortOption>('relevance');
+  const [sort, setSort] = useState<SortOption>('newest');
   const [nextCursor, setNextCursor] = useState<any[] | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -470,7 +471,7 @@ export default function ListPage() {
       furnishingStatusIds: [],
       amenityIds: [],
     });
-    setSort('relevance');
+    setSort('newest');
     setAmenitySearchTerm('');
     setShowAllAmenities(false);
     debouncedFetchProperties();
@@ -513,9 +514,8 @@ export default function ListPage() {
               onChange={e => handleSortChange(e.target.value as SortOption)}
               className="neumorphic-input !w-auto !min-w-[140px]"
             >
-              <option value="relevance">Relevance</option>
-              <option value="popular">Most Popular</option>
               <option value="newest">Newest</option>
+              <option value="popular">Most Popular</option>
               <option value="price_asc">Price: Low → High</option>
               <option value="price_desc">Price: High → Low</option>
             </select>

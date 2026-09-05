@@ -10,6 +10,7 @@ import { withAuth } from '@/utils/withAuth';
 import imageCompression from 'browser-image-compression';
 import Fuse from 'fuse.js';
 import { Loader2, UploadCloud, Building, Home, LandPlot, Trash2 } from 'lucide-react';
+import { tenant } from '@/lib/tenant';
 import dynamic from 'next/dynamic';
 
 const LocationPicker = dynamic(() => import('@/app/components/LocationPicker'), {
@@ -446,7 +447,7 @@ function AddPropertyPage() {
                                                 {availableListingPurposes.map(lp => <option key={lp.id} value={lp.id}>{lp.name}</option>)}
                                             </select>
                                         </div>
-                                        <div><label className="block text-sm font-medium text-text-color-light mb-1">Price (INR)</label><input name="price" type="number" min="0" value={commonData.price} onChange={handleCommonChange} required className="neumorphic-input"/></div>
+                                        <div><label className="block text-sm font-medium text-text-color-light mb-1">Price ({tenant.propertyCurrency})</label><input name="price" type="number" min="0" value={commonData.price} onChange={handleCommonChange} required className="neumorphic-input"/></div>
                                     </div>
                                 </div>
                             </section>

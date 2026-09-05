@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import maplibregl, { Marker } from 'maplibre-gl';
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { FaSpinner } from 'react-icons/fa';
+import { tenant } from '@/lib/tenant';
 
 type LocationPickerProps = {
   onLocationChange: (lat: number, lng: number) => void;
@@ -45,7 +46,8 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ onLocationChange, initi
         return;
       }
       try {
-        const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(query)}.json?key=${MAPTILER_API_KEY}&country=IN`);
+        const country = tenant.map.geocodeCountries ? `&country=${tenant.map.geocodeCountries}` : '';
+        const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(query)}.json?key=${MAPTILER_API_KEY}${country}`);
         const data = await response.json();
         setSuggestions(data.features || []);
       } catch (error) {
@@ -82,7 +84,7 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ onLocationChange, initi
         
         resizeObserver.disconnect();
         
-        const center: [number, number] = [initialPosition?.lng || 77.0266, initialPosition?.lat || 28.4595];
+        const center: [number, number] = [initialPosition?.lng || tenant.map.center[0], initialPosition?.lat || tenant.map.center[1]];
         
         try {
           const map = new maplibregl.Map({

@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { getLookup, getCachedRpc } from '@/lib/lookupCache';
 import Header from '@/app/components/Header';
 import { ProjectCard } from '@/app/components/ProjectCard';
+import { tenant } from '@/lib/tenant';
 import { Loader2, X, Search, SlidersHorizontal } from 'lucide-react';
 import { Project } from '@/lib/types';
 
@@ -73,7 +74,7 @@ const FilterSidebar = ({
           </div>
         </div>
         <div>
-          <label className="font-semibold block mb-2 text-text-color-dark">Price Range (AED)</label>
+          <label className="font-semibold block mb-2 text-text-color-dark">Price Range ({tenant.projectCurrency})</label>
           <div className="flex gap-2">
             <input type="number" placeholder="Min" value={filters.minPrice} onChange={e => onFilterChange('minPrice', e.target.value)} className="neumorphic-input w-full" />
             <input type="number" placeholder="Max" value={filters.maxPrice} onChange={e => onFilterChange('maxPrice', e.target.value)} className="neumorphic-input w-full" />

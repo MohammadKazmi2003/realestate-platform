@@ -4,6 +4,8 @@ import { useEffect, useState, use } from 'react';
 import Header from '@/app/components/Header';
 import { Loader2 } from 'lucide-react';
 import { ProjectDetails } from '@/lib/types';
+import { formatMoney, formatMoneyRange } from '@/lib/format';
+import { tenant } from '@/lib/tenant';
 import dynamic from 'next/dynamic';
 
 const LocationMap = dynamic(() => import('@/app/components/LocationMap').then(m => ({ default: m.LocationMap })), {
@@ -64,7 +66,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
             <p className="text-lg text-text-color-light">{project.developer?.name ? `by ${project.developer.name}` : ''}</p>
             {project.price_range?.low && (
               <p className="text-xl font-bold text-success-color mt-2">
-                AED {project.price_range.low.toLocaleString()} - {project.price_range.high?.toLocaleString()}
+                {formatMoneyRange(project.price_range.low, project.price_range.high, tenant.projectCurrency)}
               </p>
             )}
           </section>
@@ -131,7 +133,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
                     <tr className="bg-bg-color text-text-color-light text-sm">
                       <th className="p-3">Type</th>
                       <th className="p-3">Bedrooms</th>
-                      <th className="p-3">Area (sqft)</th>
+                        <th className="p-3">Area ({tenant.areaUnit})</th>
                       <th className="p-3">Starting Price</th>
                     </tr>
                   </thead>
@@ -141,7 +143,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
                         <td className="p-3 font-medium">{uc.property_type}</td>
                         <td className="p-3">{uc.bedrooms != null ? uc.bedrooms : '-'}</td>
                         <td className="p-3">{uc.area_from_sqft ? `${uc.area_from_sqft} - ${uc.area_to_sqft || uc.area_from_sqft}` : '-'}</td>
-                        <td className="p-3">{uc.starting_price ? `AED ${uc.starting_price.toLocaleString()}` : '-'}</td>
+                        <td className="p-3">{uc.starting_price ? formatMoney(uc.starting_price, tenant.projectCurrency) : '-'}</td>
                       </tr>
                     ))}
                   </tbody>

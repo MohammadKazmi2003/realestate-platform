@@ -93,10 +93,16 @@ export type Project = {
   low_price: number;
   high_price: number;
   construction_phase: string;
+  construction_progress_percent?: number | null;
   delivery_date: string | null;
   developer_name: string;
   primary_image: string | null;
   location_name: string | null;
+  bedrooms_list?: number[] | null;
+  unit_count?: number | null;
+  payment_plan_summary?: string | null;
+  amenities?: string[] | null;
+  amenities_total?: number | null;
   total_count?: number;
 };
 

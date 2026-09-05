@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import Header from '@/app/components/Header'
 import Link from 'next/link'
+import { formatMoney, formatArea } from '@/lib/format'
+import { tenant } from '@/lib/tenant'
 
 type Property = {
   id: string
@@ -81,8 +83,8 @@ export default function PropertyList() {
             className="border rounded-md p-4 shadow hover:shadow-lg transition block"
           >
             <h2 className="text-xl font-semibold mb-1">{property.title}</h2>
-            <p className="text-sm text-gray-600">{property.bhk_type} • {property.area} sqft</p>
-            <p className="text-md text-green-700 font-bold mt-2">₹{property.price.toLocaleString()}</p>
+            <p className="text-sm text-gray-600">{property.bhk_type} • {formatArea(property.area, null) || ''}</p>
+            <p className="text-md text-green-700 font-bold mt-2">{formatMoney(property.price, tenant.propertyCurrency)}</p>
             <p className="text-sm text-gray-800 mt-1">{property.description}</p>
 
             <div className="mt-4">

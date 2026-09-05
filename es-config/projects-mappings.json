@@ -2,7 +2,7 @@
   "settings": {
     "number_of_shards": 1,
     "number_of_replicas": 1,
-    "refresh_interval": "1s",
+    "refresh_interval": "30s",
     "analysis": {
       "filter": {
         "synonym_filter": {
@@ -88,6 +88,11 @@
       "entity_type": { "type": "keyword" },
       "status": { "type": "keyword" },
       "image_url": { "type": "keyword", "index": false },
+      "all_images": { "type": "keyword", "index": false },
+      "bedrooms_list": { "type": "integer" },
+      "unit_count": { "type": "integer" },
+      "payment_plan_summary": { "type": "keyword", "index": false },
+      "construction_progress_percent": { "type": "integer" },
       "created_at": { "type": "date" },
       "suggest": { "type": "completion" }
     }

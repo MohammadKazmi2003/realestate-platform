@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { IndianRupee, MapPin, BedDouble, Building } from 'lucide-react';
+import { MapPin, BedDouble, Building } from 'lucide-react';
+import { formatMoneyCompact, formatMoneyRange } from '@/lib/format';
+import { listingCurrency } from '@/lib/tenant';
 
 type PropertyCardProps = {
   property: {
@@ -52,13 +54,11 @@ export function ChatPropertyCard({ property }: PropertyCardProps) {
 
         {isProject && property.low_price ? (
           <p className="text-lg font-bold text-gray-900 flex items-center">
-            <IndianRupee size={16} className="mr-1" />
-            {(property.low_price / 100000).toFixed(1)}L - {(property.high_price! / 100000).toFixed(1)}L
+            {formatMoneyRange(property.low_price, property.high_price, listingCurrency('project'))}
           </p>
         ) : property.price ? (
           <p className="text-lg font-bold text-gray-900 flex items-center">
-            <IndianRupee size={16} className="mr-1" />
-            {(property.price / 100000).toFixed(1)}L
+            {formatMoneyCompact(property.price, listingCurrency('property'))}
           </p>
         ) : null}
 

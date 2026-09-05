@@ -8,50 +8,59 @@ function sanitize(s: string | undefined, maxLen = 200): string | undefined {
 }
 
 function buildSortClause(sort: string, lat?: number, lng?: number, scope?: string) {
+  // NOTE: zero-price docs sort last via missing:'_last' (indexed, no painless
+  // script) — cheaper than the previous _script sort and filter-cache friendly.
   if (scope === 'both') {
     if (sort === 'price_asc') {
       return [
-        { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-        { sort_price: { order: 'asc' } },
+        { sort_price: { order: 'asc', missing: '_last' } },
         { _score: { order: 'desc' } },
       ];
     }
     if (sort === 'price_desc') {
       return [
-        { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-        { sort_price: { order: 'desc' } },
+        { sort_price: { order: 'desc', missing: '_last' } },
         { _score: { order: 'desc' } },
       ];
     }
     if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
     if (sort === 'popular') return [{ _score: { order: 'desc' } }];
-    return [
-      { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-      { _score: { order: 'desc' } },
-    ];
+    // Unknown sort values fall back to newest (honest default).
+    return [{ created_at: { order: 'desc' } }];
   }
   if (scope === 'projects') {
-    if (sort === 'price_asc') return [{ low_price: { order: 'asc' } }, { _score: { order: 'desc' } }];
-    if (sort === 'price_desc') return [{ low_price: { order: 'desc' } }, { _score: { order: 'desc' } }];
+    if (sort === 'price_asc') return [{ low_price: { order: 'asc', missing: '_last' } }, { _score: { order: 'desc' } }];
+    if (sort === 'price_desc') return [{ low_price: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }];
     if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
-    return [
-      { _script: { type: 'number', script: { source: "doc['low_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-      { _score: { order: 'desc' } },
-    ];
+    if (sort === 'popular') return [{ _score: { order: 'desc' } }];
+    return [{ created_at: { order: 'desc' } }];
   }
-  if (sort === 'price_asc') return [{ price: { order: 'asc' } }, { _score: { order: 'desc' } }];
+  if (sort === 'price_asc') return [{ price: { order: 'asc', missing: '_last' } }, { _score: { order: 'desc' } }];
   if (sort === 'price_desc') return [{ price: { order: 'desc' } }, { _score: { order: 'desc' } }];
   if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
+  if (sort === 'popular') return [{ _score: { order: 'desc' } }];
   if (lat != null && lng != null) {
     return [
       { _geo_distance: { location: { lat, lon: lng }, order: 'asc', unit: 'km', distance_type: 'plane' } },
       { _score: { order: 'desc' } },
     ];
   }
-  return [
-    { _script: { type: 'number', script: { source: "doc['price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-    { _score: { order: 'desc' } },
-  ];
+  return [{ created_at: { order: 'desc' } }];
+}
+
+// Daily-stable seed for marker density shuffling (YYYYMMDD).
+export function dailySeed(): number {
+  const d = new Date();
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+
+// Cheap deterministic hash for random_score seeding per viewport+filters.
+export function hashSeed(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
 }
 
 // Which alias/aliases to query for a given scope.
@@ -74,6 +83,7 @@ function priceFieldForScope(scope: string) {
 function buildFilters(params: any, scope: string): { must: any[]; filters: any[] } {
   const {
     query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType,
+    minBedrooms, maxBedrooms,
     listingPurpose, amenities = [], furnishings = [], bathrooms, minArea, maxArea,
     lat, lng, radiusKm, bounds, polygon,
   } = params;
@@ -123,6 +133,14 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
 
   if (propertyType) propertyFilters.push({ term: { property_type: propertyType } });
   if (bhkType) propertyFilters.push({ term: { bhk_type: bhkType } });
+  // Generic bedrooms range for bedrooms-model tenants (dual-written by the
+  // indexer alongside bhk_type; absent params → no clause → zero behavior change).
+  if (minBedrooms != null || maxBedrooms != null) {
+    const range: any = {};
+    if (minBedrooms != null) range.gte = minBedrooms;
+    if (maxBedrooms != null) range.lte = maxBedrooms;
+    propertyFilters.push({ range: { bedrooms: range } });
+  }
   if (listingPurpose) propertyFilters.push({ term: { listing_purpose: listingPurpose } });
   if (normalizedAmenities.length > 0) propertyFilters.push({ terms: { amenities: normalizedAmenities } });
   if (normalizedFurnishings.length > 0) propertyFilters.push({ terms: { furnishings: normalizedFurnishings } });
@@ -181,6 +199,9 @@ function buildAggregations(scope: string) {
   if (scope === 'both') {
     aggs.by_entity_type = { terms: { field: 'entity_type', size: 5 } };
   }
+  // Community rollup for "N New Homes" pills — one lightweight terms agg,
+  // cached with the list response. Missing on projects index → empty buckets.
+  aggs.by_project = { terms: { field: 'project_name.keyword', size: 20 } };
   return aggs;
 }
 
@@ -189,36 +210,49 @@ const LISTING_SOURCE_FIELDS = [
   'location', 'location_text',
   'price', 'sort_price', 'low_price', 'high_price',
   'area_sqft', 'area_unit',
-  'property_type', 'bhk_type',
+  'property_type', 'bhk_type', 'bedrooms',
   'bathrooms', 'balconies',
   'image_url', 'primary_image', 'all_images',
   'construction_phase', 'delivery_date', 'developer_name',
   'status', 'project_name',
+  'amenities', 'bedrooms_list', 'unit_count',
+  'payment_plan_summary', 'construction_progress_percent',
 ];
 
-// Lightweight fields needed to draw one map dot per listing.
+// Lightweight fields needed to draw one map dot per listing + hover preview
+// without an N+1 fetch (image/specs travel with the tile payload).
 const MARKER_SOURCE_FIELDS = [
   'id', 'entity_type', 'location',
   'price', 'sort_price', 'low_price', 'title', 'name',
+  'image_url', 'primary_image', 'bhk_type', 'bathrooms',
+  'area_sqft', 'area_unit', 'location_text', 'created_at',
+  'developer_name', 'project_name',
 ];
 
-// Maximum map dots per viewport (Zillow-style cap).
+// Listings newer than this render a "New" badge (computed server-side, no
+// per-request date math on the client).
+const NEW_LISTING_DAYS = 14;
+
+// Maximum map dots per viewport (Zillow-style cap). This is ONE shared budget
+// across properties + projects: a single random-scored query over both indices
+// gives every matching doc an equal chance, so dense areas (and the larger
+// entity type) naturally get more dots — true density, no per-type quota.
 const MARKER_LIMIT = 500;
-// When scope='both', split the marker budget between the two entity types so
-// one type can never crowd out the other (e.g. 1270 projects vs 103 properties
-// at a country-level viewport would otherwise fill all 500 slots with projects).
-const MARKER_SPLIT = 250;
 
 export async function queryESListings(params: any) {
   const es = getElasticsearchClient();
-  const { cursor, pageSize = 24, sort = 'relevance', scope = 'both', lat, lng } = params;
+  const { cursor, pageSize = 24, sort = 'newest', scope = 'both', lat, lng } = params;
 
   const { must, filters } = buildFilters(params, scope);
+
+  const query = { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } };
 
   const esQuery: any = {
     index: indexForScope(scope),
     size: pageSize,
-    query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+    // Exact totals up to 100k for "35,443 results" badges (markers keep false).
+    track_total_hits: 100000,
+    query,
     sort: buildSortClause(sort, lat, lng, scope),
     aggs: buildAggregations(scope),
     // Only return fields used by the browse page — cuts response size by ~55%
@@ -230,11 +264,19 @@ export async function queryESListings(params: any) {
   const esResponse = await es.search(esQuery);
   const hits = esResponse.hits.hits;
 
-  const results = hits.map((hit: any) => ({
-    ...hit._source,
-    _score: hit._score,
-    _sort: hit.sort,
-  }));
+  // Cap amenity arrays at 6 per doc (cards render 3 + "+N more"); the true
+  // count travels separately as amenities_total so the label stays honest.
+  const results = hits.map((hit: any) => {
+    const src = hit._source || {};
+    const fullAmenities = Array.isArray(src.amenities) ? src.amenities : [];
+    return {
+      ...src,
+      amenities: fullAmenities.slice(0, 6),
+      amenities_total: fullAmenities.length,
+      _score: hit._score,
+      _sort: hit.sort,
+    };
+  });
 
   const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total || 0;
   const totalRelation = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.relation : undefined;
@@ -253,22 +295,34 @@ export async function queryESListings(params: any) {
     propertyTotal = total;
   }
 
+  const projectGroups = ((esResponse.aggregations as any)?.by_project?.buckets || [])
+    .filter((b: any) => b.key && String(b.key).trim().length > 0)
+    .map((b: any) => ({
+      name: b.key,
+      count: b.doc_count,
+    }));
+
   return {
     results,
     total,
     totalRelation,
     propertyTotal,
     projectTotal,
+    projectGroups,
     nextCursor: results.length >= pageSize ? results[results.length - 1]._sort : null,
   };
 }
 
-// Up to MARKER_LIMIT lightweight dots for the map viewport. Same filters and
-// sort as the sidebar list so dots match the list ordering. No scoring cost
-// beyond the bbox (filter context) and no aggregations — fast BKD range scan.
+// Up to MARKER_LIMIT lightweight dots for the map viewport. Density is
+// preserved by uniform random sampling (function_score random_score seeded per
+// viewport+filters+day): E[n_tile] = budget * p_tile, no per-tile counting,
+// no aggregations — fast BKD range scan + Murmur3 scoring.
 export async function queryESMapMarkers(params: any) {
   const es = getElasticsearchClient();
-  const { sort = 'relevance', scope = 'both', lat, lng } = params;
+  // seedKey identifies the exact normalized viewport+filters being sampled —
+  // same view ⇒ same dots within a day (no flicker), different view ⇒ fresh
+  // sample. Never a tile id: tile-stable seeds were the stale-dots mechanism.
+  const { scope = 'both', seedKey } = params;
 
   async function run(indexes: string | string[], limit: number, entityType?: string) {
     const { must, filters } = buildFilters(params, scope);
@@ -276,21 +330,34 @@ export async function queryESMapMarkers(params: any) {
       filters.push({ term: { entity_type: entityType } });
     }
 
+    // Seed is stable within a day for a given viewport+filters (no flicker
+    // on re-pan), but varies across viewports/filters/days.
+    const seed = (hashSeed(JSON.stringify({ s: seedKey || '', f: filters, m: must })) + dailySeed()) % 2147483647;
+
     const esQuery: any = {
       index: indexes,
       size: limit,
       track_total_hits: false,
-      query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
-      sort: buildSortClause(sort, lat, lng, scope),
+      query: {
+        function_score: {
+          query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+          functions: [{ random_score: { seed, field: '_seq_no' } }],
+          boost_mode: 'replace',
+        },
+      },
+      // No sort — random_score order is the shuffle (saves script-sort CPU).
       _source: MARKER_SOURCE_FIELDS,
     };
 
     const esResponse = await es.search(esQuery);
+    const now = Date.now();
+    const newCutoff = now - NEW_LISTING_DAYS * 24 * 3600 * 1000;
 
     return (esResponse.hits.hits || []).map((hit: any) => {
       const src = hit._source || {};
       const loc = src.location || {};
       const isProject = src.entity_type === 'project';
+      const created = src.created_at ? Date.parse(src.created_at) : NaN;
       return {
         id: src.id,
         entity_type: src.entity_type,
@@ -298,18 +365,22 @@ export async function queryESMapMarkers(params: any) {
         lon: loc.lon ?? null,
         price: isProject ? (src.low_price || 0) : (src.sort_price || src.price || 0),
         title: src.title || src.name || '',
+        image_url: src.image_url || src.primary_image || null,
+        bhk_type: src.bhk_type || null,
+        bathrooms: src.bathrooms ?? null,
+        area_sqft: src.area_sqft ?? null,
+        area_unit: src.area_unit || null,
+        location_text: src.location_text || null,
+        is_new: Number.isFinite(created) ? created >= newCutoff : false,
       };
     });
   }
 
-  if (scope === 'both') {
-    // Two capped queries so both property AND project dots always render.
-    const [properties, projects] = await Promise.all([
-      run([ES_INDEX_ALIAS], MARKER_SPLIT, 'property'),
-      run([PROJECTS_INDEX_ALIAS], MARKER_SPLIT, 'project'),
-    ]);
-    return [...properties, ...projects];
-  }
-
+  // scope='both' runs ONE query over both aliases with the full 500 budget.
+  // Uniform random scores give every matching doc — property or project, dense
+  // cluster or sparse village — an equal chance, so the returned dots mirror
+  // the true geographic + entity mix (e.g. 103 props + 1270 projects yields
+  // ~37 blue + ~463 green dots, not a forced 250/250). Bonus: 1 ES query
+  // per pan instead of 2.
   return run(indexForScope(scope), MARKER_LIMIT);
 }

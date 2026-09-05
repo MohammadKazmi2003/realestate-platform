@@ -1,6 +1,9 @@
 'use client'
 
 import Link from 'next/link'
+import { ListingImage } from './ListingImage';
+import { formatMoney, formatArea } from '@/lib/format';
+import { tenant } from '@/lib/tenant';
 import { WhatsAppButton } from './WhatsAppButton'
 import {
   Carousel,
@@ -54,7 +57,7 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
     ? property.images
     : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }];
 
-  const areaValue = property.area ? `${property.area} ${property.area_unit || 'sqft'}` : null;
+  const areaValue = formatArea(property.area ?? null, property.area_unit);
 
   return (
     <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color h-full">
@@ -64,16 +67,14 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
             {images.map((img, index) => (
               <CarouselItem key={index}>
                 <Link href={`/property/${property.id}`}>
-                  <div className="w-full h-48 bg-bg-color">
-                    <img
+                  <div className="w-full h-48 bg-bg-color relative">
+                    <ListingImage
                       src={img.image_url}
                       alt={`Image ${index + 1} of ${property.title}`}
+                      fill
+                      sizes="(max-width: 768px) 100vw, 50vw"
                       loading="lazy"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      onError={(e) => {
-                        e.currentTarget.src = 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=Image+Error';
-                        e.currentTarget.onerror = null;
-                      }}
+                      className="object-cover group-hover:scale-105 transition-transform duration-300"
                     />
                   </div>
                 </Link>
@@ -99,7 +100,7 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
           </p>
           <div className="mt-2">
             <p className="text-xl font-bold text-success-color">
-              {property.price ? `₹${property.price.toLocaleString()}` : 'Price on request'}
+              {property.price ? formatMoney(property.price, tenant.propertyCurrency) : 'Price on request'}
             </p>
           </div>
         </Link>

@@ -23,7 +23,7 @@ export async function GET(
       return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
     }
 
-    const cacheKey = `l:${id}`;
+    const cacheKey = `l:v3:${id}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached, {
@@ -52,6 +52,14 @@ export async function GET(
 
     const src = hit._source as any;
     const isProject = src.entity_type === 'project';
+    // Full gallery for the click carousel (cap 8 URLs to bound payload).
+    // Falls back to the single cover image when all_images is absent.
+    const gallery = [
+      ...(Array.isArray(src.all_images) ? src.all_images : []),
+      src.image_url,
+      src.primary_image,
+    ].filter((u): u is string => typeof u === 'string' && u.length > 0);
+    const all_images = Array.from(new Set(gallery)).slice(0, 8);
     const result = {
       id: src.id ?? id,
       entity_type: src.entity_type,
@@ -62,6 +70,7 @@ export async function GET(
       low_price: src.low_price || null,
       high_price: src.high_price || null,
       image_url: src.image_url || src.primary_image || null,
+      all_images,
       location_text: src.location_text || null,
       area_sqft: src.area_sqft ?? null,
       area_unit: src.area_unit || null,
@@ -72,6 +81,15 @@ export async function GET(
       developer_name: src.developer_name || null,
       construction_phase: src.construction_phase || null,
       delivery_date: src.delivery_date || null,
+      // Project card details (null for properties that lack them).
+      // Amenities capped at 6 (cards show 3); true count rides along so
+      // "+N more" stays honest.
+      amenities: Array.isArray(src.amenities) ? src.amenities.slice(0, 6) : [],
+      amenities_total: Array.isArray(src.amenities) ? src.amenities.length : 0,
+      bedrooms_list: Array.isArray(src.bedrooms_list) ? src.bedrooms_list : [],
+      unit_count: src.unit_count ?? null,
+      payment_plan_summary: src.payment_plan_summary || null,
+      construction_progress_percent: src.construction_progress_percent ?? null,
     };
 
     await cacheSet(cacheKey, result, 300);

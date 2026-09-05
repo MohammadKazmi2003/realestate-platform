@@ -119,16 +119,14 @@ export async function POST(req: NextRequest) {
     let sortClause: any[] = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }, { id: { order: 'desc' } }];
     if (sort === 'price_asc') {
       sortClause = [
-        { _script: { type: 'number', script: { source: "doc['low_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-        { low_price: { order: 'asc' } },
+        { low_price: { order: 'asc', missing: '_last' } },
         { _score: { order: 'desc' } },
         { id: { order: 'desc' } },
       ];
     }
     if (sort === 'price_desc') {
       sortClause = [
-        { _script: { type: 'number', script: { source: "doc['low_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-        { low_price: { order: 'desc' } },
+        { low_price: { order: 'desc', missing: '_last' } },
         { _score: { order: 'desc' } },
         { id: { order: 'desc' } },
       ];
@@ -143,7 +141,7 @@ export async function POST(req: NextRequest) {
       size,
       query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
       sort: sortClause,
-      _source: ['id', 'name', 'slug', 'low_price', 'high_price', 'construction_phase', 'delivery_date', 'developer_name', 'image_url', 'location_text', 'location', 'amenities', 'description', 'created_at'],
+      _source: ['id', 'name', 'slug', 'low_price', 'high_price', 'construction_phase', 'construction_progress_percent', 'delivery_date', 'developer_name', 'image_url', 'all_images', 'location_text', 'location', 'amenities', 'bedrooms_list', 'unit_count', 'payment_plan_summary', 'description', 'created_at'],
     };
 
     if (cursor) {
@@ -163,10 +161,17 @@ export async function POST(req: NextRequest) {
         low_price: hit._source.low_price || 0,
         high_price: hit._source.high_price || 0,
         construction_phase: hit._source.construction_phase || '',
+        construction_progress_percent: hit._source.construction_progress_percent ?? null,
         delivery_date: hit._source.delivery_date || null,
         developer_name: hit._source.developer_name || '',
         primary_image: hit._source.image_url || null,
+        all_images: Array.isArray(hit._source.all_images) ? hit._source.all_images.slice(0, 8) : [],
         location_name: hit._source.location_text || null,
+        bedrooms_list: Array.isArray(hit._source.bedrooms_list) ? hit._source.bedrooms_list : [],
+        unit_count: hit._source.unit_count ?? null,
+        payment_plan_summary: hit._source.payment_plan_summary || null,
+        amenities: Array.isArray(hit._source.amenities) ? hit._source.amenities.slice(0, 6) : [],
+        amenities_total: Array.isArray(hit._source.amenities) ? hit._source.amenities.length : 0,
         latitude: loc.lat ?? null,
         longitude: loc.lon ?? null,
         _score: hit._score,

@@ -41,13 +41,24 @@ async function main() {
   if (args.length < 1) {
     console.log('Usage: node provision-customer.js <customer-slug> [options]');
     console.log('');
-    console.log('Options:');
-    console.log('  --name="Company Name"     Display name for the customer');
-    console.log('  --domain="example.com"    Custom domain');
-    console.log('  --admin-email="a@b.com"   Admin email for the deployment');
-    console.log('  --db-password="..."       Database password (auto-generated if not set)');
-    console.log('  --region="ap-south-1"     Supabase region (default: ap-south-1)');
-    console.log('');
+  console.log('Options:');
+  console.log('  --name="Company Name"     Display name for the customer');
+  console.log('  --domain="example.com"    Custom domain');
+  console.log('  --admin-email="a@b.com"   Admin email for the deployment');
+  console.log('  --db-password="..."       Database password (auto-generated if not set)');
+  console.log('  --region="ap-south-1"     Supabase region (default: ap-south-1)');
+  console.log('  Tenant / locale (white-label, zero code changes):');
+  console.log('  --tenant="slug"           Tenant slug (default: <slug>); copies tenants/default.json');
+  console.log('  --locale="en-IN"          Intl locale for number/date formatting');
+  console.log('  --currency="INR"          Default currency code');
+  console.log('  --property-currency="INR" Currency for property prices');
+  console.log('  --project-currency="AED"  Currency for project prices');
+  console.log('  --beds-model="bhk"        bhk (India) or bedrooms (generic)');
+  console.log('  --area-unit="sqft"        Default area unit (sqft/sqm/...)');
+  console.log('  --map-center="77.0266,28.4595"  Default map center lng,lat');
+  console.log('  --map-zoom="4"            Default map zoom');
+  console.log('  --geocode-countries=""    MapTiler geocode country filter (e.g. IN,AE or US)');
+  console.log('');
     console.log('Required env vars: SUPABASE_ACCESS_TOKEN, VERCEL_TOKEN');
     process.exit(1);
   }
@@ -119,6 +130,7 @@ async function main() {
 
   // Step 4: Deploy to Vercel
   console.log('\n[4/6] Deploying to Vercel...');
+  const tenantSlug = opts.tenant || slug;
   const envVars = [
     `NEXT_PUBLIC_SUPABASE_URL="${supabaseUrl}"`,
     `NEXT_PUBLIC_SUPABASE_ANON_KEY="${anonPublicKey}"`,
@@ -126,7 +138,16 @@ async function main() {
     `ELASTICSEARCH_URL="${process.env.ELASTICSEARCH_URL || 'http://localhost:9200'}"`,
     `REDIS_URL="${process.env.REDIS_URL || 'redis://localhost:6379'}"`,
     `NEXT_PUBLIC_MAPTILER_KEY="${process.env.NEXT_PUBLIC_MAPTILER_KEY || ''}"`,
+    `NEXT_PUBLIC_TENANT="${tenantSlug}"`,
+    `NEXT_PUBLIC_BRAND_NAME="${name}"`,
   ];
+  if (opts.locale) envVars.push(`NEXT_PUBLIC_LOCALE="${opts.locale}"`);
+  if (opts.currency) envVars.push(`NEXT_PUBLIC_CURRENCY="${opts.currency}"`);
+  if (opts['property-currency']) envVars.push(`NEXT_PUBLIC_PROPERTY_CURRENCY="${opts['property-currency']}"`);
+  if (opts['project-currency']) envVars.push(`NEXT_PUBLIC_PROJECT_CURRENCY="${opts['project-currency']}"`);
+  if (opts['map-center']) envVars.push(`NEXT_PUBLIC_MAP_CENTER="${opts['map-center']}"`);
+  if (opts['map-zoom']) envVars.push(`NEXT_PUBLIC_MAP_ZOOM="${opts['map-zoom']}"`);
+  if (opts['geocode-countries'] != null) envVars.push(`NEXT_PUBLIC_GEOCODE_COUNTRIES="${opts['geocode-countries']}"`);
 
   const envArgs = envVars.map((e) => `-e ${e}`).join(' ');
   run(`vercel --prod ${envArgs} --scope "${slug}"`, { ignoreError: true });
@@ -174,9 +195,25 @@ volumes:
   fs.writeFileSync(path.join(esConfigDir, 'docker-compose.yml'), dockerComposeContent.trim());
 
   // Write env file for this deployment
+  const tenantEnvLines = [
+    `NEXT_PUBLIC_TENANT=${tenantSlug}`,
+    `NEXT_PUBLIC_BRAND_NAME=${name}`,
+  ];
+  if (opts.locale) tenantEnvLines.push(`NEXT_PUBLIC_LOCALE=${opts.locale}`);
+  if (opts.currency) tenantEnvLines.push(`NEXT_PUBLIC_CURRENCY=${opts.currency}`);
+  if (opts['property-currency']) tenantEnvLines.push(`NEXT_PUBLIC_PROPERTY_CURRENCY=${opts['property-currency']}`);
+  if (opts['project-currency']) tenantEnvLines.push(`NEXT_PUBLIC_PROJECT_CURRENCY=${opts['project-currency']}`);
+  if (opts['map-center']) tenantEnvLines.push(`NEXT_PUBLIC_MAP_CENTER=${opts['map-center']}`);
+  if (opts['map-zoom']) tenantEnvLines.push(`NEXT_PUBLIC_MAP_ZOOM=${opts['map-zoom']}`);
+  if (opts['geocode-countries'] != null) tenantEnvLines.push(`NEXT_PUBLIC_GEOCODE_COUNTRIES=${opts['geocode-countries']}`);
   const envContent = `
 # ${name} - White-Label Deployment
 # Generated: ${new Date().toISOString()}
+# Tenant: copy tenants/default.json to tenants/${tenantSlug}.json and adjust
+# locale/currency/bedsModel/areaUnit/map for this market (zero code changes).
+
+# Tenant identity (see tenants/*.json + src/lib/tenant.ts)
+${tenantEnvLines.join('\n')}
 
 # Supabase
 NEXT_PUBLIC_SUPABASE_URL=${supabaseUrl}
@@ -198,6 +235,39 @@ NEXT_PUBLIC_SITE_URL=https://${domain}
 `;
   fs.writeFileSync(path.join(esConfigDir, '.env.deployment'), envContent.trim());
 
+  // Stamp tenants/{slug}.json from default so the buyer starts from a working
+  // config. Buyers edit locale/currency/bedsModel/areaUnit/map + register the
+  // slug in src/lib/tenant.ts registry (one line).
+  try {
+    const defaultTenantPath = path.join(process.cwd(), 'tenants', 'default.json');
+    const tenantOutPath = path.join(process.cwd(), 'tenants', `${tenantSlug}.json`);
+    if (fs.existsSync(defaultTenantPath) && !fs.existsSync(tenantOutPath)) {
+      const cfg = JSON.parse(fs.readFileSync(defaultTenantPath, 'utf-8'));
+      cfg.slug = tenantSlug;
+      cfg.brand = { ...(cfg.brand || {}), name };
+      if (opts.locale) cfg.locale = opts.locale;
+      if (opts.currency) cfg.currency = opts.currency;
+      if (opts['property-currency']) cfg.propertyCurrency = opts['property-currency'];
+      if (opts['project-currency']) cfg.projectCurrency = opts['project-currency'];
+      if (opts['beds-model']) {
+        cfg.bedsModel = opts['beds-model'];
+        cfg.bedsLabel = opts['beds-model'] === 'bedrooms' ? 'Beds' : 'BHK';
+      }
+      if (opts['area-unit']) cfg.areaUnit = opts['area-unit'];
+      if (opts['map-center']) {
+        const [lng, lat] = String(opts['map-center']).split(',').map(Number);
+        if (Number.isFinite(lng) && Number.isFinite(lat)) cfg.map = { ...(cfg.map || {}), center: [lng, lat] };
+      }
+      if (opts['map-zoom']) cfg.map = { ...(cfg.map || {}), zoom: Number(opts['map-zoom']) };
+      if (opts['geocode-countries'] != null) cfg.map = { ...(cfg.map || {}), geocodeCountries: opts['geocode-countries'] };
+      fs.writeFileSync(tenantOutPath, JSON.stringify(cfg, null, 2) + '\n');
+      console.log(`  Tenant config stamped: tenants/${tenantSlug}.json`);
+      console.log(`  Next: register "${tenantSlug}" in src/lib/tenant.ts registry + seed locale lookups (bhk_types or bedrooms).`);
+    }
+  } catch (err) {
+    console.warn(`  Tenant stamping skipped: ${err.message}`);
+  }
+
   // Summary
   console.log('\n═══════════════════════════════════════');
   console.log('  Provisioning Complete!');
@@ -210,7 +280,7 @@ NEXT_PUBLIC_SITE_URL=https://${domain}
   console.log('  Next steps:');
   console.log(`  1. Run: cd ${esConfigDir} && docker-compose up -d`);
   console.log(`  2. Run: ES_PASSWORD=changeme node scripts/es-indexer.js setup`);
-  console.log(`  3. Index data: node scripts/es-indexer.js full-sync`);
+  console.log(`  3. Index data: node scripts/es-indexer.js full-sync  (dual-writes bedrooms alongside bhk_type)`);
   console.log(`  4. Verify: node scripts/es-indexer.js verify`);
   console.log(`  5. Visit https://${domain} to confirm deployment`);
   console.log('═══════════════════════════════════════');

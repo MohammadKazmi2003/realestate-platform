@@ -42,15 +42,38 @@ const nextConfig = {
         port: '',
         pathname: '/storage/v1/object/public/property-images/**',
       },
+      // Local Supabase stack (supabase start) serves storage over HTTP.
+      {
+        protocol: 'http',
+        hostname: '127.0.0.1',
+        port: '54321',
+        pathname: '/storage/v1/object/public/**',
+      },
+      {
+        protocol: 'http',
+        hostname: 'localhost',
+        port: '54321',
+        pathname: '/storage/v1/object/public/**',
+      },
       {
         protocol: 'https',
         hostname: 'placehold.co',
         port: '',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: '*.propertyfinder.com',
+        port: '',
+        pathname: '/**',
+      },
     ],
     minimumCacheTTL: 86400,
     formats: ['image/webp', 'image/avif'],
+    // placehold.co placeholders are served as SVG — allow them through the
+    // optimizer with a locked-down CSP (no scripts, sandboxed).
+    dangerouslyAllowSVG: true,
+    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
     deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048],
   },
   async headers() {

@@ -1,21 +1,22 @@
 import type maplibregl from 'maplibre-gl';
 import type { ClusterPoint, HoverPointData } from './mapLayers';
+import { formatMoneyCompact, formatArea, formatBedsList, formatPossession, formatProgress } from '@/lib/format';
+import { tenant } from '@/lib/tenant';
 
 const CARD_CLASS = 'map-preview-card';
 const LISTING_CARD_CLASS = 'map-listing-card';
 
 let previewEl: HTMLDivElement | null = null;
 let listingCardEl: HTMLDivElement | null = null;
+// Id of the point the hover preview currently shows (dedupe mousemove churn).
+let lastHoverId: string | null = null;
 
 function formatPrice(price: number): string {
-  if (price >= 10000000) return `₹${(price / 10000000).toFixed(1)}Cr`;
-  if (price >= 100000) return `₹${(price / 100000).toFixed(0)}L`;
-  return `₹${price.toLocaleString('en-IN')}`;
+  return formatMoneyCompact(price, tenant.propertyCurrency);
 }
 
 function formatAedPrice(price: number): string {
-  if (price >= 1000000) return `AED ${(price / 1000000).toFixed(2)}M`;
-  return `AED ${price.toLocaleString()}`;
+  return formatMoneyCompact(price, tenant.projectCurrency);
 }
 
 function detailHref(type?: string, id?: string): string {
@@ -39,8 +40,90 @@ function ensureListingCardEl(): HTMLDivElement {
     listingCardEl.className = LISTING_CARD_CLASS;
     listingCardEl.style.display = 'none';
     document.body.appendChild(listingCardEl);
+    // Single delegated listener for all card controls (close + carousel).
+    // Attached once — showListingPreviewCard only rewrites innerHTML.
+    listingCardEl.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest('[data-action]') as HTMLElement | null;
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      if (action === 'close') {
+        e.preventDefault();
+        e.stopPropagation();
+        hideListingPreviewCard();
+      } else if (action === 'prev') {
+        e.preventDefault();
+        e.stopPropagation();
+        stepListingCarousel(-1);
+      } else if (action === 'next') {
+        e.preventDefault();
+        e.stopPropagation();
+        stepListingCarousel(1);
+      } else if (action === 'dot') {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute('data-idx') || '0');
+        setListingCarouselIndex(idx);
+      }
+    });
   }
   return listingCardEl;
+}
+
+// Carousel + identity state for the currently open click card.
+let cardImages: string[] = [];
+let cardImageIndex = 0;
+let openCardId: string | null = null;
+let openCardAnchor: { lon: number; lat: number } | null = null;
+
+/** Id of the listing whose fixed card is open, or null. */
+export function listingCardId(): string | null {
+  return openCardId;
+}
+
+/** Re-anchor the open card after pan/zoom (called on map 'move'). */
+export function repositionListingCard(map: maplibregl.Map): void {
+  if (!listingCardEl || !openCardAnchor) return;
+  if (listingCardEl.style.display === 'none') return;
+  positionAnchored(
+    map,
+    listingCardEl,
+    { lng: openCardAnchor.lon, lat: openCardAnchor.lat } as maplibregl.LngLat,
+    'right'
+  );
+}
+
+function paintListingCarousel(): void {
+  if (!listingCardEl) return;
+  const img = listingCardEl.querySelector('.map-listing-img') as HTMLImageElement | null;
+  if (img && cardImages[cardImageIndex]) {
+    img.src = cardImages[cardImageIndex];
+    img.setAttribute('decoding', 'async');
+  }
+  // Preload the next image only (not the whole gallery) — cheap lookahead.
+  const next = cardImages[(cardImageIndex + 1) % cardImages.length];
+  if (next) {
+    const pre = new window.Image();
+    pre.src = next;
+  }
+  const dots = listingCardEl.querySelectorAll('.map-listing-dot');
+  dots.forEach((d, i) => {
+    d.classList.toggle('active', i === cardImageIndex);
+  });
+  const counter = listingCardEl.querySelector('.map-listing-count');
+  if (counter && cardImages.length > 1) {
+    counter.textContent = `${cardImageIndex + 1} / ${cardImages.length}`;
+  }
+}
+
+function setListingCarouselIndex(idx: number): void {
+  if (cardImages.length === 0) return;
+  cardImageIndex = ((idx % cardImages.length) + cardImages.length) % cardImages.length;
+  paintListingCarousel();
+}
+
+function stepListingCarousel(delta: number): void {
+  setListingCarouselIndex(cardImageIndex + delta);
 }
 
 export function showPropertyPreview(
@@ -49,17 +132,39 @@ export function showPropertyPreview(
   lngLat: maplibregl.LngLat
 ): void {
   const el = ensurePreviewEl();
+  // Same point as last mousemove: skip the innerHTML rebuild (prevents
+  // flicker and wasted layout), just keep it anchored to the cursor.
+  if (lastHoverId === point.id && el.style.display === 'block') {
+    positionElement(map, el, lngLat, { offsetX: 12, offsetY: -40 });
+    return;
+  }
+  lastHoverId = point.id;
   const entityLabel = point.type === 'project' ? 'Project' : 'Property';
   const priceText = point.price > 0
     ? (point.type === 'project' ? formatAedPrice(point.price) : formatPrice(point.price))
     : 'Price on request';
 
+  const specs: string[] = [];
+  if (point.bhk_type) specs.push(point.bhk_type);
+  if (point.bathrooms != null && point.bathrooms > 0) specs.push(`${point.bathrooms} Bath`);
+  const hoverArea = formatArea(point.area_sqft, point.area_unit);
+  if (hoverArea) specs.push(hoverArea);
+  const specsHtml = specs.length ? `<div class="map-preview-specs">${specs.join(' · ')}</div>` : '';
+  const imgHtml = point.image_url
+    ? `<div class="map-preview-img-wrap"><img src="${point.image_url}" class="map-preview-img" alt="" loading="lazy" onerror="this.style.display='none'" /></div>`
+    : '';
+  const newHtml = point.is_new ? `<span class="map-preview-new">New</span>` : '';
+  const addrHtml = point.location_text ? `<div class="map-preview-addr">${point.location_text}</div>` : '';
+
   el.innerHTML = `
     <a href="${detailHref(point.type, point.id)}" target="_blank" rel="noopener noreferrer" class="map-preview-link">
+      ${imgHtml}
       <div class="map-preview-content">
-        <div class="map-preview-type">${entityLabel}</div>
+        <div class="map-preview-type">${entityLabel} ${newHtml}</div>
         <div class="map-preview-price">${priceText}</div>
         <div class="map-preview-title">${point.title || ''}</div>
+        ${addrHtml}
+        ${specsHtml}
       </div>
     </a>
   `;
@@ -69,6 +174,7 @@ export function showPropertyPreview(
 }
 
 export function hidePropertyPreview(): void {
+  lastHoverId = null;
   if (previewEl) {
     previewEl.style.display = 'none';
   }
@@ -84,6 +190,8 @@ export interface ListingPreviewData {
   low_price?: number | null;
   high_price?: number | null;
   image_url?: string | null;
+  /** Full gallery for the click carousel (API caps at 8). Falls back to image_url. */
+  all_images?: string[] | null;
   location_text?: string | null;
   area_sqft?: number | null;
   area_unit?: string | null;
@@ -94,6 +202,12 @@ export interface ListingPreviewData {
   developer_name?: string | null;
   construction_phase?: string | null;
   delivery_date?: string | null;
+  amenities?: string[] | null;
+  amenities_total?: number | null;
+  bedrooms_list?: number[] | null;
+  unit_count?: number | null;
+  payment_plan_summary?: string | null;
+  construction_progress_percent?: number | null;
 }
 
 // Zillow-style listing card shown when a map marker is clicked.
@@ -105,7 +219,14 @@ export function showListingPreviewCard(
   const el = ensureListingCardEl();
   const isProject = listing.entity_type === 'project';
   const placeholder = 'https://placehold.co/600x340/DEE4ED/3D4A5C?text=No+Image';
-  const imgSrc = listing.image_url || placeholder;
+  // Gallery: full fetched images when available, else the single tile image.
+  const gallery = [...(listing.all_images || []), listing.image_url || ''].filter(
+    (u): u is string => typeof u === 'string' && u.length > 0
+  );
+  cardImages = Array.from(new Set(gallery)).slice(0, 8);
+  if (cardImages.length === 0) cardImages = [placeholder];
+  cardImageIndex = 0;
+  const imgSrc = cardImages[0];
   const priceText = isProject
     ? (listing.low_price
         ? (listing.high_price && listing.high_price !== listing.low_price
@@ -117,47 +238,72 @@ export function showListingPreviewCard(
   const specs: string[] = [];
   if (listing.bhk_type) specs.push(`${listing.bhk_type}`);
   if (listing.bathrooms != null && listing.bathrooms > 0) specs.push(`${listing.bathrooms} Bath`);
-  if (listing.area_sqft && listing.area_sqft > 0) specs.push(`${Math.round(listing.area_sqft)} ${listing.area_unit || 'sqft'}`);
+  const areaLabel = formatArea(listing.area_sqft, listing.area_unit);
+  if (areaLabel) specs.push(areaLabel);
   if (listing.property_type) specs.push(titleCase(listing.property_type));
   if (isProject && listing.construction_phase) specs.push(titleCase(listing.construction_phase));
+  // Project richness: BHK configs, possession, payment plan, progress.
+  const bedsSummary = isProject ? formatBedsList(listing.bedrooms_list) : null;
+  if (bedsSummary) specs.push(bedsSummary);
+  const progress = isProject ? formatProgress(listing.construction_progress_percent) : null;
+  if (progress != null) specs.push(`${progress}% complete`);
+  const possession = isProject ? formatPossession(listing.delivery_date) : null;
+  const projectExtraHtml = isProject
+    ? `${possession ? `<div class="map-listing-possession">Possession by ${possession}</div>` : ''}
+       ${listing.payment_plan_summary ? `<div class="map-listing-payment">${listing.payment_plan_summary} payment plan</div>` : ''}`
+    : '';
   const specsHtml = specs.length
     ? `<div class="map-listing-specs">${specs.map(s => `<span class="map-listing-spec">${s}</span>`).join('')}</div>`
+    : '';
+  // Amenity highlights live ONLY in this map-click card (not sidebar cards).
+  // Shown for both properties and projects once full details are fetched.
+  const amenityList = (listing.amenities || []).slice(0, 3);
+  const amenityTotal = listing.amenities_total ?? (listing.amenities || []).length;
+  const amenityExtra = Math.max(0, amenityTotal - amenityList.length);
+  const amenitiesHtml = amenityList.length > 0
+    ? `<div class="map-listing-amenities">${amenityList.map(a => `<span class="map-listing-amenity">${a}</span>`).join('')}${amenityExtra > 0 ? `<span class="map-listing-amenity-more">+${amenityExtra} more</span>` : ''}</div>`
     : '';
   const showLocation = listing.location_text && !isDuplicateLabel(listing.title, listing.location_text);
 
   el.innerHTML = `
-    <button class="map-listing-close" title="Close">×</button>
+    <button class="map-listing-close" title="Close" data-action="close">×</button>
     <div class="map-listing-img-wrap">
-      <img src="${imgSrc}" class="map-listing-img" alt="${listing.title || ''}" loading="lazy"
+      <img src="${imgSrc}" class="map-listing-img" alt="${listing.title || ''}" loading="lazy" draggable="false"
         onerror="this.onerror=null;this.src='${placeholder}';" />
+      ${cardImages.length > 1 ? `
+        <button class="map-listing-prev" title="Previous" data-action="prev">‹</button>
+        <button class="map-listing-next" title="Next" data-action="next">›</button>
+        <div class="map-listing-dots">
+          ${cardImages.map((_, i) => `<span class="map-listing-dot${i === 0 ? ' active' : ''}" data-action="dot" data-idx="${i}"></span>`).join('')}
+        </div>
+        <div class="map-listing-count">1 / ${cardImages.length}</div>
+      ` : ''}
     </div>
     <div class="map-listing-body">
       <div class="map-listing-price">${priceText}</div>
       <div class="map-listing-title">${listing.title || ''}</div>
       ${showLocation ? `<div class="map-listing-address">${listing.location_text}</div>` : ''}
       ${specsHtml}
+      ${amenitiesHtml}
+      ${projectExtraHtml}
       ${listing.developer_name ? `<div class="map-listing-dev">${listing.developer_name}</div>` : ''}
       <a href="${detailHref(listing.entity_type, listing.id)}" target="_blank" rel="noopener noreferrer" class="map-listing-view">View Details →</a>
     </div>
   `;
 
-  const closeBtn = el.querySelector('.map-listing-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      hideListingPreviewCard();
-    });
-  }
-
   el.style.display = 'block';
+  openCardId = listing.id;
+  openCardAnchor = { lon: lngLat.lng, lat: lngLat.lat };
   positionAnchored(map, el, lngLat, 'right');
+  paintListingCarousel();
 }
 
 export function hideListingPreviewCard(): void {
   if (listingCardEl) {
     listingCardEl.style.display = 'none';
   }
+  openCardId = null;
+  openCardAnchor = null;
 }
 
 function titleCase(s: string): string {

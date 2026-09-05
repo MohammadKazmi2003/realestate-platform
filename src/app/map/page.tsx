@@ -5,8 +5,9 @@ import maplibregl from 'maplibre-gl'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { searchProperties } from '@/lib/searchClient'
+import { tenant } from '@/lib/tenant'
 
-const DEFAULT_CENTER = { lat: 28.4595, lng: 77.0266 }
+const DEFAULT_CENTER = { lat: tenant.map.center[1], lng: tenant.map.center[0] }
 const GEOLOCATION_TIMEOUT = 10000
 
 export default function MapPage() {

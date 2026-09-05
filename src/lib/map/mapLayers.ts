@@ -23,6 +23,13 @@ export interface ClusterPoint {
   price: number;
   latitude: number;
   longitude: number;
+  image_url?: string | null;
+  bhk_type?: string | null;
+  bathrooms?: number | null;
+  area_sqft?: number | null;
+  area_unit?: string | null;
+  location_text?: string | null;
+  is_new?: boolean;
 }
 
 export interface HoverPointData {
@@ -37,8 +44,10 @@ export interface HoverPointData {
   type?: 'property' | 'project';
 }
 
-// Minimalist dot radius that grows gently with zoom.
+// Minimalist dot radius that grows gently with zoom. Small at country zoom
+// so dense regions read as density (Zillow-style) instead of one big blob.
 function getCircleRadius(zoom: number): number {
+  if (zoom < 6) return 5;
   if (zoom < 12) return 7;
   if (zoom < 14) return 8;
   if (zoom < 16) return 9;
@@ -169,23 +178,33 @@ function getBubbleImage(map: maplibregl.Map, priceLabel: string): string {
 }
 
 export function setupMapLayers(map: maplibregl.Map): void {
-  if (map.getSource(SOURCE_ID)) return;
-
-  map.addSource(SOURCE_ID, {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-    // Markers carry their id in properties.id — promote it so feature-state
-    // (used to hide a marker while its speech bubble is showing) works.
-    promoteId: 'id',
-  });
+  if (!map.getSource(SOURCE_ID)) {
+    map.addSource(SOURCE_ID, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+      // Markers carry their id in properties.id — promote it so feature-state
+      // (used to hide a marker while its speech bubble is showing) works.
+      promoteId: 'id',
+      // NOTE: no server- or client-side count clustering here on purpose.
+      // Density is conveyed by the dots themselves (Zillow-style): the server
+      // returns density-proportional sampled points and the browser renders
+      // them 1:1. No cluster:true — that collapsed everything into count
+      // circles and hid the distribution.
+    });
+  }
 
   // High-quality Zillow-style dots: a soft dark halo underneath a crisp,
   // larger dot with a clean white outline. The highlighted listing's own dot
   // (and halo) is hidden while its speech bubble is showing.
+  // Each layer is added only if missing, so setupMapLayers is safe to call
+  // again after a style reload wipes custom layers.
+  const addLayerOnce = (spec: any) => {
+    if (!map.getLayer(spec.id)) map.addLayer(spec);
+  };
   const propertyHalo = `${LAYERS.unclusteredProperties}-halo`;
   const projectHalo = `${LAYERS.unclusteredProjects}-halo`;
 
-  map.addLayer({
+  addLayerOnce({
     id: propertyHalo,
     type: 'circle',
     source: SOURCE_ID,
@@ -193,7 +212,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
     paint: dotHaloPaint(map.getZoom()),
   });
 
-  map.addLayer({
+  addLayerOnce({
     id: projectHalo,
     type: 'circle',
     source: SOURCE_ID,
@@ -201,7 +220,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
     paint: dotHaloPaint(map.getZoom()),
   });
 
-  map.addLayer({
+  addLayerOnce({
     id: LAYERS.unclusteredProperties,
     type: 'circle',
     source: SOURCE_ID,
@@ -209,7 +228,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
     paint: dotPaint(PROPERTY_COLOR, map.getZoom()),
   });
 
-  map.addLayer({
+  addLayerOnce({
     id: LAYERS.unclusteredProjects,
     type: 'circle',
     source: SOURCE_ID,
@@ -219,7 +238,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
 
   // Zillow-style price labels on the densest dots. Collision detection hides
   // labels that would overlap, so only the top labels by sort key show.
-  map.addLayer({
+  addLayerOnce({
     id: LAYERS.markerPrice,
     type: 'symbol',
     source: SOURCE_ID,
@@ -241,10 +260,12 @@ export function setupMapLayers(map: maplibregl.Map): void {
     },
   });
 
-  map.addSource(HIGHLIGHT_SOURCE_ID, {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-  });
+  if (!map.getSource(HIGHLIGHT_SOURCE_ID)) {
+    map.addSource(HIGHLIGHT_SOURCE_ID, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+  }
 
   // Default bubble image (empty label) — fallback for the coalesce below.
   if (!map.hasImage(HIGHLIGHT_PIN_IMAGE)) {
@@ -257,7 +278,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
   // centered inside the bubble — crisp at every zoom, never rasterized. The
   // icon image is picked per highlight via `icon_image`, so the bubble width
   // hugs the price label instead of being oversized.
-  map.addLayer({
+  addLayerOnce({
     id: LAYERS.highlightedPin,
     type: 'symbol',
     source: HIGHLIGHT_SOURCE_ID,
@@ -291,7 +312,16 @@ export function updateSourceData(
   map: maplibregl.Map,
   data: GeoJSON.FeatureCollection
 ): void {
-  const source = map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  let source = map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  if (!source) {
+    // Style reloads wipe custom sources/layers — rebuild them on demand.
+    try {
+      setupMapLayers(map);
+    } catch {
+      return;
+    }
+    source = map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  }
   if (source) {
     source.setData(data);
   }
@@ -304,6 +334,10 @@ export function updateCircleRadius(map: maplibregl.Map, zoom: number): void {
   const halos = [`${LAYERS.unclusteredProperties}-halo`, `${LAYERS.unclusteredProjects}-halo`];
   for (const layerId of dots) {
     try {
+      // setPaintProperty on a missing layer fires a map 'error' event instead
+      // of throwing (so try/catch alone can't suppress it) — guard first.
+      // Layers vanish on style reload / unmount while a fetch is in flight.
+      if (!map.getLayer(layerId)) continue;
       map.setPaintProperty(layerId, 'circle-radius', radius as any);
     } catch {
       // layer might not exist yet
@@ -311,6 +345,7 @@ export function updateCircleRadius(map: maplibregl.Map, zoom: number): void {
   }
   for (const layerId of halos) {
     try {
+      if (!map.getLayer(layerId)) continue;
       map.setPaintProperty(layerId, 'circle-radius', haloRadius as any);
     } catch {
       // layer might not exist yet
@@ -359,7 +394,14 @@ export function setHighlightedPoint(
 }
 
 export function removeMapLayers(map: maplibregl.Map): void {
-  const layerIds = Object.values(LAYERS);
+  // NB: halo layers aren't in LAYERS — include them explicitly, otherwise
+  // removeSource throws "cannot be removed while layer X is using it".
+  // Layers must ALL go before either source.
+  const layerIds = [
+    ...Object.values(LAYERS),
+    `${LAYERS.unclusteredProperties}-halo`,
+    `${LAYERS.unclusteredProjects}-halo`,
+  ];
   for (const id of layerIds) {
     try {
       if (map.getLayer(id)) {
@@ -370,10 +412,14 @@ export function removeMapLayers(map: maplibregl.Map): void {
     }
   }
   try {
-    if (map.getSource(SOURCE_ID)) {
+    if (map.getSource(SOURCE_ID) && !map.getLayer(LAYERS.unclusteredProperties)) {
       map.removeSource(SOURCE_ID);
     }
-    if (map.getSource(HIGHLIGHT_SOURCE_ID)) {
+  } catch {
+    // A missed layer still references the source — leave it rather than throw.
+  }
+  try {
+    if (map.getSource(HIGHLIGHT_SOURCE_ID) && !map.getLayer(LAYERS.highlightedPin)) {
       map.removeSource(HIGHLIGHT_SOURCE_ID);
     }
   } catch {
