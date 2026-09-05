@@ -75,6 +75,7 @@ playwright-report/
 !.opencode/skills/**/*
 # local opencode tooling (kept out of git on purpose)
 opencode.json
+.claude/
 playwright.config.ts
 /specs/
 /scripts/verify-map-consistency.js
