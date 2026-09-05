@@ -113,6 +113,54 @@ type MaintenanceJobData = {
   retentionDays?: number;
 };
 
+// ---- Incremental search indexing ----
+// One job = one listing. The document is rebuilt from the live DB row at
+// execution time, so collapsed bursts always converge to latest state and
+// processing is naturally idempotent — safe to retry indefinitely.
+
+type SearchIndexJobData = {
+  entity?: string;
+  id?: string;
+};
+
+const searchIndexWorker = new Worker<SearchIndexJobData>(
+  'search-index',
+  async (job) => {
+    const { indexOne, deleteOne } = await import('../lib/indexDocs');
+    const entity = job.data.entity;
+    const id = job.data.id;
+    if ((entity !== 'property' && entity !== 'project') || typeof id !== 'string' || !id) {
+      throw new Error(`[Worker] search-index: invalid payload ${JSON.stringify(job.data)?.slice(0, 120)}`);
+    }
+    if (job.name === 'delete') {
+      await deleteOne(entity, id);
+      console.log(`[Worker] search-index: deleted ${entity} ${id}`);
+    } else {
+      const outcome = await indexOne(entity, id);
+      console.log(`[Worker] search-index: ${outcome} ${entity} ${id}`);
+    }
+  },
+  { connection, concurrency: 5 }
+);
+
+// Terminal failures (all BullMQ attempts exhausted): dead-letter to event_logs
+// so nothing is lost silently — replay via reconcile or the failed set.
+searchIndexWorker.on('failed', (job, err) => {
+  const attempts = job?.opts?.attempts ?? 1;
+  if (!job || job.attemptsMade < attempts) return; // will retry with backoff
+  console.error(`[Worker] search-index: permanently failed ${job.data?.entity} ${job.data?.id}:`, err.message);
+  supabase
+    .from('event_logs')
+    .insert({
+      property_id: job.data?.entity === 'property' ? job.data?.id : null,
+      event_type: 'reindex_failure',
+      user_id: null,
+    })
+    .then(({ error }) => {
+      if (error) console.error('[Worker] dead-letter insert failed:', error.message);
+    });
+});
+
 const maintenanceWorker = new Worker<MaintenanceJobData>(
   'maintenance',
   async (job) => {
@@ -143,6 +191,7 @@ async function shutdown(): Promise<void> {
   await eventWorker.close();
   await analyticsWorker.close();
   await maintenanceWorker.close();
+  await searchIndexWorker.close();
   redis.disconnect();
   process.exit(0);
 }
@@ -236,4 +285,5 @@ console.log('[Worker] Started. Listening for jobs...');
 console.log(`  Events queue:     audit actions (log_action)`);
 console.log(`  Analytics queue:  ${ANALYTICS_FLUSH_INTERVAL}ms flush`);
 console.log(`  Maintenance:      purge_event_logs daily at 3AM`);
+console.log(`  Search-index:     single-doc upsert/delete x5 concurrency`);
 console.log(`  Counter snapshot: every 5 minutes to event_counters table`);

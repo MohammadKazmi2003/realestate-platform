@@ -1,6 +1,16 @@
 // jest.setup.js
 import '@testing-library/jest-dom';
 
+// Node globals missing under the jsdom env (needed by undici via
+// @elastic/elasticsearch, ioredis, etc.).
+const { TextEncoder, TextDecoder } = require('util');
+if (typeof global.TextEncoder === 'undefined') global.TextEncoder = TextEncoder;
+if (typeof global.TextDecoder === 'undefined') global.TextDecoder = TextDecoder;
+const { ReadableStream, WritableStream, TransformStream } = require('stream/web');
+if (typeof global.ReadableStream === 'undefined') global.ReadableStream = ReadableStream;
+if (typeof global.WritableStream === 'undefined') global.WritableStream = WritableStream;
+if (typeof global.TransformStream === 'undefined') global.TransformStream = TransformStream;
+
 jest.mock('next/navigation', () => ({
   useRouter: jest.fn(() => ({
     push: jest.fn(),

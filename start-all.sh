@@ -73,7 +73,16 @@ for i in $(seq 1 10); do
 done
 
 echo ""
-echo "[4/4] All services running!"
+echo "[4/4] Starting background worker (BullMQ: events, analytics, search-index)..."
+if [ -f .worker.pid ] && kill -0 "$(cat .worker.pid)" 2>/dev/null; then
+  echo "    ✓ Worker already running (pid $(cat .worker.pid))"
+else
+  nohup npx tsx src/worker/index.ts > .worker.log 2>&1 &
+  echo $! > .worker.pid
+  echo "    ✓ Worker started (pid $(cat .worker.pid), logs: .worker.log)"
+fi
+
+echo ""
 echo "=========================================="
 echo ""
 echo "  Supabase (opt-in)    http://localhost:54321"
@@ -85,7 +94,9 @@ echo ""
 echo "  Next step — start the app:"
 echo "    npm run dev   →  http://localhost:3000"
 echo ""
-echo "  If data is missing, sync it:"
+echo "  Search stays in sync automatically via the worker."
+echo "  If data is missing, check drift or rebuild (admin/recovery only):"
+echo "    npm run es:reconcile -- properties --fix"
 echo "    node scripts/es-indexer.js full-sync"
 echo "    node scripts/es-project-indexer.js full-sync"
 echo "=========================================="

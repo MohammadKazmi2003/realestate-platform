@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
 import { cacheDelete } from '@/lib/redis';
 import { enqueueAction } from '@/lib/events';
+import { enqueueSearchIndex } from '@/lib/searchIndex';
 import { incrView } from '@/lib/counters';
 
 // --- TYPE DEFINITIONS ---
@@ -278,6 +279,14 @@ export async function updatePropertyAndManageImages(
     revalidatePath(`/property/${propertyId}`);
     revalidatePath('/my-listings');
     revalidatePath(`/edit-property/${propertyId}`);
+
+    // 9. Incremental search index (best-effort: never fail the DB mutation
+    // over search lag — the worker retries, reconcile repairs the rest).
+    try {
+      await enqueueSearchIndex({ entity: 'property', id: propertyId, op: 'upsert' });
+    } catch (error: any) {
+      console.warn('Search reindex enqueue failed (non-fatal):', error?.message || error);
+    }
 
     return { success: true, message: 'Property updated successfully!' };
   } catch (error: any) {

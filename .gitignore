@@ -80,3 +80,6 @@ playwright.config.ts
 /specs/
 /scripts/verify-map-consistency.js
 /src/lib/esQueryBuilder.test.ts
+# background worker runtime artifacts (start-all.sh pid + log)
+.worker.pid
+.worker.log

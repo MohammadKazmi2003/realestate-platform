@@ -64,6 +64,12 @@ function MyListingsPage() {
 
       if (deletePropertyError) throw deletePropertyError;
       setMyProperties(prevProperties => prevProperties.filter(p => p.id !== propertyId));
+      // Incremental search index: drop this one ES document (fire-and-forget).
+      fetch('/api/search-index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity: 'property', id: propertyId, op: 'delete' }),
+      }).catch(() => {});
     } catch (err: any) {
       console.error("Error deleting property:", err);
       setError(`Failed to delete property: ${err.message}`);

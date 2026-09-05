@@ -398,6 +398,13 @@ function AddPropertyPage() {
             }
 
             setMessage({ type: 'success', text: 'Property listed successfully! Redirecting...' });
+            // Incremental search index (fire-and-forget: worker rebuilds this
+            // one doc; never block the UX on it).
+            fetch('/api/search-index', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entity: 'property', id: propertyId, op: 'upsert' }),
+            }).catch(() => {});
             setTimeout(() => router.push(`/property/${propertyId}`), 2000);
 
         } catch (err: any) {
