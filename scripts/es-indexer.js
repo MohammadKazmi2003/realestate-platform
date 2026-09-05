@@ -133,13 +133,21 @@ async function buildPropertyDocument(property) {
     supabase.from('property_types').select('name').eq('id', property.property_type_id).single(),
     supabase.from('lookup_listing_purposes').select('name').eq('id', property.listing_purpose_id).single(),
     supabase.from('details_residential').select('*, bhk_types(label), lookup_furnishing_statuses(name)').eq('property_id', property.id).maybeSingle(),
-    supabase.from('details_commercial').select('*, lookup_commercial_sub_types(name)').eq('property_id', property.id).maybeSingle(),
+    supabase.from('details_commercial').select('*, lookup_commercial_sub_types(name), lookup_furnishing_statuses(name)').eq('property_id', property.id).maybeSingle(),
     supabase.from('details_land').select('*').eq('property_id', property.id).maybeSingle(),
   ]);
 
-  const areaData = landRes.data || residentialRes.data || commercialRes.data || {};
-  const bhkLabel = residentialRes.data?.bhk_types?.label || null;
-  const furnishingStatus = residentialRes.data?.lookup_furnishing_statuses?.name || null;
+  const resData = residentialRes.data || null;
+  const comData = commercialRes.data || null;
+  const areaData = landRes.data || resData || comData || {};
+  const bhkLabel = resData?.bhk_types?.label || null;
+  // Residential furnishing first, then commercial (new column), so rent +
+  // commercial listings show furnishing like residential does.
+  const furnishingStatus = resData?.lookup_furnishing_statuses?.name || (comData as any)?.lookup_furnishing_statuses?.name || (comData as any)?.furnishing_status || null;
+  const commercialCabins = commercialRes.data?.cabins ?? null;
+  const commercialWorkstations = commercialRes.data?.workstations ?? commercialRes.data?.max_seats ?? null;
+  const commercialMinSeats = commercialRes.data?.min_seats ?? null;
+  const commercialMaxSeats = commercialRes.data?.max_seats ?? null;
   // Dual-write: keep bhk_type (India tenants) and derive generic bedrooms int
   // for bedrooms-model tenants ('2 BHK'→2, '1.5 BHK'→1, '6+ BHK'→6, 'Studio'→0).
   // Old docs without bedrooms backfill lazily on next full-sync.
@@ -170,9 +178,13 @@ async function buildPropertyDocument(property) {
     bhk_type: bhkLabel || '',
     bhk_type_id: residentialRes.data?.bhk_type_id || null,
     bedrooms,
-    bathrooms: residentialRes.data?.bathrooms || 0,
-    balconies: residentialRes.data?.balconies || 0,
-    area_sqft: areaData.carpet_area || areaData.plot_area || 0,
+    bathrooms: resData?.bathrooms ?? 0,
+    balconies: resData?.balconies ?? 0,
+    cabins: commercialCabins ?? 0,
+    workstations: commercialWorkstations ?? 0,
+    min_seats: commercialMinSeats ?? 0,
+    max_seats: commercialMaxSeats ?? 0,
+    area_sqft: areaData.carpet_area ?? (areaData as any).built_up_area ?? (areaData as any).super_built_up_area ?? areaData.plot_area ?? 0,
     area_unit: landRes.data?.area_unit || 'sqft',
     furnishing_status: furnishingStatus || '',
     amenities: (amenitiesRes.data || []).map((a) => a.lookup_amenities?.name || '').filter(Boolean),

@@ -58,6 +58,10 @@ export type PropertyDataType = {
   details_commercial: {
     cabins: number | null;
     workstations: number | null;
+    min_seats: number | null;
+    max_seats: number | null;
+    total_floors: number | null;
+    property_on_floor: number | null;
     meeting_rooms: number | null;
     private_washrooms: number | null;
     shared_washrooms: number | null;
@@ -69,6 +73,7 @@ export type PropertyDataType = {
     carpet_area: number | null;
     lookup_commercial_sub_types: { id: number; name: string } | null;
     office_type: { id: number; name: string } | null;
+    lookup_furnishing_statuses: { id: number; name: string } | null;
   }[] | null;
   
   details_land: {

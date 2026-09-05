@@ -29,7 +29,7 @@ type ExistingImage = { id: number; media_url: string; tag: string; file_path: st
 type NewImageFile = { file: File; preview: string; id: string; tag: string; };
 type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
 type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
-type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; total_floors: string; property_on_floor: string; };
+type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; };
 type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; };
 
 interface EditPropertyPageProps {
@@ -47,11 +47,12 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
   const [propertyTypeName, setPropertyTypeName] = useState<string>('');
   const [commonData, setCommonData] = useState<CommonFormData>({ title: '', description: '', price: '', location_text: '', listing_purpose_id: '', ownership_type_id: '', availability_status_id: '', phone_number: '' });
   const [residentialData, setResidentialData] = useState<ResidentialFormData>({ bhk_type_id: '', bathrooms: '', balconies: '', total_floors: '', property_on_floor: '', furnishing_status_id: '', carpet_area: '', built_up_area: '', super_built_up_area: '' });
-  const [commercialData, setCommercialData] = useState<CommercialFormData>({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '', total_floors: '', property_on_floor: '' });  const [landData, setLandData] = useState<LandFormData>({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
+  const [commercialData, setCommercialData] = useState<CommercialFormData>({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '', total_floors: '', property_on_floor: '', furnishing_status_id: '' });  const [landData, setLandData] = useState<LandFormData>({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
   
   const [existingImages, setExistingImages] = useState<ExistingImage[]>([]);
   const [newImages, setNewImages] = useState<NewImageFile[]>([]);
   const [imagesToDelete, setImagesToDelete] = useState<{ id: number; file_path: string }[]>([]);
+  const [isDragActive, setIsDragActive] = useState(false);
   
   const [selectedAmenities, setSelectedAmenities] = useState<Set<number>>(new Set());
   const [selectedFurnishings, setSelectedFurnishings] = useState<Set<number>>(new Set());
@@ -141,13 +142,14 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
               const com = property.details_commercial[0];
               setCommercialData({
                   commercial_sub_type_id: String(com.lookup_commercial_sub_types?.id || ''), office_type_id: String((com.office_type as any)?.id || ''),
-                  min_seats: String(com.min_seats || ''), max_seats: String(com.max_seats || ''), cabins: String(com.cabins || ''),
+                  min_seats: String((com as any).min_seats ?? ''), max_seats: String((com as any).max_seats ?? ''), cabins: String(com.cabins || ''),
                   meeting_rooms: String(com.meeting_rooms || ''), private_washrooms: String(com.private_washrooms || ''),
                   shared_washrooms: String(com.shared_washrooms || ''), passenger_lifts: String(com.passenger_lifts || ''),
                   service_lifts: String(com.service_lifts || ''), is_pre_leased: com.is_pre_leased || false,
                   has_noc: com.has_noc || false, has_occupancy_cert: com.has_occupancy_cert || false,
-                  carpet_area: String(com.carpet_area || ''),total_floors: String(com.total_floors || ''),
-                  property_on_floor: String(com.property_on_floor || ''), 
+                  carpet_area: String(com.carpet_area || ''),total_floors: String((com as any).total_floors ?? ''),
+                  property_on_floor: String((com as any).property_on_floor ?? ''),
+                  furnishing_status_id: String((com as any).lookup_furnishing_statuses?.id || ''),
               });
             }
 
@@ -185,12 +187,25 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
     setter((prev: any) => ({ ...prev, [name]: isCheckbox ? (e.target as HTMLInputElement).checked : value }));
   };
   const handleCheckboxChange = (setter: React.Dispatch<React.SetStateAction<Set<number>>>, id: number) => { setter(prev => { const newSet = new Set(prev); if (newSet.has(id)) newSet.delete(id); else newSet.add(id); return newSet; }); };
+  const addNewImageFiles = (files: FileList | File[]) => {
+    const arr = Array.from(files);
+    if (arr.length === 0) return;
+    const newImageFiles = arr.map(file => ({ id: self.crypto.randomUUID(), file, preview: URL.createObjectURL(file), tag: '' }));
+    setNewImages(prev => [...prev, ...newImageFiles]);
+  };
   const handleNewImageChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
-      const newImageFiles = Array.from(files).map(file => ({ id: self.crypto.randomUUID(), file, preview: URL.createObjectURL(file), tag: '' }));
-      setNewImages(prev => [...prev, ...newImageFiles]);
+      addNewImageFiles(files);
       e.target.value = '';
+    }
+  };
+  const handleNewImageDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addNewImageFiles(e.dataTransfer.files);
     }
   };
   const handleNewImageTagChange = (id: string, tag: string) => {
@@ -222,12 +237,17 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
 
         const newImageDbEntries = await Promise.all(
           newImages.map(async (newImg, index) => {
-              const compressedFile = await imageCompression(newImg.file, { maxSizeMB: 1, maxWidthOrHeight: 1920 });
-              const filePath = `${user.id}/${propertyId}/${Date.now()}-${compressedFile.name.replace(/\s+/g, '-')}`;
-              const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, compressedFile);
-              if (uploadError) throw new Error(`Upload failed for ${compressedFile.name}: ${uploadError.message}`);
+              const isImage = newImg.file.type.startsWith('image/');
+              const fileToUpload = isImage
+                ? await imageCompression(newImg.file, { maxSizeMB: 1, maxWidthOrHeight: 1920 })
+                : newImg.file;
+              const sanitizedName = newImg.file.name.replace(/\s+/g, '-');
+              const filePath = `${user.id}/${propertyId}/${Date.now()}-${sanitizedName}`;
+              const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, fileToUpload);
+              if (uploadError) throw new Error(`Upload failed for ${sanitizedName}: ${uploadError.message}`);
               const { data: { publicUrl } } = supabase.storage.from('property-images').getPublicUrl(filePath);
-              return { media_url: publicUrl, tag: newImg.tag, media_type: 'image', display_order: existingImages.length + index };
+              const mediaType = isImage ? 'image' : newImg.file.type.startsWith('video/') ? 'video' : 'brochure_pdf';
+              return { media_url: publicUrl, tag: newImg.tag, media_type: mediaType, display_order: existingImages.length + index };
           })
         );
         
@@ -347,6 +367,7 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Service Lifts</label><input name="service_lifts" type="number" min="0" value={commercialData.service_lifts} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Total Floors</label><input name="total_floors" type="number" min="0" value={commercialData.total_floors} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Property on Floor</label><input name="property_on_floor" type="number" min="0" value={commercialData.property_on_floor} onChange={createHandleChange(setCommercialData)} className="neumorphic-input"/></div>
+                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Furnishing Status</label><select name="furnishing_status_id" value={commercialData.furnishing_status_id} onChange={createHandleChange(setCommercialData)} className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.furnishingStatuses.map(fs => <option key={fs.id} value={fs.id}>{fs.name}</option>)}</select></div>
                         </div>
                         <div className="pt-4 space-y-3">
                             <label className="flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-3 cursor-pointer"><input type="checkbox" name="is_pre_leased" checked={commercialData.is_pre_leased} onChange={createHandleChange(setCommercialData)} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>Is this property currently pre-leased?</label>
@@ -391,24 +412,46 @@ function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
                       </div>
                     </div>
                   )}
-                 <label htmlFor="newImages" className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-shadow-dark/30 rounded-xl cursor-pointer hover:bg-shadow-dark/10 transition-colors">
-                   <UploadCloud className="w-8 h-8 text-text-color-light mb-2"/>
-                   <span className="text-text-color-dark">Upload New Images</span>
-                 </label>
-                 <input id="newImages" type="file" multiple accept="image/*" onChange={handleNewImageChange} className="hidden"/>
+                 <label
+                   htmlFor="newImages"
+                   onDragOver={(e) => { e.preventDefault(); setIsDragActive(true); }}
+                   onDragLeave={() => setIsDragActive(false)}
+                   onDrop={handleNewImageDrop}
+                   className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-500/10' : 'border-shadow-dark/30 hover:bg-shadow-dark/10'}`}
+                 >
+                    <UploadCloud className="w-10 h-10 text-text-color-light mb-3"/>
+                    <span className="text-lg font-semibold text-text-color-dark text-center">Click to Upload Images & Videos</span>
+                    <span className="text-sm text-text-color-light mt-1 text-center">or drag & drop files here to upload</span>
+                    <span className="inline-flex items-center gap-2 mt-4 px-6 py-2.5 rounded-xl font-semibold text-white bg-cta-gradient shadow-neumorphic-outset pointer-events-none" aria-hidden="true">
+                      <UploadCloud className="w-4 h-4" />
+                      Click to Upload
+                    </span>
+                    <span className="text-xs text-text-color-light mt-3">PNG, JPG, MP4, WEBM, PDF accepted • Images, videos & brochures</span>
+                  </label>
+                  <input id="newImages" type="file" multiple accept="image/*,video/*,.pdf" onChange={handleNewImageChange} className="hidden"/>
                  {newImages.length > 0 && (
-                    <div className="mt-6">
-                      <p className="font-semibold text-text-color-dark mb-4">New Images to Upload:</p>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                        {newImages.map((img) => (
-                          <div key={img.id} className="relative aspect-square rounded-xl overflow-hidden group shadow-neumorphic-outset p-1 bg-bg-color">
-                            <img src={img.preview} alt="New Preview" className="w-full h-full object-cover rounded-lg"/>
+                     <div className="mt-6">
+                       <p className="font-semibold text-text-color-dark mb-4">New Media to Upload ({newImages.length}):</p>
+                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                         {newImages.map((img) => {
+                           const isVideo = img.file.type.startsWith('video/');
+                           const isPdf = img.file.type === 'application/pdf' || img.file.name.toLowerCase().endsWith('.pdf');
+                           return (
+                           <div key={img.id} className="relative aspect-square rounded-xl overflow-hidden group shadow-neumorphic-outset p-1 bg-bg-color">
+                             {isVideo ? (
+                               <video src={img.preview} className="w-full h-full object-cover rounded-lg bg-black" muted playsInline preload="metadata" />
+                             ) : isPdf ? (
+                               <div className="w-full h-full flex items-center justify-center rounded-lg bg-shadow-dark/10 text-xs font-semibold text-text-color-light text-center px-2">PDF</div>
+                             ) : (
+                               <img src={img.preview} alt="New Preview" className="w-full h-full object-cover rounded-lg"/>
+                             )}
                             <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1">
                                 <input type="text" value={img.tag} onChange={(e) => handleNewImageTagChange(img.id, e.target.value)} className="w-full bg-transparent text-white text-xs border-0 focus:ring-0 p-1" placeholder="Add a tag..." required />
                             </div>
                             <button type="button" onClick={() => handleRemoveNewImage(img.id)} className="absolute top-1 right-1 bg-danger-color/80 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 backdrop-blur-sm"><Trash2 size={20} /></button>
                           </div>
-                        ))}
+                           );
+                         })}
                       </div>
                     </div>
                   )}

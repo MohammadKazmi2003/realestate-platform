@@ -10,7 +10,7 @@ import { incrView } from '@/lib/counters';
 // --- TYPE DEFINITIONS ---
 type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
 type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
-type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; };
+type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; total_floors?: string; property_on_floor?: string; furnishing_status_id?: string; };
 type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; };
 type ExistingImage = { id: number; tag: string; };
 type NewImageDbEntry = { media_url: string; tag: string; media_type: string; display_order: number; };
@@ -161,7 +161,38 @@ export async function updatePropertyAndManageImages(
       .throwOnError();
 
     // 3. Conditionally update details tables
-    if (propertyTypeId === '1') { // Residential
+    // Resolve parent category so subtype IDs (4,5=residential; 6,7=commercial)
+    // update the correct details table. Previously hardcoded '1'/'2'/'3'
+    // silently skipped updates for subtypes.
+    let rootId: number | null = null;
+    let rootName: string | null = null;
+    {
+      const { data: typeRow } = await supabase.from('property_types').select('id, name, parent_id').eq('id', Number(propertyTypeId)).single();
+      if (typeRow) {
+        rootName = (typeRow as any).name ?? null;
+        if ((typeRow as any).parent_id != null) {
+          const { data: parentRow } = await supabase.from('property_types').select('id, name, parent_id').eq('id', (typeRow as any).parent_id).single();
+          if (parentRow) {
+            rootId = (parentRow as any).id ?? null;
+            rootName = (parentRow as any).name ?? rootName;
+          } else {
+            rootId = (typeRow as any).parent_id;
+          }
+        } else {
+          rootId = (typeRow as any).id;
+        }
+      }
+      // Fast-path fallback when lookup fails (e.g. RLS) — known ID mapping
+      if (rootId == null) {
+        if (['1','4','5'].includes(String(propertyTypeId))) { rootId = 1; rootName = rootName ?? 'Residential'; }
+        else if (['2','6','7'].includes(String(propertyTypeId))) { rootId = 2; rootName = rootName ?? 'Commercial'; }
+        else if (String(propertyTypeId) === '3') { rootId = 3; rootName = rootName ?? 'Land / Plot'; }
+      }
+    }
+    const isResidential = rootId === 1 || rootName === 'Residential';
+    const isCommercial = rootId === 2 || rootName === 'Commercial';
+    const isLand = rootId === 3 || rootName === 'Land / Plot';
+    if (isResidential) {
         await supabase.from('details_residential').update({
             bhk_type_id: safeParseInt(residentialData.bhk_type_id),
             bathrooms: safeParseInt(residentialData.bathrooms),
@@ -173,8 +204,8 @@ export async function updatePropertyAndManageImages(
             built_up_area: safeParseFloat(residentialData.built_up_area),
             super_built_up_area: safeParseFloat(residentialData.super_built_up_area),
         }).eq('property_id', propertyId).throwOnError();
-    } else if (propertyTypeId === '2') { // Commercial
-        await supabase.from('details_commercial').update({
+    } else if (isCommercial) {
+        const commercialUpdate: Record<string, any> = {
             commercial_sub_type_id: safeParseInt(commercialData.commercial_sub_type_id),
             office_type_id: safeParseInt(commercialData.office_type_id),
             min_seats: safeParseInt(commercialData.min_seats),
@@ -189,15 +220,20 @@ export async function updatePropertyAndManageImages(
             has_noc: commercialData.has_noc,
             has_occupancy_cert: commercialData.has_occupancy_cert,
             carpet_area: safeParseFloat(commercialData.carpet_area),
-            total_floors: safeParseInt(commercialData.total_floors), 
-            property_on_floor: safeParseInt(commercialData.property_on_floor), 
-        }).eq('property_id', propertyId).throwOnError();
-    } else if (propertyTypeId === '3') { // Land
+            total_floors: safeParseInt((commercialData as any).total_floors),
+            property_on_floor: safeParseInt((commercialData as any).property_on_floor),
+        };
+        const furnId = safeParseInt((commercialData as any).furnishing_status_id);
+        if (furnId != null) (commercialUpdate as any).furnishing_status_id = furnId;
+        await supabase.from('details_commercial').update(commercialUpdate).eq('property_id', propertyId).throwOnError();
+    } else if (isLand) {
         await supabase.from('details_land').update({
             plot_area: safeParseFloat(landData.plot_area),
             area_unit: landData.area_unit,
             is_boundary_wall_made: landData.is_boundary_wall_made,
         }).eq('property_id', propertyId).throwOnError();
+    } else {
+        console.warn(`updateProperty: unresolvable propertyTypeId=${propertyTypeId} rootId=${rootId} rootName=${rootName}; details NOT updated`);
     }
 
     // 4. Update junction tables by deleting old and inserting new

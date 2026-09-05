@@ -149,6 +149,12 @@ export function showPropertyPreview(
   if (point.bathrooms != null && point.bathrooms > 0) specs.push(`${point.bathrooms} Bath`);
   const hoverArea = formatArea(point.area_sqft, point.area_unit);
   if (hoverArea) specs.push(hoverArea);
+  if (point.balconies != null && point.balconies > 0) specs.push(`${point.balconies} Balcony`);
+  if (point.furnishing_status) specs.push(point.furnishing_status);
+  if (point.listing_purpose) {
+    const lp = point.listing_purpose.trim().toLowerCase();
+    specs.push(lp === 'rent' ? 'For Rent' : lp === 'sell' || lp === 'sale' ? 'For Sale' : `For ${point.listing_purpose.trim()}`);
+  }
   const specsHtml = specs.length ? `<div class="map-preview-specs">${specs.join(' · ')}</div>` : '';
   const imgHtml = point.image_url
     ? `<div class="map-preview-img-wrap"><img src="${point.image_url}" class="map-preview-img" alt="" loading="lazy" onerror="this.style.display='none'" /></div>`
@@ -198,6 +204,8 @@ export interface ListingPreviewData {
   bhk_type?: string | null;
   bathrooms?: number | null;
   balconies?: number | null;
+  furnishing_status?: string | null;
+  listing_purpose?: string | null;
   property_type?: string | null;
   developer_name?: string | null;
   construction_phase?: string | null;
@@ -240,6 +248,12 @@ export function showListingPreviewCard(
   if (listing.bathrooms != null && listing.bathrooms > 0) specs.push(`${listing.bathrooms} Bath`);
   const areaLabel = formatArea(listing.area_sqft, listing.area_unit);
   if (areaLabel) specs.push(areaLabel);
+  if (listing.balconies != null && listing.balconies > 0) specs.push(`${listing.balconies} Balcony`);
+  if (listing.furnishing_status) specs.push(listing.furnishing_status);
+  if (listing.listing_purpose) {
+    const lp = listing.listing_purpose.trim().toLowerCase();
+    specs.push(lp === 'rent' ? 'For Rent' : lp === 'sell' || lp === 'sale' ? 'For Sale' : `For ${listing.listing_purpose.trim()}`);
+  }
   if (listing.property_type) specs.push(titleCase(listing.property_type));
   if (isProject && listing.construction_phase) specs.push(titleCase(listing.construction_phase));
   // Project richness: BHK configs, possession, payment plan, progress.

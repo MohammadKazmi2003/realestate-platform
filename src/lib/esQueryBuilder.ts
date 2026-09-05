@@ -212,6 +212,8 @@ const LISTING_SOURCE_FIELDS = [
   'area_sqft', 'area_unit',
   'property_type', 'bhk_type', 'bedrooms',
   'bathrooms', 'balconies',
+  'cabins', 'workstations', 'min_seats', 'max_seats',
+  'furnishing_status', 'listing_purpose', 'listing_purpose_id',
   'image_url', 'primary_image', 'all_images',
   'construction_phase', 'delivery_date', 'developer_name',
   'status', 'project_name',
@@ -224,7 +226,8 @@ const LISTING_SOURCE_FIELDS = [
 const MARKER_SOURCE_FIELDS = [
   'id', 'entity_type', 'location',
   'price', 'sort_price', 'low_price', 'title', 'name',
-  'image_url', 'primary_image', 'bhk_type', 'bathrooms',
+  'image_url', 'primary_image', 'bhk_type', 'bathrooms', 'balconies',
+  'furnishing_status', 'listing_purpose',
   'area_sqft', 'area_unit', 'location_text', 'created_at',
   'developer_name', 'project_name',
 ];
@@ -368,6 +371,9 @@ export async function queryESMapMarkers(params: any) {
         image_url: src.image_url || src.primary_image || null,
         bhk_type: src.bhk_type || null,
         bathrooms: src.bathrooms ?? null,
+        balconies: src.balconies ?? null,
+        furnishing_status: src.furnishing_status || null,
+        listing_purpose: src.listing_purpose || null,
         area_sqft: src.area_sqft ?? null,
         area_unit: src.area_unit || null,
         location_text: src.location_text || null,

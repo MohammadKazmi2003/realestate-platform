@@ -13,7 +13,7 @@ import {
   CarouselPrevious,
 } from '@/components/ui/carousel'
 // UPDATED: Removed GalleryVerticalEnd
-import { MapPin, Bed, Bath, Briefcase, Users, Ruler, Dot } from 'lucide-react'
+import { MapPin, Bed, Bath, Briefcase, Users, Ruler, Dot, Sofa, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FaWhatsapp } from 'react-icons/fa';
 // ADDED: Imported a more suitable icon for balconies
@@ -38,26 +38,96 @@ export type PropertyCardProps = {
     location_text: string | null;
     price: number | null;
     area?: number | null;
+    area_sqft?: number | null;
     area_unit?: string | null;
     owner_phone?: string | null;
-    user_id?: string;
-    images: { image_url: string }[];
+    user_id?: string | null;
+    images?: { image_url: string }[];
+    image_url?: string | null;
     property_type_name?: string | null;
+    /** ES returns `property_type`; PG RPCs return `property_type_name` — accept both. */
+    property_type?: string | null;
     bhk_type_label?: string | null;
+    /** ES/PG fallback may use `bhk_type` instead of `bhk_type_label`. */
+    bhk_type?: string | null;
+    bedrooms?: number | null;
     bathrooms?: number | null;
     balconies?: number | null;
     cabins?: number | null;
     workstations?: number | null;
+    min_seats?: number | null;
+    max_seats?: number | null;
+    furnishing_status?: string | null;
+    listing_purpose?: string | null;
   };
   actions?: React.ReactNode;
 }
 
+function isRentalPurpose(purpose?: string | null): boolean {
+  if (!purpose) return false;
+  return /rent|lease|\bpg\b/i.test(purpose);
+}
+
+function purposeBadgeLabel(purpose?: string | null): string | null {
+  if (!purpose) return null;
+  const p = purpose.trim().toLowerCase();
+  if (p === 'rent') return 'For Rent';
+  if (p === 'sell' || p === 'sale') return 'For Sale';
+  if (p === 'lease') return 'For Lease';
+  if (p === 'pg') return 'PG';
+  return `For ${purpose.trim()}`;
+}
+
+function isResidentialType(typeName?: string | null): boolean {
+  if (!typeName) return false;
+  const t = typeName.toLowerCase();
+  return t.includes('residential') || t.includes('apartment') || t.includes('house') || t.includes('villa') || t.includes('flat') || t.includes('studio');
+}
+
+function isCommercialType(typeName?: string | null): boolean {
+  if (!typeName) return false;
+  const t = typeName.toLowerCase();
+  return t.includes('commercial') || t.includes('office') || t.includes('retail') || t.includes('shop');
+}
+
+function isLandType(typeName?: string | null): boolean {
+  if (!typeName) return false;
+  const t = typeName.toLowerCase();
+  return t.includes('land') || t.includes('plot');
+}
+
 export function PropertyCard({ property, actions }: PropertyCardProps) {
-  const images = Array.isArray(property.images) && property.images.length > 0
+  const rawImages = Array.isArray(property.images) && property.images.length > 0
     ? property.images
+    : property.image_url
+      ? [{ image_url: property.image_url }]
+      : [];
+  const images = rawImages.length > 0
+    ? rawImages
     : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }];
 
-  const areaValue = formatArea(property.area ?? null, property.area_unit);
+  // `area` (ES card path) vs `area_sqft` (PG/RPC fallback path) — support both
+  // so rental + sale cards always show area in sq. ft. when available.
+  const rawArea = property.area ?? property.area_sqft ?? null;
+  const areaValue = formatArea(rawArea, property.area_unit);
+
+  const typeName = property.property_type_name ?? property.property_type ?? null;
+  const bhkLabel = property.bhk_type_label ?? property.bhk_type ?? (
+    property.bedrooms != null && property.bedrooms > 0 ? `${property.bedrooms} BHK` : null
+  );
+  const furnishing = property.furnishing_status ?? null;
+  const listingPurpose = property.listing_purpose ?? null;
+  const badgeLabel = purposeBadgeLabel(listingPurpose);
+  const isRental = isRentalPurpose(listingPurpose);
+
+  // The add-listing form saves subtype names (e.g. "Residential Apartment",
+  // "Commercial Office") while older rows use parent names ("Residential").
+  // Match by substring + fall back to data presence so rent + sale cards show
+  // the same details that were entered in the form.
+  const residentialByType = isResidentialType(typeName);
+  const commercialByType = isCommercialType(typeName);
+  const hasResidentialDetails = residentialByType || bhkLabel || property.bathrooms || property.balconies || furnishing;
+  const hasCommercialDetails = commercialByType || property.cabins || property.workstations || property.min_seats || property.max_seats;
 
   return (
     <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color h-full">
@@ -88,6 +158,19 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
             </>
           )}
         </Carousel>
+        {badgeLabel && (
+          <span className={cn(
+            "absolute top-3 left-3 text-xs font-bold px-3 py-1 rounded-full shadow-neumorphic-outset",
+            isRental ? "bg-blue-600 text-white" : "bg-success-color text-white"
+          )}>
+            {badgeLabel}
+          </span>
+        )}
+        {typeName && (
+          <span className="absolute top-3 right-3 text-xs font-semibold px-2.5 py-1 rounded-full bg-bg-color/90 text-text-color-dark backdrop-blur-sm">
+            {typeName}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col flex-grow p-4">
@@ -98,33 +181,54 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
           <p className="text-sm text-text-color-light flex items-center gap-1 truncate" title={property.location_text || undefined}>
             <MapPin size={12} /> {property.location_text || 'Location not specified'}
           </p>
-          <div className="mt-2">
+          <div className="mt-2 flex items-baseline gap-1">
             <p className="text-xl font-bold text-success-color">
               {property.price ? formatMoney(property.price, tenant.propertyCurrency) : 'Price on request'}
             </p>
+            {isRental && property.price ? (
+              <span className="text-sm font-medium text-text-color-light">/mo</span>
+            ) : null}
           </div>
+          {listingPurpose && (
+            <p className="mt-1 flex items-center gap-1 text-xs font-medium text-text-color-light">
+              <Tag size={12} /> {badgeLabel ?? listingPurpose}
+              {furnishing ? ` • ${furnishing}` : ''}
+            </p>
+          )}
         </Link>
-        
+
         <div className="mt-3 pt-3 border-t border-shadow-dark/10 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <DetailIcon icon={Ruler} value={areaValue} label="Area" />
-            
-            {property.property_type_name === 'Residential' && (
+            <DetailIcon icon={Ruler} value={areaValue} label={areaValue ? `Area (${property.area_unit || 'sqft'})` : 'Area'} />
+
+            {hasResidentialDetails && (
                 <>
-                    {areaValue && <Dot className="text-text-color-light/50" />}
-                    <DetailIcon icon={Bed} value={property.bhk_type_label} label="Bedrooms" />
-                    {property.bathrooms && <Dot className="text-text-color-light/50" />}
-                    <DetailIcon icon={Bath} value={property.bathrooms} label="Bathrooms" />
-                    {property.balconies && <Dot className="text-text-color-light/50" />}
+                    {areaValue && bhkLabel && <Dot className="text-text-color-light/50" />}
+                    <DetailIcon icon={Bed} value={bhkLabel} label="Bedrooms" />
+                    {bhkLabel && property.bathrooms ? <Dot className="text-text-color-light/50" /> : null}
+                    <DetailIcon icon={Bath} value={property.bathrooms ? `${property.bathrooms} Bath` : null} label="Bathrooms" />
+                    {property.bathrooms && property.balconies ? <Dot className="text-text-color-light/50" /> : null}
                     {/* FIXED: Using the new MdBalcony icon */}
-                    <DetailIcon icon={MdBalcony} value={property.balconies} label="Balconies" />
+                    <DetailIcon icon={MdBalcony} value={property.balconies ? `${property.balconies} Balcony` : null} label="Balconies" />
+                    {(bhkLabel || property.bathrooms || property.balconies) && furnishing ? <Dot className="text-text-color-light/50" /> : null}
+                    <DetailIcon icon={Sofa} value={furnishing} label="Furnishing" />
                 </>
             )}
-            {property.property_type_name === 'Commercial' && (
+            {hasCommercialDetails && !hasResidentialDetails && (
+                <>
+                    {areaValue && property.cabins ? <Dot className="text-text-color-light/50" /> : null}
+                    <DetailIcon icon={Briefcase} value={property.cabins ? `${property.cabins} Cabins` : null} label="Cabins" />
+                    {property.cabins && (property.workstations || property.max_seats || property.min_seats) ? <Dot className="text-text-color-light/50" /> : null}
+                    <DetailIcon
+                      icon={Users}
+                      value={(property.workstations || property.max_seats || property.min_seats) ? `${property.workstations ?? property.max_seats ?? property.min_seats} Seats` : null}
+                      label="Workstations / Seats"
+                    />
+                </>
+            )}
+            {!hasResidentialDetails && !hasCommercialDetails && furnishing && (
                 <>
                     {areaValue && <Dot className="text-text-color-light/50" />}
-                    <DetailIcon icon={Briefcase} value={property.cabins} label="Cabins" />
-                    {property.workstations && <Dot className="text-text-color-light/50" />}
-                    <DetailIcon icon={Users} value={property.workstations} label="Workstations" />
+                    <DetailIcon icon={Sofa} value={furnishing} label="Furnishing" />
                 </>
             )}
         </div>
@@ -144,9 +248,7 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
                     propertyTitle={property.title || 'this property'}
                     propertyId={property.id}
                     ownerId={property.user_id}
-                    className={cn("!p-3 !w-auto !h-auto", {
-                        "ml-auto": !actions
-                    })}
+                    className={cn("!p-3 !w-auto !h-auto", !actions ? "ml-auto" : "")}
                 >
                     <FaWhatsapp size={18} />
                 </WhatsAppButton>

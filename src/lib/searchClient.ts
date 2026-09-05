@@ -33,11 +33,16 @@ async function pgFallbackSearch(params: SearchQueryInput): Promise<any> {
       results: (data || []).map((p: any) => ({
         ...p,
         location: p.latitude != null && p.longitude != null ? { lat: p.latitude, lon: p.longitude } : null,
-        area_sqft: p.area,
-        area_unit: p.area_unit,
-        property_type: p.property_type_name,
-        bhk_type: p.bhk_type_label,
-        all_images: p.image_url ? [p.image_url] : [],
+        area_sqft: p.area_sqft ?? p.area ?? null,
+        area_unit: p.area_unit || 'sqft',
+        property_type: p.property_type_name ?? p.property_type ?? null,
+        bhk_type: p.bhk_type_label ?? p.bhk_type ?? null,
+        furnishing_status: p.furnishing_status ?? null,
+        listing_purpose: p.listing_purpose ?? null,
+        bedrooms: p.bedrooms ?? null,
+        cabins: p.cabins ?? null,
+        workstations: p.workstations ?? p.max_seats ?? null,
+        all_images: p.image_url ? [p.image_url] : (Array.isArray(p.all_images) ? p.all_images : []),
       })),
       total: data?.length || 0,
       nextCursor: null,
@@ -98,42 +103,61 @@ export interface SearchResult {
   location_text: string | null;
   price: number | null;
   area: number | null;
+  area_sqft?: number | null;
   area_unit: string | null;
   owner_phone: string | null;
   user_id: string | null;
   images: { image_url: string }[];
+  image_url?: string | null;
   property_type_name: string | null;
+  property_type?: string | null;
   bhk_type_label: string | null;
+  bhk_type?: string | null;
+  bedrooms?: number | null;
   bathrooms: number | null;
   balconies: number | null;
   cabins: number | null;
   workstations: number | null;
+  min_seats?: number | null;
+  max_seats?: number | null;
+  furnishing_status?: string | null;
+  listing_purpose?: string | null;
   latitude: number | null;
   longitude: number | null;
 }
 
 export function mapEsResultToPropertyCard(esResult: any): SearchResult {
   const location = esResult.location || {};
+  const allImages: string[] = Array.isArray(esResult.all_images) ? esResult.all_images : [];
   return {
     id: esResult.id,
     title: esResult.title || null,
     location_text: esResult.location_text || null,
-    price: esResult.price || null,
-    area: esResult.area_sqft || null,
+    price: esResult.price ?? esResult.sort_price ?? null,
+    area: esResult.area_sqft ?? null,
+    area_sqft: esResult.area_sqft ?? null,
     area_unit: esResult.area_unit || 'sqft',
     owner_phone: esResult.owner_phone || null,
     user_id: esResult.user_id || null,
     images: esResult.image_url
       ? [{ image_url: esResult.image_url }]
-      : (esResult.all_images || []).length > 0
-        ? esResult.all_images.map((url: string) => ({ image_url: url }))
+      : allImages.length > 0
+        ? allImages.map((url: string) => ({ image_url: url }))
         : [],
+    image_url: esResult.image_url || allImages[0] || null,
     property_type_name: esResult.property_type || null,
+    property_type: esResult.property_type || null,
     bhk_type_label: esResult.bhk_type || null,
+    bhk_type: esResult.bhk_type || null,
+    bedrooms: esResult.bedrooms ?? null,
     bathrooms: esResult.bathrooms ?? null,
     balconies: esResult.balconies ?? null,
-    cabins: null,
-    workstations: null,
+    cabins: esResult.cabins ?? null,
+    workstations: esResult.workstations ?? esResult.max_seats ?? null,
+    min_seats: esResult.min_seats ?? null,
+    max_seats: esResult.max_seats ?? null,
+    furnishing_status: esResult.furnishing_status || null,
+    listing_purpose: esResult.listing_purpose || null,
     latitude: location?.lat ?? null,
     longitude: location?.lon ?? null,
   };

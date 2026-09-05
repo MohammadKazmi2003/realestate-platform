@@ -164,7 +164,7 @@ function AddPropertyPage() {
 
     const [commonData, setCommonData] = useState({ title: '', description: '', price: '', location_text: '', listing_purpose_id: '', ownership_type_id: '', availability_status_id: '', phone_number: '' });
     const [residentialData, setResidentialData] = useState({ bhk_type_id: '', bathrooms: '', balconies: '', total_floors: '', property_on_floor: '', furnishing_status_id: '', carpet_area: '', built_up_area: '', super_built_up_area: '' });
-    const [commercialData, setCommercialData] = useState({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '', total_floors: '', property_on_floor: '' });
+    const [commercialData, setCommercialData] = useState({ commercial_sub_type_id: '', office_type_id: '', min_seats: '', max_seats: '', cabins: '', meeting_rooms: '', private_washrooms: '', shared_washrooms: '', passenger_lifts: '', service_lifts: '', is_pre_leased: false, has_noc: false, has_occupancy_cert: false, carpet_area: '', total_floors: '', property_on_floor: '', furnishing_status_id: '' });
     const [landData, setLandData] = useState({ plot_area: '', area_unit: 'sqft', is_boundary_wall_made: false });
     
     const [selectedAmenities, setSelectedAmenities] = useState<Set<number>>(new Set());
@@ -177,6 +177,7 @@ function AddPropertyPage() {
 
     const [coordinates, setCoordinates] = useState<{ lat: number; lng: number } | null>(null);
     const [imageUploads, setImageUploads] = useState<ImageUpload[]>([]);
+    const [isDragActive, setIsDragActive] = useState(false);
     
     const [lookupData, setLookupData] = useState<{
         propertyTypes: LookupType[], bhkTypes: BhkType[], listingPurposes: LookupType[],
@@ -263,7 +264,7 @@ function AddPropertyPage() {
 
     const availableListingPurposes = useMemo(() => {
         if (selectedParentTypeName === 'Land / Plot') {
-            return lookupData.listingPurposes.filter(p => p.name !== 'PG' & p.name !== 'Rent');
+            return lookupData.listingPurposes.filter(p => p.name !== 'PG' && p.name !== 'Rent');
         }
         if (selectedParentTypeName === 'Commercial') return lookupData.listingPurposes.filter(p => p.name !== 'PG');
         if (selectedParentTypeName === 'Residential') return lookupData.listingPurposes.filter(p => p.name !== 'Lease');
@@ -309,11 +310,28 @@ function AddPropertyPage() {
     };
     const handleCheckboxChange = (setter: React.Dispatch<React.SetStateAction<Set<number>>>, id: number) => { setter(prev => { const newSet = new Set(prev); if (newSet.has(id)) newSet.delete(id); else newSet.add(id); return newSet; }); };
     
+    const addMediaFiles = (files: FileList | File[]) => {
+        const arr = Array.from(files);
+        if (arr.length === 0) return;
+        const newUploads: ImageUpload[] = arr.map(file => ({ id: self.crypto.randomUUID(), file, preview: URL.createObjectURL(file), tag: '' }));
+        setImageUploads(prev => [...prev, ...newUploads]);
+    };
+
     const handleMediaChange = (e: ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files;
         if (files) {
-            const newUploads: ImageUpload[] = Array.from(files).map(file => ({ id: self.crypto.randomUUID(), file, preview: URL.createObjectURL(file), tag: '' }));
-            setImageUploads(prev => [...prev, ...newUploads]);
+            addMediaFiles(files);
+            // Reset so the same file can be selected again
+            e.target.value = '';
+        }
+    };
+
+    const handleMediaDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragActive(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            addMediaFiles(e.dataTransfer.files);
         }
     };
     
@@ -361,16 +379,21 @@ function AddPropertyPage() {
 
             if (imageUploads.length > 0) {
                 await Promise.all(imageUploads.map(async (upload, index) => {
-                    const compressedFile = await imageCompression(upload.file, { maxSizeMB: 1, maxWidthOrHeight: 1920 });
+                    // Only compress images — videos/PDFs upload as-is
+                    const isImage = upload.file.type.startsWith('image/');
+                    const fileToUpload = isImage
+                        ? await imageCompression(upload.file, { maxSizeMB: 1, maxWidthOrHeight: 1920 })
+                        : upload.file;
                     const sanitizedFileName = upload.file.name.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-.]/g, '');
                     const filePath = `${session.user.id}/${propertyId}/${Date.now()}-${sanitizedFileName}`;
-                    
-                    const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, compressedFile);
+
+                    const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, fileToUpload);
                     if (uploadError) throw new Error(`Failed to upload ${sanitizedFileName}: ${uploadError.message}`);
-                    
+
                     const { data: urlData } = supabase.storage.from('property-images').getPublicUrl(filePath);
-                    
-                    await supabase.from('property_media').insert({ property_id: propertyId, media_url: urlData.publicUrl, media_type: upload.file.type.startsWith('image/') ? 'image' : 'brochure_pdf', tag: upload.tag, display_order: index });
+
+                    const mediaType = isImage ? 'image' : upload.file.type.startsWith('video/') ? 'video' : 'brochure_pdf';
+                    await supabase.from('property_media').insert({ property_id: propertyId, media_url: urlData.publicUrl, media_type: mediaType, tag: upload.tag, display_order: index });
                 }));
             }
 
@@ -485,6 +508,7 @@ function AddPropertyPage() {
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Service Lifts</label><input name="service_lifts" type="number" min="0" value={commercialData.service_lifts} onChange={handleCommercialChange} className="neumorphic-input"/></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Total Floors</label><input name="total_floors" type="number" min="0" value={commercialData.total_floors} onChange={handleCommercialChange} className="neumorphic-input"/></div>
                                             <div><label className="block text-sm font-medium text-text-color-light mb-1">Property on Floor</label><input name="property_on_floor" type="number" min="0" value={commercialData.property_on_floor} onChange={handleCommercialChange} className="neumorphic-input"/></div>
+                                            <div><label className="block text-sm font-medium text-text-color-light mb-1">Furnishing Status</label><select name="furnishing_status_id" value={commercialData.furnishing_status_id} onChange={handleCommercialChange} className="neumorphic-input w-full"><option value="">Select...</option>{lookupData.furnishingStatuses.map(fs => <option key={fs.id} value={fs.id}>{fs.name}</option>)}</select></div>
                                         </div>
                                         <div className="pt-4 space-y-3">
                                             <label className="flex items-center gap-2 neumorphic-button !rounded-lg text-sm !p-3 cursor-pointer"><input type="checkbox" name="is_pre_leased" checked={commercialData.is_pre_leased} onChange={handleCommercialChange} className="h-4 w-4 shadow-neumorphic-inset appearance-none checked:bg-success-color rounded-sm"/>Is this property currently pre-leased?</label>
@@ -537,35 +561,56 @@ function AddPropertyPage() {
                             
                             <section>
                                <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">6. Media</h2>
-                               <div className="p-4 shadow-neumorphic-inset rounded-2xl">
-                                   <label htmlFor="media" className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-shadow-dark/30 rounded-xl cursor-pointer hover:bg-shadow-dark/10 transition-colors">
-                                     <UploadCloud className="w-8 h-8 text-text-color-light mb-2"/>
-                                     <span className="text-text-color-dark">Upload Images & Media</span>
-                                     <span className="text-xs text-text-color-light">PNG, JPG, PDF accepted</span>
-                                   </label>
-                                   <input id="media" type="file" multiple onChange={handleMediaChange} className="hidden" accept="image/*,.pdf"/>
-                                   {imageUploads.length > 0 && (
-                                     <div className="mt-6">
-                                       <p className="font-semibold text-text-color-dark mb-4">Image Previews:</p>
-                                       <div className="max-h-96 overflow-y-auto space-y-4 pr-2">
-                                           {imageUploads.map((upload) => (
-                                             <div key={upload.id} className="flex items-center gap-4 p-2 rounded-lg bg-bg-color shadow-neumorphic-outset">
-                                               <img src={upload.preview} alt="Preview" className="h-20 w-20 object-cover rounded-lg"/>
-                                               <div className="flex-grow">
-                                                   <label htmlFor={`tag-input-${upload.id}`} className="text-sm font-medium text-text-color-light">Tag this image</label>
-                                                   <input id={`tag-input-${upload.id}`} list={`tags-list-${propertyTypeId}`} value={upload.tag} onChange={(e) => handleTagChange(upload.id, e.target.value)} className="neumorphic-input w-full mt-1" placeholder="Select or type a tag..." required />
-                                               </div>
-                                               <button type="button" onClick={() => handleRemoveImage(upload.id)} className="p-2 text-danger-color hover:bg-danger-color/10 rounded-full"><Trash2 size={18}/></button>
-                                             </div>
-                                           ))}
-                                       </div>
-                                       <datalist id={`tags-list-${propertyTypeId}`}>
-                                         {availableImageTags.map(tag => (<option key={tag} value={tag} />))}
-                                       </datalist>
-                                     </div>
-                                   )}
-                               </div>
-                            </section>
+                                <div className="p-4 shadow-neumorphic-inset rounded-2xl">
+                                    <label
+                                      htmlFor="media"
+                                      onDragOver={(e) => { e.preventDefault(); setIsDragActive(true); }}
+                                      onDragLeave={() => setIsDragActive(false)}
+                                      onDrop={handleMediaDrop}
+                                      className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-500/10' : 'border-shadow-dark/30 hover:bg-shadow-dark/10'}`}
+                                    >
+                                      <UploadCloud className="w-10 h-10 text-text-color-light mb-3"/>
+                                      <span className="text-lg font-semibold text-text-color-dark text-center">Click to Upload Images & Videos</span>
+                                      <span className="text-sm text-text-color-light mt-1 text-center">or drag & drop files here to upload</span>
+                                      <span className="inline-flex items-center gap-2 mt-4 px-6 py-2.5 rounded-xl font-semibold text-white bg-cta-gradient shadow-neumorphic-outset pointer-events-none" aria-hidden="true">
+                                        <UploadCloud className="w-4 h-4" />
+                                        Click to Upload
+                                      </span>
+                                      <span className="text-xs text-text-color-light mt-3">PNG, JPG, MP4, WEBM, PDF accepted • Images, videos & brochures</span>
+                                    </label>
+                                    <input id="media" type="file" multiple onChange={handleMediaChange} className="hidden" accept="image/*,video/*,.pdf"/>
+                                    {imageUploads.length > 0 && (
+                                      <div className="mt-6">
+                                        <p className="font-semibold text-text-color-dark mb-4">Media Previews ({imageUploads.length}):</p>
+                                        <div className="max-h-96 overflow-y-auto space-y-4 pr-2">
+                                            {imageUploads.map((upload) => {
+                                              const isVideo = upload.file.type.startsWith('video/');
+                                              const isPdf = upload.file.type === 'application/pdf' || upload.file.name.toLowerCase().endsWith('.pdf');
+                                              return (
+                                              <div key={upload.id} className="flex items-center gap-4 p-2 rounded-lg bg-bg-color shadow-neumorphic-outset">
+                                                {isVideo ? (
+                                                  <video src={upload.preview} className="h-20 w-20 object-cover rounded-lg bg-black" muted playsInline preload="metadata" />
+                                                ) : isPdf ? (
+                                                  <div className="h-20 w-20 flex items-center justify-center rounded-lg bg-shadow-dark/10 text-xs font-semibold text-text-color-light text-center px-1">PDF</div>
+                                                ) : (
+                                                  <img src={upload.preview} alt="Preview" className="h-20 w-20 object-cover rounded-lg"/>
+                                                )}
+                                                <div className="flex-grow">
+                                                    <label htmlFor={`tag-input-${upload.id}`} className="text-sm font-medium text-text-color-light">Tag this {isVideo ? 'video' : isPdf ? 'file' : 'image'}</label>
+                                                    <input id={`tag-input-${upload.id}`} list={`tags-list-${propertyTypeId}`} value={upload.tag} onChange={(e) => handleTagChange(upload.id, e.target.value)} className="neumorphic-input w-full mt-1" placeholder="Select or type a tag..." required />
+                                                </div>
+                                                <button type="button" onClick={() => handleRemoveImage(upload.id)} aria-label="Remove file" className="p-2 text-danger-color hover:bg-danger-color/10 rounded-full"><Trash2 size={18}/></button>
+                                              </div>
+                                              );
+                                            })}
+                                        </div>
+                                        <datalist id={`tags-list-${propertyTypeId}`}>
+                                          {availableImageTags.map(tag => (<option key={tag} value={tag} />))}
+                                        </datalist>
+                                      </div>
+                                    )}
+                                </div>
+                             </section>
                             
                             <button type="submit" disabled={isSubmitting || isLoading} className="w-full neumorphic-button bg-cta-gradient py-3 text-lg font-bold">
                                 {isSubmitting ? <Loader2 className="animate-spin inline-block mr-2" /> : 'Submit Listing'}

@@ -26,6 +26,9 @@ export interface ClusterPoint {
   image_url?: string | null;
   bhk_type?: string | null;
   bathrooms?: number | null;
+  balconies?: number | null;
+  furnishing_status?: string | null;
+  listing_purpose?: string | null;
   area_sqft?: number | null;
   area_unit?: string | null;
   location_text?: string | null;

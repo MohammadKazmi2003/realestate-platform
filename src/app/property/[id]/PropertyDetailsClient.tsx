@@ -113,8 +113,16 @@ export default function PropertyDetailClient({ property }: Props) {
   };
   
   const residentialDetails = property.details_residential?.[0];
-  const commercialDetails = property.details_commercial?.[0];
+  const commercialDetails = property.details_commercial?.[0] as (typeof property.details_commercial extends (infer U)[] | null ? U : never) | undefined;
   const landDetails = property.details_land?.[0];
+  const residentialArea = residentialDetails?.carpet_area ?? residentialDetails?.built_up_area ?? residentialDetails?.super_built_up_area ?? null;
+  const residentialAreaLabel = residentialDetails?.carpet_area ? 'Carpet Area' : residentialDetails?.built_up_area ? 'Built-up Area' : residentialDetails?.super_built_up_area ? 'Super Built-up Area' : 'Carpet Area';
+  const floorLabel = (total: number | null | undefined, on: number | null | undefined) => {
+    if (total != null && (on != null)) return `Floor ${on} of ${total}`;
+    if (on != null) return `On floor ${on}`;
+    if (total != null) return `${total} floors`;
+    return null;
+  };
 
   return (
     <>
@@ -149,11 +157,13 @@ export default function PropertyDetailClient({ property }: Props) {
                     {residentialDetails && (
                         <>
                             <DetailItem icon={FaBed} label="Configuration" value={residentialDetails.bhk_types?.label} />
-                            <DetailItem icon={FaRulerCombined} label="Carpet Area" value={formatArea(residentialDetails.carpet_area, null)} />
+                            <DetailItem icon={FaRulerCombined} label={residentialAreaLabel} value={formatArea(residentialArea, null)} />
+                            {residentialDetails.built_up_area && residentialDetails.built_up_area !== residentialArea ? <DetailItem icon={FaRulerCombined} label="Built-up Area" value={formatArea(residentialDetails.built_up_area, null)} /> : null}
+                            {residentialDetails.super_built_up_area && residentialDetails.super_built_up_area !== residentialArea ? <DetailItem icon={FaRulerCombined} label="Super Built-up Area" value={formatArea(residentialDetails.super_built_up_area, null)} /> : null}
                             <DetailItem icon={FaBath} label="Bathrooms" value={residentialDetails.bathrooms} />
                             <DetailItem icon={DoorOpen} label="Balconies" value={residentialDetails.balconies} />
                             <DetailItem icon={FaTags} label="Furnishing" value={residentialDetails.lookup_furnishing_statuses?.name} />
-                            <DetailItem icon={Building2} label="Floor" value={residentialDetails.total_floors ? `Floor ${residentialDetails.property_on_floor} of ${residentialDetails.total_floors}` : null} />
+                            <DetailItem icon={Building2} label="Floor" value={floorLabel(residentialDetails.total_floors, residentialDetails.property_on_floor)} />
                         </>
                     )}
                     {commercialDetails && (
@@ -161,10 +171,13 @@ export default function PropertyDetailClient({ property }: Props) {
                          <DetailItem icon={Briefcase} label="Commercial Type" value={commercialDetails.lookup_commercial_sub_types?.name} />
                          <DetailItem icon={FaBuilding} label="Office Type" value={commercialDetails.office_type?.name} />
                           <DetailItem icon={FaRulerCombined} label="Carpet Area" value={formatArea(commercialDetails.carpet_area, null)} />
-                         <DetailItem icon={Building2} label="Floor" value={commercialDetails.total_floors ? `Floor ${commercialDetails.property_on_floor} of ${commercialDetails.total_floors}` : null} />
-                         <DetailItem icon={FaChair} label="Minimum Seats" value={commercialDetails.min_seats} />
-                         <DetailItem icon={FaChair} label="Maximum Seats" value={commercialDetails.max_seats} />
+                         <DetailItem icon={Building2} label="Floor" value={floorLabel((commercialDetails as any).total_floors, (commercialDetails as any).property_on_floor)} />
+                         <DetailItem icon={FaTags} label="Furnishing" value={(commercialDetails as any).lookup_furnishing_statuses?.name} />
+                         <DetailItem icon={FaChair} label="Minimum Seats" value={(commercialDetails as any).min_seats} />
+                         <DetailItem icon={FaChair} label="Maximum Seats" value={(commercialDetails as any).max_seats} />
                          <DetailItem icon={FaChair} label="Cabins" value={commercialDetails.cabins} />
+                         <DetailItem icon={FaChair} label="Meeting Rooms" value={commercialDetails.meeting_rooms} />
+                         <DetailItem icon={FaChair} label="Workstations" value={commercialDetails.workstations} />
                          <DetailItem icon={FaBath} label="Private Washrooms" value={commercialDetails.private_washrooms} />
                          <DetailItem icon={FaBath} label="Shared Washrooms" value={commercialDetails.shared_washrooms} />
                          <DetailItem icon={FaBuilding} label="Passenger Lifts" value={commercialDetails.passenger_lifts} />

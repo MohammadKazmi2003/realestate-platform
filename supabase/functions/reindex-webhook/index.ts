@@ -90,13 +90,30 @@ Deno.serve(async (req: Request) => {
 
       const coords = parseWKBPoint(property.location_point);
 
-      const [typeRes, purposeRes, profileRes, mediaRes, projectRes] = await Promise.all([
+      const [typeRes, purposeRes, profileRes, mediaRes, projectRes, residentialRes, commercialRes, landRes, amenitiesRes, furnishingsRes] = await Promise.all([
         supabase.from('property_types').select('name').eq('id', property.property_type_id).single(),
         supabase.from('lookup_listing_purposes').select('name').eq('id', property.listing_purpose_id).single(),
         supabase.from('profiles').select('name, phone_number').eq('id', property.user_id).single(),
         supabase.from('property_media').select('media_url').eq('property_id', property.id).order('display_order'),
         supabase.from('projects').select('name, builder_name').eq('id', property.project_id).maybeSingle(),
+        supabase.from('details_residential').select('*, bhk_types(label), lookup_furnishing_statuses(name)').eq('property_id', property.id).maybeSingle(),
+        supabase.from('details_commercial').select('*, lookup_furnishing_statuses(name)').eq('property_id', property.id).maybeSingle(),
+        supabase.from('details_land').select('*').eq('property_id', property.id).maybeSingle(),
+        supabase.from('junction_property_amenities').select('amenity_id, lookup_amenities(name)').eq('property_id', property.id),
+        supabase.from('junction_property_furnishings').select('furnishing_item_id, lookup_furnishing_items(name)').eq('property_id', property.id),
       ]);
+      const resData: any = (residentialRes as any)?.data || null;
+      const comData: any = (commercialRes as any)?.data || null;
+      const landData: any = (landRes as any)?.data || null;
+      const bhkLabel: string = resData?.bhk_types?.label || '';
+      const bedrooms: number | null = (() => {
+        if (!bhkLabel) return null;
+        if (/^studio/i.test(bhkLabel.trim())) return 0;
+        const m = bhkLabel.match(/(\d+(\.\d+)?)/);
+        return m ? Math.floor(parseFloat(m[1])) : null;
+      })();
+      const areaSqft: number = (landData?.plot_area ?? resData?.carpet_area ?? resData?.built_up_area ?? resData?.super_built_up_area ?? comData?.carpet_area ?? 0) as number;
+      const furnishingStatus: string = resData?.lookup_furnishing_statuses?.name || (comData as any)?.lookup_furnishing_statuses?.name || '';
 
       const doc = {
         id: property.id,
@@ -124,9 +141,12 @@ Deno.serve(async (req: Request) => {
         created_at: property.created_at,
         updated_at: property.updated_at || property.created_at,
         suggest: [property.title?.trim(), property.location_text?.trim(), projectRes.data?.name?.trim()].filter(Boolean),
-        bathrooms: 0, balconies: 0, area_sqft: 0, area_unit: 'sqft',
-        bhk_type: '', bhk_type_id: null, furnishing_status: '',
-        amenities: [], furnishings: [], other_rooms: [], location_advantages: [],
+        bathrooms: resData?.bathrooms ?? 0, balconies: resData?.balconies ?? 0, area_sqft: areaSqft, area_unit: landData?.area_unit || 'sqft',
+        bhk_type: bhkLabel, bhk_type_id: resData?.bhk_type_id ?? null, bedrooms, furnishing_status: furnishingStatus,
+        cabins: comData?.cabins ?? 0, workstations: comData?.workstations ?? comData?.max_seats ?? 0, min_seats: comData?.min_seats ?? 0, max_seats: comData?.max_seats ?? 0,
+        amenities: ((amenitiesRes as any)?.data || []).map((a: any) => a.lookup_amenities?.name || '').filter(Boolean),
+        furnishings: ((furnishingsRes as any)?.data || []).map((f: any) => f.lookup_furnishing_items?.name || '').filter(Boolean),
+        other_rooms: [], location_advantages: [],
         availability_status: '', ownership_type: '',
       };
 

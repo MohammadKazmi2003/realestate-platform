@@ -16,6 +16,9 @@ export interface HoverPointEntry {
   all_images?: string[];
   bhk_type?: string | null;
   bathrooms?: number | null;
+  balconies?: number | null;
+  furnishing_status?: string | null;
+  listing_purpose?: string | null;
   area_sqft?: number | null;
   area_unit?: string | null;
   location_text?: string | null;
