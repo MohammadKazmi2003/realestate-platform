@@ -28,9 +28,11 @@ ON public.properties (user_id);
 CREATE INDEX IF NOT EXISTS idx_properties_status
 ON public.properties (status);
 
--- 4. Trigram GIN index on location_text for ILIKE queries
+-- 4. Trigram GIN index on location_text for ILIKE queries.
+-- Opclass is schema-qualified: db-push sessions don't have extensions/ on
+-- search_path, so the unqualified name fails remotely while working in Studio.
 CREATE INDEX IF NOT EXISTS idx_properties_location_text_trgm
-ON public.properties USING GIN (location_text gin_trgm_ops);
+ON public.properties USING GIN (location_text extensions.gin_trgm_ops);
 
 -- 5. B-tree indexes on foreign key columns in secondary tables
 CREATE INDEX IF NOT EXISTS idx_leads_property_id
@@ -199,13 +201,13 @@ AS $$
         p.location_text,
         pr.name AS project_name,
         pt.name AS property_type,
-        similarity(p.location_text, p_prefix) AS similarity
+        extensions.similarity(p.location_text, p_prefix) AS similarity
     FROM properties p
     LEFT JOIN projects pr ON p.project_id = pr.id
     LEFT JOIN property_types pt ON p.property_type_id = pt.id
-    WHERE p.location_text % p_prefix
+    WHERE p.location_text OPERATOR(extensions.%) p_prefix
       AND p.status = 'available'
-    ORDER BY similarity(p.location_text, p_prefix) DESC
+    ORDER BY extensions.similarity(p.location_text, p_prefix) DESC
     LIMIT p_limit;
 $$;
 

@@ -83,3 +83,5 @@ playwright.config.ts
 # background worker runtime artifacts (start-all.sh pid + log)
 .worker.pid
 .worker.log
+# local database dumps (schema + data + auth; large and sensitive — never commit)
+local_*.sql

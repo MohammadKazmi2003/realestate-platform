@@ -143,7 +143,7 @@ async function buildPropertyDocument(property) {
   const bhkLabel = resData?.bhk_types?.label || null;
   // Residential furnishing first, then commercial (new column), so rent +
   // commercial listings show furnishing like residential does.
-  const furnishingStatus = resData?.lookup_furnishing_statuses?.name || (comData as any)?.lookup_furnishing_statuses?.name || (comData as any)?.furnishing_status || null;
+  const furnishingStatus = resData?.lookup_furnishing_statuses?.name || comData?.lookup_furnishing_statuses?.name || comData?.furnishing_status || null;
   const commercialCabins = commercialRes.data?.cabins ?? null;
   const commercialWorkstations = commercialRes.data?.workstations ?? commercialRes.data?.max_seats ?? null;
   const commercialMinSeats = commercialRes.data?.min_seats ?? null;
@@ -184,7 +184,7 @@ async function buildPropertyDocument(property) {
     workstations: commercialWorkstations ?? 0,
     min_seats: commercialMinSeats ?? 0,
     max_seats: commercialMaxSeats ?? 0,
-    area_sqft: areaData.carpet_area ?? (areaData as any).built_up_area ?? (areaData as any).super_built_up_area ?? areaData.plot_area ?? 0,
+    area_sqft: areaData.carpet_area ?? areaData.built_up_area ?? areaData.super_built_up_area ?? areaData.plot_area ?? 0,
     area_unit: landRes.data?.area_unit || 'sqft',
     furnishing_status: furnishingStatus || '',
     amenities: (amenitiesRes.data || []).map((a) => a.lookup_amenities?.name || '').filter(Boolean),

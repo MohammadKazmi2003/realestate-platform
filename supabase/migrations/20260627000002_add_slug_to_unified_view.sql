@@ -80,7 +80,7 @@ SELECT
     (
         SELECT NULLIF(regexp_replace(bhk.label, '[^0-9]'::text, ''::text, 'g'::text), ''::text)::integer
     ) AS bedrooms,
-    NULL::vector(768) AS description_embedding
+    NULL::public.vector(768) AS description_embedding
 FROM
     public.properties prop
 LEFT JOIN
