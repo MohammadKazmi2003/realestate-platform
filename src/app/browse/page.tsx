@@ -18,6 +18,8 @@ import { tenant } from '@/lib/tenant';
 import { formatMoneyCompact } from '@/lib/format';
 import { mergeUniqueById } from '@/lib/collections';
 import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
+import { IntentTabs } from '@/app/components/IntentTabs';
+import { intentToListingPurpose, parseIntentFromSearch, withIntentInSearch, type Intent } from '@/lib/intent';
 import { showPropertyPreview, hidePropertyPreview, showListingPreviewCard, hideListingPreviewCard, destroyPreviewCards, listingCardId, repositionListingCard } from '@/lib/map/previewCard';
 import type { Feature } from 'geojson';
 
@@ -140,6 +142,9 @@ export default function BrowsePage() {
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [searchScope, setSearchScope] = useState<SearchScope>('both');
+  // Intent tabs: Buy (Sale, default) | Rent (Rent only).
+  // Projects hidden on Rent (sale inventory).
+  const [intent, setIntent] = useState<Intent>('buy');
   const [filters, setFilters] = useState({ location: '', minPrice: '', maxPrice: '', bhkTypeId: '', propertyTypeId: '' });
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
@@ -179,6 +184,7 @@ export default function BrowsePage() {
   const fetchPropertiesRef = useRef<typeof fetchAllProperties>(() => Promise.resolve());
   const searchAsIMoveRef = useRef(searchAsIMove);
   const searchScopeRef = useRef(searchScope);
+  const intentRef = useRef<Intent>(intent);
   const fullScreenResultsRef = useRef(fullScreenResults);
   const fetchIdRef = useRef(0);
   const initialMoveEndRef = useRef(true);
@@ -201,6 +207,7 @@ export default function BrowsePage() {
 
   searchAsIMoveRef.current = searchAsIMove;
   searchScopeRef.current = searchScope;
+  intentRef.current = intent;
   sortByRef.current = sortBy;
   fullScreenResultsRef.current = fullScreenResults;
   isDrawingModeRef.current = isDrawingMode;
@@ -391,13 +398,18 @@ export default function BrowsePage() {
       setLoadingMore(true);
     }
 
-    const scope = searchScopeRef.current;
+    const rawScope = searchScopeRef.current;
+    // Defense in depth: rent intent never queries projects even if scope state lags.
+    const scope = intentRef.current === 'rent' && rawScope !== 'properties' ? 'properties' : rawScope;
     const isListView = fullScreenResultsRef.current;
     const { bhkIdToLabel, propTypeIdToName } = lookupMaps;
     const activeFilters = filtersRef.current;
+    const activeIntent = intentRef.current;
+    const activeListingPurpose = intentToListingPurpose(activeIntent);
     // Page size: 24 always. Map dots come from the markers array returned by
     // /api/map-data (up to 500 per viewport), not from the 24 list docs here.
     const params: any = { pageSize: 24, sort: sortByRef.current };
+    if (activeListingPurpose) params.listingPurpose = activeListingPurpose;
 
     if (activeFilters.location) params.location = activeFilters.location;
     if (activeFilters.minPrice) params.minPrice = Number(activeFilters.minPrice);
@@ -448,6 +460,7 @@ export default function BrowsePage() {
           maxPrice: activeFilters.maxPrice ? Number(activeFilters.maxPrice) : undefined,
           pageSize: 24,
           sort: sortByRef.current,
+          ...(activeListingPurpose ? { listingPurpose: activeListingPurpose } : {}),
         };
         if (activeFilters.bhkTypeId && bhkIdToLabel[Number(activeFilters.bhkTypeId)]) {
           combinedParams.bhkType = bhkIdToLabel[Number(activeFilters.bhkTypeId)];
@@ -542,12 +555,13 @@ export default function BrowsePage() {
       } else if (scope === 'both' && isAppend) {
         // APPEND: Use existing /api/search endpoint for pagination
         const combinedParams: any = {
-          scope: 'both',
+          scope: intentRef.current === 'rent' ? 'properties' : 'both',
           query: activeFilters.location || undefined,
           minPrice: activeFilters.minPrice ? Number(activeFilters.minPrice) : undefined,
           maxPrice: activeFilters.maxPrice ? Number(activeFilters.maxPrice) : undefined,
           pageSize: 24,
           sort: sortByRef.current,
+          ...(activeListingPurpose ? { listingPurpose: activeListingPurpose } : {}),
         };
         if (activeFilters.bhkTypeId && bhkIdToLabel[Number(activeFilters.bhkTypeId)]) {
           combinedParams.bhkType = bhkIdToLabel[Number(activeFilters.bhkTypeId)];
@@ -1228,6 +1242,8 @@ export default function BrowsePage() {
     max: filters.maxPrice ? Number(filters.maxPrice) || undefined : undefined,
   };
   const priceCurrency = searchScope === 'projects' ? tenant.projectCurrency : tenant.propertyCurrency;
+  // Rent uses monthly bands; Buy/All use sale bands (All shows mixed caption).
+  const pricePurpose = intent === 'rent' ? 'rent' : 'sale';
   const handlePriceChange = (v: PriceRangeValue) => {
     const next = {
       minPrice: v.min != null ? String(v.min) : '',
@@ -1413,7 +1429,9 @@ export default function BrowsePage() {
   };
 
   const handleScopeChange = (scope: SearchScope) => {
-    setSearchScope(scope);
+    // Rent intent is properties-only (projects are sale inventory).
+    const effectiveScope = intentRef.current === 'rent' && scope !== 'properties' ? 'properties' : scope;
+    setSearchScope(effectiveScope);
     setPropertyNextCursor(null);
     setProjectNextCursor(null);
     setHasMoreProperties(false);
@@ -1425,6 +1443,46 @@ export default function BrowsePage() {
       searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
     );
   };
+
+  const handleIntentChange = (next: Intent) => {
+    setIntent(next);
+    intentRef.current = next;
+    // Sale↔rent price bands differ ~400×: never carry values across intents.
+    setFilters(prev => ({ ...prev, minPrice: '', maxPrice: '' }));
+    filtersRef.current = { ...filtersRef.current, minPrice: '', maxPrice: '' };
+    // Rent forces properties scope; Buy leaves scope as-is.
+    if (next === 'rent' && searchScopeRef.current !== 'properties') {
+      setSearchScope('properties');
+    }
+    setPropertyNextCursor(null);
+    setProjectNextCursor(null);
+    setHasMoreProperties(false);
+    setHasMoreProjects(false);
+    setCombinedNextCursor(null);
+    setSortedResultOrder([]);
+    try {
+      router.replace(`/browse${withIntentInSearch(window.location.search, next)}`, { scroll: false });
+    } catch {}
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchPropertiesRef.current(
+        searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+      );
+    }, 200);
+  };
+
+  // Deep-link ?intent= (default buy). Browse tabs are Buy|Rent only, so
+  // Lease/PG deep-links (e.g. shared from /list) map to the Rent tab.
+  useEffect(() => {
+    try {
+      const parsed = parseIntentFromSearch(window.location.search);
+      const initial = parsed === 'lease' || parsed === 'pg' ? 'rent' : parsed;
+      setIntent(initial);
+      intentRef.current = initial;
+      if (initial === 'rent') setSearchScope('properties');
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const updateBoundaryLayer = useCallback((points: { lat: number; lng: number }[], isActive?: boolean) => {
     const map = mapRef.current;
@@ -1629,23 +1687,36 @@ export default function BrowsePage() {
              <div className="px-4 pb-2">
               <div className="shadow-neumorphic-outset rounded-3xl p-4 space-y-4">
 
+                {/* Intent Selector: Buy | Rent (Buy: Properties/Projects/Both; Rent: Properties only) */}
+                <IntentTabs value={intent} onChange={handleIntentChange} />
+
                 {/* Scope Selector */}
                 <div className="flex gap-1 p-1 rounded-2xl shadow-neumorphic-inset">
-                  {SCOPE_OPTIONS.map(opt => (
-                    <button
-                      key={opt.value}
-                      onClick={() => handleScopeChange(opt.value)}
-                      className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 px-3 rounded-xl transition-all ${
-                        searchScope === opt.value
-                          ? 'shadow-neumorphic-outset bg-bg-color text-text-color-dark'
-                          : 'text-text-color-light hover:text-text-color-dark'
-                      }`}
-                    >
-                      {opt.icon && opt.icon}
-                      {opt.label}
-                    </button>
-                  ))}
+                  {SCOPE_OPTIONS.map(opt => {
+                    const disabledByIntent = intent === 'rent' && opt.value !== 'properties';
+                    return (
+                      <button
+                        key={opt.value}
+                        onClick={() => handleScopeChange(opt.value)}
+                        disabled={disabledByIntent}
+                        title={disabledByIntent ? 'Projects only listed for sale' : undefined}
+                        className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 px-3 rounded-xl transition-all ${
+                          searchScope === opt.value
+                            ? 'shadow-neumorphic-outset bg-bg-color text-text-color-dark'
+                            : 'text-text-color-light hover:text-text-color-dark'
+                        } ${disabledByIntent ? 'opacity-40 cursor-not-allowed' : ''}`}
+                      >
+                        {opt.icon && opt.icon}
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
+                {intent === 'rent' && (
+                  <p className="text-[11px] text-text-color-light text-center -mt-2">
+                    Projects only listed for sale.
+                  </p>
+                )}
 
                 {/* Location Search */}
                 <div className="relative" ref={autocompleteRef}>
@@ -1669,7 +1740,7 @@ export default function BrowsePage() {
                 <PriceRangeFilter
                   id="browse-price"
                   currency={priceCurrency}
-                  purpose="sale"
+                  purpose={pricePurpose}
                   value={priceRangeValue}
                   onChange={handlePriceChange}
                   onCommit={handlePriceCommit}

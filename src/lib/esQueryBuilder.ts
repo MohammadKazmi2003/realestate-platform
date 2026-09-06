@@ -141,6 +141,17 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
 
   if (propertyType) propertyFilters.push({ term: { property_type: propertyType } });
   if (bhkType) propertyFilters.push({ term: { bhk_type: bhkType } });
+  // Normalize intent labels: 'Sale'↔'Sell' collapse so legacy docs + PG drift
+  // can't silently return 0 hits. Buy matches both variants.
+  const normalizedPurpose = (() => {
+    if (typeof listingPurpose !== 'string') return undefined;
+    const t = listingPurpose.trim().toLowerCase();
+    if (!t) return undefined;
+    if (t === 'sell' || t === 'sale') return '__sale__';
+    return t;
+  })();
+  const isRentLikeIntent =
+    typeof listingPurpose === 'string' && /rent|lease|\bpg\b/i.test(listingPurpose);
   // Generic bedrooms range for bedrooms-model tenants (dual-written by the
   // indexer alongside bhk_type; absent params → no clause → zero behavior change).
   if (minBedrooms != null || maxBedrooms != null) {
@@ -149,7 +160,11 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
     if (maxBedrooms != null) range.lte = maxBedrooms;
     propertyFilters.push({ range: { bedrooms: range } });
   }
-  if (listingPurpose) propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+  if (normalizedPurpose === '__sale__') {
+    propertyFilters.push({ terms: { listing_purpose: ['Sell', 'Sale'] } });
+  } else if (normalizedPurpose) {
+    propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+  }
   if (normalizedAmenities.length > 0) propertyFilters.push({ terms: { amenities: normalizedAmenities } });
   if (normalizedFurnishings.length > 0) propertyFilters.push({ terms: { furnishings: normalizedFurnishings } });
   if (bathrooms != null) propertyFilters.push({ range: { bathrooms: { gte: bathrooms } } });
@@ -181,6 +196,13 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
         location: { points: polygon.map((p: any) => ({ lat: p.lat, lon: p.lng })) },
       },
     });
+  }
+
+  // Rent-like intents (Rent/Lease/PG) are property-only: projects are
+  // for-sale inventory. Excluding at filter level keeps one query, one
+  // population for list/badge/markers (no app-side post-filter).
+  if (isRentLikeIntent) {
+    commonFilters.push({ bool: { must_not: { term: { entity_type: 'project' } } } });
   }
 
   const filters: any[] = [...commonFilters];

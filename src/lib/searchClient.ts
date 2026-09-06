@@ -5,6 +5,30 @@ import { supabase } from './supabaseClient';
 const SEARCH_API = '/api/search';
 const AUTOCOMPLETE_API = '/api/search/autocomplete';
 
+// Cached id lookup so the PG fallback can filter by intent without the
+// client needing to know per-environment lookup IDs (Sell vs Sale drift).
+let listingPurposeIdCache: Record<string, number> | null = null;
+async function resolveListingPurposeId(label?: string | null): Promise<number | null> {
+  if (!label || !label.trim()) return null;
+  const t = label.trim().toLowerCase();
+  try {
+    if (!listingPurposeIdCache) {
+      const { data } = await supabase.from('lookup_listing_purposes').select('id,name');
+      const map: Record<string, number> = {};
+      for (const row of (data as any[]) || []) {
+        map[String(row.name).trim().toLowerCase()] = row.id;
+      }
+      listingPurposeIdCache = map;
+    }
+    if (t === 'sell' || t === 'sale') {
+      return listingPurposeIdCache['sell'] ?? listingPurposeIdCache['sale'] ?? null;
+    }
+    return listingPurposeIdCache[t] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function pgFallbackSearch(params: SearchQueryInput): Promise<any> {
   logger.warn('ES search failed, falling back to PostgreSQL', params);
   try {
@@ -15,6 +39,10 @@ async function pgFallbackSearch(params: SearchQueryInput): Promise<any> {
     };
     if (params.bhkType) rpcParams.p_bhk_type = params.bhkType;
     if (params.propertyType) rpcParams.p_property_type = params.propertyType;
+    if (params.listingPurpose) {
+      const pid = await resolveListingPurposeId(params.listingPurpose);
+      if (pid != null) rpcParams.p_listing_purpose_id = pid;
+    }
     if (params.lat != null && params.lng != null && params.radiusKm) {
       rpcParams.min_lat = params.lat - (params.radiusKm / 111);
       rpcParams.max_lat = params.lat + (params.radiusKm / 111);

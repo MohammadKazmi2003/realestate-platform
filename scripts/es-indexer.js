@@ -169,9 +169,15 @@ async function buildPropertyDocument(property) {
     price: property.price || 0,
     sort_price: property.price || 0,
     entity_type: 'property',
-    property_type: typeRes.data?.name || '',
+    property_type: (typeRes.data?.name || '').trim(),
     property_type_id: property.property_type_id,
-    listing_purpose: purposeRes.data?.name || '',
+    listing_purpose: (() => {
+      const raw = (purposeRes.data?.name || '').trim();
+      // Canonicalize legacy 'Sale' variant to DB-canonical 'Sell' so intent
+      // filters never miss docs across environments.
+      if (/^sale$/i.test(raw)) return 'Sell';
+      return raw;
+    })(),
     listing_purpose_id: property.listing_purpose_id,
     availability_status: '',
     ownership_type: '',

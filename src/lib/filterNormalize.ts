@@ -238,9 +238,20 @@ export function normalizeFilters(raw: RawMapFilters): NormalizedMapFilters {
   }
   if (raw.propertyType) out.propertyType = raw.propertyType;
   if (raw.bhkType) out.bhkType = raw.bhkType;
+  // Canonicalize intent case (Rent vs rent) so cache keys collapse instead of
+  // duplicating per case variant. Sell/Sale collapse to canonical 'Sell'.
+  const normalizeIntentLabel = (v: string): string => {
+    const t = v.trim();
+    const l = t.toLowerCase();
+    if (l === 'sell' || l === 'sale') return 'Sell';
+    if (l === 'rent') return 'Rent';
+    if (l === 'lease') return 'Lease';
+    if (l === 'pg') return 'PG';
+    return t;
+  };
   if (raw.minBedrooms != null) out.minBedrooms = raw.minBedrooms;
   if (raw.maxBedrooms != null) out.maxBedrooms = raw.maxBedrooms;
-  if (raw.listingPurpose) out.listingPurpose = raw.listingPurpose;
+  if (raw.listingPurpose) out.listingPurpose = normalizeIntentLabel(raw.listingPurpose);
   const arrayFields = new Set(cfg.arrayFields);
   out.amenities = arrayFields.has('amenities') ? normArray(raw.amenities) : raw.amenities;
   out.furnishings = arrayFields.has('furnishings') ? normArray(raw.furnishings) : raw.furnishings;

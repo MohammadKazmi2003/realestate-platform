@@ -34,7 +34,7 @@ export function getPriceScale(currency?: string, purpose?: PricePurpose): PriceS
 
 /** 'rent'/'sale' from a listing-purpose label or id-ish string. Defaults to sale. */
 export function purposeFromListingPurpose(listingPurpose?: string | null): PricePurpose {
-  if (typeof listingPurpose === 'string' && /rent|lease/i.test(listingPurpose)) return 'rent';
+  if (typeof listingPurpose === 'string' && /rent|lease|\bpg\b/i.test(listingPurpose)) return 'rent';
   return 'sale';
 }
 

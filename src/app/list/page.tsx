@@ -9,7 +9,23 @@ import { getLookup } from '@/lib/lookupCache';
 import { tenant } from '@/lib/tenant';
 import { mergeUniqueById } from '@/lib/collections';
 import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
+import { normalizeListingPurposeLabel, parseIntentFromSearch, withIntentInSearch } from '@/lib/intent';
 import { purposeFromListingPurpose } from '@/lib/priceScale';
+
+// Listing-type dropdown options (user-facing labels; Buy maps to DB 'Sell').
+type ListingTypeKey = 'buy' | 'rent' | 'lease' | 'pg';
+const LISTING_TYPE_OPTIONS: { value: ListingTypeKey; label: string }[] = [
+  { value: 'buy', label: 'Buy' },
+  { value: 'rent', label: 'Rent' },
+  { value: 'lease', label: 'Lease' },
+  { value: 'pg', label: 'PG' },
+];
+const LISTING_TYPE_LABELS: Record<ListingTypeKey, string[]> = {
+  buy: ['sell', 'sale'],
+  rent: ['rent'],
+  lease: ['lease'],
+  pg: ['pg'],
+};
 
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
@@ -172,8 +188,7 @@ const FilterSidebar = ({
             <div>
               <label className="text-sm text-text-color-light block mb-1">Listing Purpose</label>
               <select value={filters.listingPurposeId} onChange={e => onFilterChange('listingPurposeId', e.target.value)} className="neumorphic-input w-full">
-                <option value="">Any</option>
-                {listingPurposes.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                {listingPurposes.map(l => <option key={l.id} value={l.id}>{normalizeListingPurposeLabel(l.name) === 'Sell' ? 'Buy' : l.name}</option>)}
               </select>
             </div>
           </div>
@@ -305,6 +320,7 @@ export default function ListPage() {
   const [nextCursor, setNextCursor] = useState<any[] | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const lookupsLoadedRef = useRef(false);
 
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
@@ -453,12 +469,64 @@ export default function ListPage() {
         furnishingStatusIdToName: Object.fromEntries(furnishingData.map((f: any) => [f.id, f.name])),
         amenityIdToName: Object.fromEntries(amenityData.map((a: any) => [a.id, a.name])),
       });
+      // Apply ?intent= (default buy) once lookups resolve labels→ids.
+      if (!lookupsLoadedRef.current) {
+        lookupsLoadedRef.current = true;
+        try {
+          const initial = parseIntentFromSearch(window.location.search);
+          const findId = (names: string[]) => {
+            const hit = (listingPurposeData as any[]).find((l: any) =>
+              names.includes(String(l.name).trim().toLowerCase())
+            );
+            return hit ? String(hit.id) : '';
+          };
+          const initialId = findId(LISTING_TYPE_LABELS[initial] ?? LISTING_TYPE_LABELS.buy);
+          const sellId = findId(LISTING_TYPE_LABELS.buy);
+          const targetId = initialId || sellId;
+          if (targetId) {
+            setFilters(prev => (prev.listingPurposeId ? prev : { ...prev, listingPurposeId: targetId }));
+          }
+        } catch {}
+        debouncedFetchProperties();
+      }
     };
     fetchDropdowns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Listing-type dropdown value, derived from the active purpose filter.
+  // Buy is the default once lookups resolve; Sell displays as Buy.
+  const listingTypeKey: ListingTypeKey = (() => {
+    const norm = normalizeListingPurposeLabel(lookupMaps.listingPurposeIdToName[Number(filters.listingPurposeId)]);
+    if (norm === 'Rent') return 'rent';
+    if (norm === 'Lease') return 'lease';
+    if (norm === 'PG') return 'pg';
+    return 'buy';
+  })();
 
   const handleFilterChange = (key: keyof Filters, value: any) => {
     setFilters(prev => ({ ...prev, [key]: value }));
+    // Keep the toolbar dropdown + URL in sync when the drawer select changes.
+    if (key === 'listingPurposeId' && value) {
+      const label = lookupMaps.listingPurposeIdToName[Number(value)];
+      const norm = normalizeListingPurposeLabel(label);
+      const nextKey: ListingTypeKey =
+        norm === 'Rent' ? 'rent' : norm === 'Lease' ? 'lease' : norm === 'PG' ? 'pg' : 'buy';
+      try {
+        window.history.replaceState(null, '', `${window.location.pathname}${withIntentInSearch(window.location.search, nextKey)}`);
+      } catch {}
+    }
+    debouncedFetchProperties();
+  };
+
+  const handleListingTypeChange = (next: ListingTypeKey) => {
+    const hit = listingPurposes.find((l) => LISTING_TYPE_LABELS[next].includes(l.name.trim().toLowerCase()));
+    const purposeId = hit ? String(hit.id) : '';
+    // Sale↔rent bands differ ~400×: never carry values across listing types.
+    setFilters(prev => ({ ...prev, listingPurposeId: purposeId, minPrice: '', maxPrice: '' }));
+    try {
+      window.history.replaceState(null, '', `${window.location.pathname}${withIntentInSearch(window.location.search, next)}`);
+    } catch {}
     debouncedFetchProperties();
   };
 
@@ -481,11 +549,15 @@ export default function ListPage() {
   };
 
   const clearFilters = () => {
+    const sellHit = listingPurposes.find((l) => ['sell', 'sale'].includes(l.name.trim().toLowerCase()));
+    try {
+      window.history.replaceState(null, '', `${window.location.pathname}${withIntentInSearch(window.location.search, 'buy')}`);
+    } catch {}
     setFilters({
       location: '',
       propertyTypeId: '',
       bhkTypeId: '',
-      listingPurposeId: '',
+      listingPurposeId: sellHit ? String(sellHit.id) : '',
       minPrice: '',
       maxPrice: '',
       minArea: '',
@@ -532,6 +604,16 @@ export default function ListPage() {
             />
           </div>
           <div className="flex items-center gap-2 sm:ml-auto">
+            <select
+              value={listingTypeKey}
+              onChange={e => handleListingTypeChange(e.target.value as ListingTypeKey)}
+              aria-label="Listing type"
+              className="neumorphic-input !w-auto !min-w-[130px]"
+            >
+              {LISTING_TYPE_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
             <select
               value={sort}
               onChange={e => handleSortChange(e.target.value as SortOption)}

@@ -104,7 +104,17 @@ export async function POST(req: NextRequest) {
 
     if (propertyType) propertyFilters.push({ term: { property_type: propertyType } });
     if (bhkType) propertyFilters.push({ term: { bhk_type: bhkType } });
-    if (listingPurpose) propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+    const normalizedPurpose =
+      typeof listingPurpose === 'string' && listingPurpose.trim()
+        ? listingPurpose.trim().toLowerCase()
+        : undefined;
+    const isRentLikeIntent =
+      typeof listingPurpose === 'string' && /rent|lease|\bpg\b/i.test(listingPurpose);
+    if (normalizedPurpose === 'sell' || normalizedPurpose === 'sale') {
+      propertyFilters.push({ terms: { listing_purpose: ['Sell', 'Sale'] } });
+    } else if (normalizedPurpose) {
+      propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+    }
     if (normalizedAmenities.length > 0) propertyFilters.push({ terms: { amenities: normalizedAmenities } });
     if (normalizedFurnishings.length > 0) propertyFilters.push({ terms: { furnishings: normalizedFurnishings } });
 
@@ -150,6 +160,11 @@ export async function POST(req: NextRequest) {
           },
         },
       });
+    }
+
+    // Rent-like intents exclude for-sale projects (single query, no app-side filter).
+    if (isRentLikeIntent) {
+      commonFilters.push({ bool: { must_not: { term: { entity_type: 'project' } } } });
     }
 
     const filters: any[] = [...commonFilters];
