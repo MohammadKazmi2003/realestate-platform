@@ -34,6 +34,10 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
+  // BullMQ (used by route handlers via lib/queue + lib/events) must stay an
+  // external require — bundling its ESM (child-processor dynamic requires)
+  // breaks the build/route compile with critical-dependency warnings.
+  serverExternalPackages: ['bullmq'],
   images: {
     remotePatterns: [
       {

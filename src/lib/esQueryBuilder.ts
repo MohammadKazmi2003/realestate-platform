@@ -8,6 +8,14 @@ function sanitize(s: string | undefined, maxLen = 200): string | undefined {
 }
 
 function buildSortClause(sort: string, lat?: number, lng?: number, scope?: string) {
+  // Unique tiebreaker so search_after pagination can never return the same
+  // doc on two pages (tied created_at/price/_score otherwise overlap, which
+  // surfaces as duplicate React keys in infinite-scroll lists). Uses the
+  // keyword `id` field — _id sorting is disallowed (no fielddata) in ES 8.
+  return [...buildSortClauseInner(sort, lat, lng, scope), { id: { order: 'asc' } }];
+}
+
+function buildSortClauseInner(sort: string, lat?: number, lng?: number, scope?: string) {
   // NOTE: zero-price docs sort last via missing:'_last' (indexed, no painless
   // script) — cheaper than the previous _script sort and filter-cache friendly.
   if (scope === 'both') {

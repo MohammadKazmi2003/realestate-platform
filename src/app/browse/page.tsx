@@ -16,6 +16,7 @@ import { MarkerLruCache } from '@/lib/markerCache';
 import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, setHighlightState, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
 import { tenant } from '@/lib/tenant';
 import { formatMoneyCompact } from '@/lib/format';
+import { mergeUniqueById } from '@/lib/collections';
 import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
 import { showPropertyPreview, hidePropertyPreview, showListingPreviewCard, hideListingPreviewCard, destroyPreviewCards, listingCardId, repositionListingCard } from '@/lib/map/previewCard';
 import type { Feature } from 'geojson';
@@ -619,9 +620,9 @@ export default function BrowsePage() {
           }
 
           // Cap arrays to prevent unbounded memory growth during infinite scroll
-          setProperties(prev => [...prev, ...props].slice(-MAX_LIST_ITEMS));
-          setProjects(prev => [...prev, ...projs].slice(-MAX_LIST_ITEMS));
-          setSortedResultOrder(prev => [...prev, ...order].slice(-MAX_LIST_ITEMS));
+          setProperties(prev => mergeUniqueById(prev, props).slice(-MAX_LIST_ITEMS));
+          setProjects(prev => mergeUniqueById(prev, projs).slice(-MAX_LIST_ITEMS));
+          setSortedResultOrder(prev => mergeUniqueById(prev, order).slice(-MAX_LIST_ITEMS));
           setPropertyTotal(response.propertyTotal ?? 0);
           setProjectTotal(response.projectTotal ?? 0);
           setCombinedNextCursor(response.nextCursor ?? null);
@@ -663,7 +664,7 @@ export default function BrowsePage() {
           longitude: r.longitude ?? null,
         }));
         if (isAppend) {
-          setProjects(prev => [...prev, ...mapped].slice(-MAX_LIST_ITEMS));
+          setProjects(prev => mergeUniqueById(prev, mapped).slice(-MAX_LIST_ITEMS));
         } else {
           setProjects(mapped);
         }
@@ -686,7 +687,7 @@ export default function BrowsePage() {
             images: p.images.length > 0 ? p.images : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }],
           }));
           if (isAppend) {
-            setProperties(prev => [...prev, ...formattedData].slice(-MAX_LIST_ITEMS));
+            setProperties(prev => mergeUniqueById(prev, formattedData).slice(-MAX_LIST_ITEMS));
           } else {
             setProperties(formattedData);
           }

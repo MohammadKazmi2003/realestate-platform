@@ -49,7 +49,9 @@ export async function POST(req: NextRequest) {
     const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
     const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
 
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), pageSize, sort, scope })}`;
+    // NOTE: cursor MUST be part of the key — without it every "load more"
+    // page returns the cached page 1, which appends duplicate ids downstream.
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), pageSize, sort, scope, cursor: cursor ?? null })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {
@@ -222,7 +224,10 @@ export async function POST(req: NextRequest) {
       index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
       size: pageSize,
       query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
-      sort: sortClause,
+      // Unique tiebreaker so search_after pagination can never return the
+      // same doc on two pages (tied sorts otherwise overlap → duplicate keys).
+      // Uses the keyword `id` field — _id sorting is disallowed in ES 8.
+      sort: [...sortClause, { id: { order: 'asc' } }],
     };
 
     if (scope === 'both') {

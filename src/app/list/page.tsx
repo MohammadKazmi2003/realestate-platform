@@ -7,6 +7,7 @@ import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
 import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
 import { tenant } from '@/lib/tenant';
+import { mergeUniqueById } from '@/lib/collections';
 import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
 import { purposeFromListingPurpose } from '@/lib/priceScale';
 
@@ -385,7 +386,7 @@ export default function ListPage() {
         setTotalCount(0);
       } else {
         const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
-        setProperties(shouldReset ? mapped : prev => [...prev, ...mapped]);
+        setProperties(shouldReset ? mapped : prev => mergeUniqueById(prev, mapped));
         setNextCursor(response.nextCursor);
         setHasMore(!!response.nextCursor);
         setTotalCount(response.total || 0);
