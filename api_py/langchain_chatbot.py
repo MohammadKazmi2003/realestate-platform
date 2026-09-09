@@ -54,8 +54,12 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 if not all([GROQ_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
     raise ValueError("GROQ_API_KEY, SUPABASE_URL, and SUPABASE_SERVICE_KEY environment variables are missing.")
 
-llm_router = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
-llm_generator = ChatGroq(temperature=0, model_name="llama-3.1-8b-instant", api_key=GROQ_API_KEY)
+# Model is env-configurable so retired IDs (e.g. llama-3.1-8b-instant) never
+# require a code change. Defaults to qwen/qwen3.6-27b on Groq.
+GROQ_MODEL = os.environ.get("GROQ_MODEL") or os.environ.get("LLM_MODEL") or "qwen/qwen3.6-27b"
+
+llm_router = ChatGroq(temperature=0, model_name=GROQ_MODEL, api_key=GROQ_API_KEY)
+llm_generator = ChatGroq(temperature=0, model_name=GROQ_MODEL, api_key=GROQ_API_KEY)
 
 # --- NEW: Global Instantiation for Vector Store ---
 try:
