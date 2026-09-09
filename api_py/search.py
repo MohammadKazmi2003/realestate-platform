@@ -219,9 +219,15 @@ async def chat_langchain_endpoint(chat_request: ChatRequest):
             # -------------
         }
         
-        # 7. Send the structured response to the frontend
+        # 7. Send the structured response to the frontend.
+        # Strip Qwen-style reasoning so users only see the answer.
+        # Handles both closed <think>...</think> and unclosed trailing <think>...
+        # (the model sometimes never emits the closing tag).
+        raw_text = final_message.content if isinstance(final_message.content, str) else str(final_message.content)
+        clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
+        clean_text = re.sub(r"<think>.*", "", clean_text, flags=re.DOTALL).strip()
         return {
-            "text_response": final_message.content,
+            "text_response": clean_text,
             "properties": final_state.get("properties_for_ui", []),
             "session_state": response_session_state
         }

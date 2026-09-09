@@ -49,6 +49,7 @@ pip install -r requirements.txt
 supabase start
 supabase db reset
 ```
+Starts empty — you add your own data. Remote instead (optional): if you have the remote project's keys, replace the 5 Supabase values in `.env` (see commented example in `.env.example`) and skip `supabase start`.
 
 ## 7. Start (2 terminals)
 ```bash
