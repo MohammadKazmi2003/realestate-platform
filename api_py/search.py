@@ -102,9 +102,11 @@ async def search(request: SearchRequest):
     except Exception as e:
         logger.error(f"Error during structured search: {e}")
 
-    logger.info("Falling back to semantic search.")
+    # Semantic fallback is optional — works only if embedding engine loaded.
+    # Without torch/sentence-transformers this returns structured-only results.
     try:
         embedding = embedding_engine.embed_query(request.query)
+        logger.info("Falling back to semantic search.")
         semantic_query = supabase_client.rpc(
             "match_property_chunks",
             {"query_embedding": embedding, "match_threshold": 0.75, "match_count": 10}
@@ -132,9 +134,14 @@ async def search(request: SearchRequest):
             new_exclude_ids=list(set(request.exclude_ids + new_ids))
         )
         
+    except RuntimeError as e:
+        # Embeddings disabled — not an error, just return structured results.
+        logger.warning(f"Semantic search skipped: {e}")
+        return SearchResponse(properties=[], new_exclude_ids=request.exclude_ids)
     except Exception as e:
         logger.error(f"An unexpected error occurred during semantic search: {e}")
-        raise HTTPException(status_code=500, detail="An error occurred during search.")
+        # Don't 500 the whole request when only the optional fallback failed.
+        return SearchResponse(properties=[], new_exclude_ids=request.exclude_ids)
 
 
 # --- LangGraph Chatbot Endpoint (UPDATED) ---

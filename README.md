@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Real Estate Platform — First-Time Setup (Mac + Windows)
 
-## Getting Started
+Runs **fully locally**. No remote DB needed. Images are URLs in the DB (`property-images` bucket for uploads, external URLs otherwise) — local Supabase handles it.
 
-First, run the development server:
-
+## 1. Get the code
+Download the GitHub ZIP, extract it, open the folder in terminal:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd realestate-platform
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 2. Install tools
+Install: `Node 20 LTS`, `Python 3.11`, `Git`, `Docker Desktop`.
+Install Supabase CLI:
+```bash
+# Mac
+brew install supabase/tap/supabase
+# Windows (Admin PowerShell)
+scoop install supabase
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 3. Env file
+```bash
+# Mac
+cp .env.example .env
+# Windows
+copy .env.example .env
+```
+Paste only 3 keys into `.env`: `GROQ_API_KEY` (console.groq.com), `TAVILY_API_KEY` (tavily.com), `NEXT_PUBLIC_MAPTILER_KEY` (maptiler.com). Supabase URLs/keys already have safe local defaults. Get Supabase keys: local = `supabase status`, remote = Dashboard > Settings > API.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 4. Frontend deps
+```bash
+npm install
+```
 
-## Learn More
+## 5. Python venv + deps (chatbot)
+```bash
+# Mac
+python3 -m venv venv
+source venv/bin/activate
+# Windows
+py -m venv venv
+venv\Scripts\activate
+```
+```bash
+pip install -r requirements.txt
+```
+No torch/transformers needed — semantic search is optional and disabled by default.
 
-To learn more about Next.js, take a look at the following resources:
+## 6. Database (local)
+```bash
+supabase start
+supabase db reset
+```
+This creates schema from `supabase/migrations/` + empty `property-images` bucket. For same data as another PC: copy its `local_complete_data.sql` and run:
+```bash
+psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f local_complete_data.sql
+```
+Remote instead (optional): put remote URL + anon key in `.env` and skip `supabase start`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 7. Start (2 terminals)
+```bash
+# Terminal 1 — backend, venv activated
+uvicorn api_py.search:app --host 0.0.0.0 --port 8000 --reload
+# Terminal 2
+npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 8. Verify
+- App: `http://localhost:3000`
+- Backend: `http://localhost:8000/docs`
+- Studio: `http://127.0.0.1:54323`, Mail: `http://127.0.0.1:54324`
+- Sign up → confirm in Inbucket → sign in → sign out → forgot-password.
+- Check `/browse` (filters + map), `/newprojects`, `/property/[id]`, chat box.

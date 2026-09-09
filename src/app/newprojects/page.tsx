@@ -166,7 +166,11 @@ export default function NewProjectsPage() {
   const [amenitySearchTerm, setAmenitySearchTerm] = useState('');
   const [showAllAmenities, setShowAllAmenities] = useState(false);
 
-  // Fetch projects from the new Supabase function
+  // Fetch projects — compatible with updated DB/schema (new-admin-features).
+  // Primary path is the search_projects RPC (still the supported fallback in
+  // new-admin's /projects page). If the RPC is missing/shadowed after schema
+  // evolution, fall back to a direct table query so the basic version keeps
+  // working without ES, tenant, or admin features.
   const fetchProjects = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -183,34 +187,114 @@ export default function NewProjectsPage() {
       p_amenity_ids: filters.amenityIds.length > 0 ? filters.amenityIds : null,
     });
 
-    if (rpcError) {
-      console.error('Error fetching projects:', rpcError);
-      setError('Failed to load new projects. Please try again later.');
-      setProjects([]);
-    } else {
+    if (!rpcError) {
       const projectsData = (data as any[] || []) as Project[];
       setProjects(projectsData);
-      const count = projectsData.length > 0 ? projectsData[0].total_count : 0;
+      const count = projectsData.length > 0 ? (projectsData[0].total_count ?? 0) : 0;
       setTotalCount(count);
       setTotalPages(Math.ceil(count / ITEMS_PER_PAGE));
+      setLoading(false);
+      return;
+    }
+
+    console.warn('search_projects RPC failed, falling back to direct query:', rpcError);
+
+    try {
+      // Basic fallback: query projects + developer + primary image + location.
+      // Keeps the same Project shape the basic card expects.
+      let query = supabase
+        .from('projects')
+        .select('id, name, slug, low_price, high_price, construction_phase, delivery_date, developer_id, created_at', { count: 'exact' });
+
+      if (filters.searchText) {
+        query = query.ilike('name', `%${filters.searchText}%`);
+      }
+      if (filters.completionStatus.length > 0) {
+        query = query.in('construction_phase', filters.completionStatus);
+      }
+      if (filters.minPrice) {
+        query = query.gte('low_price', Number(filters.minPrice));
+      }
+      if (filters.maxPrice) {
+        query = query.lte('low_price', Number(filters.maxPrice));
+      }
+      if (sortBy === 'price_asc') query = query.order('low_price', { ascending: true, nullsFirst: false });
+      else if (sortBy === 'price_desc') query = query.order('low_price', { ascending: false, nullsFirst: false });
+      else if (sortBy === 'date_asc') query = query.order('delivery_date', { ascending: true, nullsFirst: false });
+      else if (sortBy === 'date_desc') query = query.order('delivery_date', { ascending: false, nullsFirst: false });
+      else query = query.order('created_at', { ascending: false });
+
+      const from = (currentPage - 1) * ITEMS_PER_PAGE;
+      const { data: rows, count: total, error: tableError } = await query.range(from, from + ITEMS_PER_PAGE - 1);
+
+      if (tableError) throw tableError;
+
+      const enriched: Project[] = await Promise.all(
+        (rows || []).map(async (r: any) => {
+          const [devRes, imgRes, locRes] = await Promise.all([
+            r.developer_id ? supabase.from('developers').select('name').eq('id', r.developer_id).maybeSingle() : Promise.resolve({ data: null } as any),
+            supabase.from('project_images').select('storage_path_original').eq('project_id', r.id).order('is_primary', { ascending: false }).order('id').limit(1).maybeSingle(),
+            supabase.from('project_locations').select('locations(name)').eq('project_id', r.id).limit(1).maybeSingle(),
+          ]);
+          return {
+            id: r.id,
+            name: r.name,
+            slug: r.slug,
+            low_price: r.low_price,
+            high_price: r.high_price,
+            construction_phase: r.construction_phase,
+            delivery_date: r.delivery_date,
+            developer_name: (devRes as any)?.data?.name || '',
+            developer_logo: null,
+            primary_image: (imgRes as any)?.data?.storage_path_original || null,
+            location_name: (locRes as any)?.data?.locations?.name || null,
+            total_count: total || 0,
+          } as Project;
+        })
+      );
+
+      // Bedrooms / amenities filters need junction tables; apply best-effort
+      // client-side narrowing when those filters are active and RPC is down.
+      let filtered = enriched;
+      if (filters.bedrooms.length > 0) {
+        const { data: units } = await supabase.from('unit_configurations').select('project_id, bedrooms').in('bedrooms', filters.bedrooms);
+        const allowed = new Set((units || []).map((u: any) => u.project_id));
+        filtered = filtered.filter(p => allowed.has(p.id));
+      }
+      if (filters.amenityIds.length > 0) {
+        const { data: pas } = await supabase.from('project_amenities').select('project_id, amenity_id').in('amenity_id', filters.amenityIds);
+        const allowed = new Set((pas || []).map((pa: any) => pa.project_id));
+        filtered = filtered.filter(p => allowed.has(p.id));
+      }
+
+      setProjects(filtered);
+      setTotalCount(total || 0);
+      setTotalPages(Math.ceil((total || 0) / ITEMS_PER_PAGE));
+    } catch (fallbackError) {
+      console.error('Error fetching projects (fallback also failed):', fallbackError);
+      setError('Failed to load new projects. Please try again later.');
+      setProjects([]);
     }
     setLoading(false);
   }, [currentPage, sortBy, filters]);
 
-  // Fetch initial lookup data for filters
+  // Fetch initial lookup data for filters — tolerant of schema evolution.
   useEffect(() => {
     const fetchLookupData = async () => {
-        const { data: amenities, error: amenitiesError } = await supabase.from('amenities').select('id, name');
-        const { data: statuses, error: statusesError } = await supabase.rpc('distinct_completion_status');
+        const { data: amenities } = await supabase.from('amenities').select('id, name');
+        const { data: statuses } = await supabase.rpc('distinct_completion_status');
 
-        if (amenitiesError || statusesError) {
-            console.error("Failed to load filter options");
-        } else {
-            setLookupData({
-                amenities: amenities || [],
-                completionStatuses: (statuses as any[] || []).map(s => s.construction_phase).filter(Boolean)
-            });
+        let completionStatuses: string[] = (statuses as any[] || []).map(s => s.construction_phase).filter(Boolean);
+        if (completionStatuses.length === 0) {
+          // Fallback if the RPC was dropped in the new schema.
+          const { data: rows } = await supabase.from('projects').select('construction_phase').not('construction_phase', 'is', null).limit(100);
+          completionStatuses = Array.from(new Set((rows || []).map((r: any) => r.construction_phase).filter(Boolean)));
         }
+
+        setLookupData({
+            amenities: amenities || [],
+            completionStatuses,
+        });
     };
     fetchLookupData();
   }, []);

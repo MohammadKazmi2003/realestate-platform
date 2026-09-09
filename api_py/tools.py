@@ -161,9 +161,13 @@ async def semantic_property_search(query: str) -> str:
     """
     logger.info(f"TOOL CALL: semantic_property_search for query: '{query}'")
     try:
-        # Embedding must be done in a sync-safe way for FastAPI
+        # Embedding must be done in a sync-safe way for FastAPI.
+        # Optional — returns a friendly message when embeddings are disabled.
         from api_py.shared_embedding import embedding_engine
-        query_embedding = await asyncio.to_thread(embedding_engine.embed_query, query)
+        try:
+            query_embedding = await asyncio.to_thread(embedding_engine.embed_query, query)
+        except RuntimeError:
+            return "Semantic search is disabled on this setup. Try a structured search like '2bhk in Gurgaon'."
         
         params = {"query_embedding": query_embedding, "match_threshold": 0.10, "match_count": 10}
         response = await asyncio.to_thread(supabase_client.rpc("match_property_chunks", params).execute)

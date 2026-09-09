@@ -21,7 +21,15 @@ export async function middleware(req: NextRequest) {
           return req.cookies.get(name)?.value
         },
         set(name: string, value: string, options: CookieOptions) {
+          // Update both request (for getUser in this request) and response
+          // (so browser actually receives refreshed tokens). Missing res
+          // update was causing inconsistent sign-in in VS Code browser.
           req.cookies.set({
+            name,
+            value,
+            ...options,
+          })
+          res.cookies.set({
             name,
             value,
             ...options,
@@ -29,6 +37,11 @@ export async function middleware(req: NextRequest) {
         },
         remove(name: string, options: CookieOptions) {
           req.cookies.set({
+            name,
+            value: '',
+            ...options,
+          })
+          res.cookies.set({
             name,
             value: '',
             ...options,

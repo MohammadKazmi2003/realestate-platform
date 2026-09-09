@@ -23,21 +23,76 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
     const fetchProjectDetails = async () => {
       setLoading(true);
       setError(null);
-      
-      const { data, error: rpcError } = await supabase.rpc('get_project_by_slug', { p_slug: slug }).single();
 
-      if (rpcError || !data) {
-        console.error('Error fetching project details:', rpcError);
-        setError('Failed to load project details.');
-        setProject(null);
-      } else {
+      // Primary: old RPC (basic version). Still supported as fallback in new schema.
+      const { data, error: rpcError } = await supabase.rpc('get_project_by_slug', { p_slug: slug }).maybeSingle();
+
+      if (!rpcError && data) {
         const projectData = data as ProjectDetails;
         setProject(projectData);
 
-        // FIX: Since the API now sorts the images, the hero image is always the first one.
-        if (projectData.images && projectData.images.length > 0) {
-          setActiveImageUrl(projectData.images[0].url);
+        // Old shape: images[{url}]. New shape (if RPC was updated): project_media[].
+        const firstImage =
+          (projectData.images && projectData.images[0]?.url) ||
+          (projectData.project_media && projectData.project_media[0]?.storage_path_original) ||
+          null;
+        if (firstImage) setActiveImageUrl(firstImage);
+        setLoading(false);
+        return;
+      }
+
+      // Fallback: updated schema path via get_listing_details (used by
+      // new-admin's /projects/[id]). Resolve slug -> id, then fetch details.
+      try {
+        let projectId: string | null = null;
+        // If the slug segment is already a UUID (new-style link), use it directly.
+        const maybeUuid = slug.split('/').pop() || '';
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(maybeUuid);
+        if (isUuid) {
+          projectId = maybeUuid;
+        } else {
+          const { data: row } = await supabase.from('projects').select('id').eq('slug', slug).maybeSingle();
+          projectId = (row as any)?.id || null;
         }
+
+        if (!projectId) throw rpcError || new Error('not found');
+
+        const { data: details, error: detailsError } = await supabase.rpc('get_listing_details', { p_listing_id: projectId }).maybeSingle();
+        if (detailsError || !details) throw detailsError || new Error('not found');
+
+        // Normalize new shape to the basic ProjectDetails the UI renders.
+        const d: any = details;
+        const normalized: ProjectDetails = {
+          id: d.id,
+          name: d.title || d.name,
+          title: d.title,
+          slug,
+          low_price: d.price_range?.low ?? d.low_price ?? null,
+          high_price: d.price_range?.high ?? d.high_price ?? null,
+          description_html: d.description_html || d.description || '',
+          description: d.description || null,
+          construction_phase: d.status?.phase || d.construction_phase || null,
+          delivery_date: d.status?.delivery_date || d.delivery_date || null,
+          developer: d.developer ? { name: d.developer.name, logo: d.developer.logo || null } : null,
+          images: Array.isArray(d.project_media)
+            ? d.project_media.map((m: any) => ({ url: m.storage_path_original, is_primary: !!m.is_primary }))
+            : (d.images || []),
+          project_media: d.project_media || null,
+          amenities: d.amenities || [],
+          faqs: d.faqs || [],
+          unit_configurations: d.unit_configurations || [],
+          latitude: d.latitude ?? null,
+          longitude: d.longitude ?? null,
+          price_range: d.price_range || null,
+          status: d.status || null,
+        };
+        setProject(normalized);
+        const first = (normalized.images && normalized.images[0]?.url) || null;
+        if (first) setActiveImageUrl(first);
+      } catch (e) {
+        console.error('Error fetching project details:', rpcError || e);
+        setError('Failed to load project details.');
+        setProject(null);
       }
       setLoading(false);
     };
@@ -67,14 +122,29 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
     );
   }
 
+  // Normalize for rendering: support both old (get_project_by_slug) and
+  // new (get_listing_details) shapes without adding admin features.
+  const displayName = (project as any)?.name || (project as any)?.title || 'Project';
+  const developerName = (project as any)?.developer?.name || 'Developer not specified';
+  const gallery: { url: string }[] =
+    (project.images && project.images.length > 0)
+      ? project.images
+      : Array.isArray((project as any).project_media)
+        ? (project as any).project_media.map((m: any) => ({ url: m.storage_path_original }))
+        : [];
+  const amenityLabels: string[] = Array.isArray(project.amenities)
+    ? project.amenities.map((a: any) => (typeof a === 'string' ? a : a?.name).trim?.() || (typeof a === 'string' ? a : a?.name)).filter(Boolean)
+    : [];
+  const faqItems: { question: string; answer: string }[] = Array.isArray(project.faqs) ? project.faqs : [];
+
   return (
     <div className="bg-bg-color min-h-screen">
       <Header />
       <main className="p-4 sm:p-6 max-w-5xl mx-auto">
         <div className="shadow-neumorphic-outset rounded-3xl p-6 md:p-8 space-y-12">
             <section>
-                <h1 className="text-3xl font-bold text-text-color-dark mb-2">{project.name}</h1>
-                <p className="text-lg text-text-color-light">by {project.developer.name}</p>
+                <h1 className="text-3xl font-bold text-text-color-dark mb-2">{displayName}</h1>
+                <p className="text-lg text-text-color-light">by {developerName}</p>
             </section>
             
             {/* --- IMAGE GALLERY SECTION --- */}
@@ -87,9 +157,9 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
                         <p className="text-white">No Image Available</p>
                     )}
                 </div>
-                {project.images && project.images.length > 1 && (
+                {gallery.length > 1 && (
                     <div className="flex space-x-2 overflow-x-auto pb-2">
-                        {project.images.map((image) => (
+                        {gallery.map((image) => (
                             <img
                                 key={image.url}
                                 src={image.url}
@@ -104,7 +174,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
             {/* --- END IMAGE GALLERY SECTION --- */}
             
             <section>
-                <div className="prose max-w-none text-gray-600" dangerouslySetInnerHTML={{ __html: project.description_html }} />
+                <div className="prose max-w-none text-gray-600" dangerouslySetInnerHTML={{ __html: project.description_html || '' }} />
             </section>
             
             <section>
@@ -112,21 +182,24 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
                 <LocationMap latitude={project.latitude} longitude={project.longitude} />
             </section>
             
+            {amenityLabels.length > 0 && (
             <section>
                 <h2 className="text-2xl font-semibold mb-4 text-text-color-dark">Amenities</h2>
                 <div className="flex flex-wrap gap-3">
-                    {project.amenities.map(amenity => (
+                    {amenityLabels.map(amenity => (
                         <div key={amenity} className="bg-bg-color shadow-neumorphic-outset text-text-color-dark font-medium px-4 py-2 rounded-full text-sm">
                             {amenity}
                         </div>
                     ))}
                 </div>
             </section>
+            )}
 
-             <section>
+             {faqItems.length > 0 && (
+              <section>
                 <h2 className="text-2xl font-semibold mb-4 text-text-color-dark">FAQs</h2>
                 <div className="space-y-4">
-                {project.faqs.map(faq => (
+                {faqItems.map(faq => (
                     <details key={faq.question} className="p-4 rounded-2xl shadow-neumorphic-outset">
                         <summary className="font-semibold cursor-pointer">{faq.question}</summary>
                         <p className="mt-2 text-text-color-light">{faq.answer}</p>
@@ -134,6 +207,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
                 ))}
                 </div>
             </section>
+             )}
         </div>
       </main>
     </div>

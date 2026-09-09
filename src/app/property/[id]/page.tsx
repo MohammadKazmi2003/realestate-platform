@@ -8,10 +8,10 @@ import { unstable_noStore as noStore } from 'next/cache';
 import type { PropertyDataType } from '@/lib/types';
 import { logPropertyView } from '@/lib/actions'; // Import the new action
 
-export default async function PropertyPage({ params }: { params: { id: string } }) {
+export default async function PropertyPage({ params }: { params: Promise<{ id: string }> }) {
   noStore();
-  const supabase = createSupabaseServerClient();
-  const { id } = params;
+  const supabase = await createSupabaseServerClient();
+  const { id } = await params;
 
   const { data: property, error } = await supabase
     .rpc('get_property_details', { p_property_id: id })

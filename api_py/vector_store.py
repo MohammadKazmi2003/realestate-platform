@@ -7,8 +7,8 @@ This keeps the main chatbot code clean and portable.
 
 import logging
 import asyncio
+from typing import Any
 from supabase import Client
-from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # Get the logger instance
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class ChatVectorStore:
     from a Supabase pgvector database.
     """
 
-    def __init__(self, supabase_client: Client, embedding_model: HuggingFaceEmbeddings):
+    def __init__(self, supabase_client: Client, embedding_model: Any = None):
         """
         Initializes the vector store with a Supabase client and an embedding model.
 

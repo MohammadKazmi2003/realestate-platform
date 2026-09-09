@@ -107,20 +107,45 @@ export function ChatAssistant({ isOpen, onClose }: ChatAssistantProps) {
     setIsLoading(true);
 
     try {
-        const response = await fetch('/api/chat_langchain', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                messages: newMessages.map(({ role, content, properties }) => ({ role, content, properties })),
-                session_state: sessionState,
-                // Pass the persistent session ID
-                session_id: sessionId,
-            }),
-        });
+        // Use same-origin rewrite first (works in VS Code browser without
+        // extra port forwarding / CORS), fallback to absolute backend URL.
+        const backendBase = (process.env.NEXT_PUBLIC_CHAT_API_URL || '').replace(/\/$/, '');
+        const endpoints = ['/api/chat_langchain'];
+        if (backendBase && !backendBase.includes('localhost:8000')) {
+          // Only add absolute if it's a custom deployment (avoid double call in local dev)
+          endpoints.push(`${backendBase}/api/chat_langchain`);
+        } else if (backendBase) {
+          endpoints.push(`${backendBase}/api/chat_langchain`);
+        }
 
-        if (!response.ok) {
+        let response: Response | null = null;
+        let lastError: any = null;
+        for (const url of endpoints) {
+          try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: newMessages.map(({ role, content, properties }) => ({ role, content, properties })),
+                    session_state: sessionState,
+                    // Pass the persistent session ID
+                    session_id: sessionId,
+                }),
+            });
+            if (response.ok) break;
             const errorData = await response.json().catch(() => ({ detail: 'Network response was not ok' }));
-            throw new Error(errorData.detail || 'An unknown error occurred');
+            lastError = new Error(errorData.detail || `Backend ${response.status} at ${url}`);
+            // Try next endpoint on 404/502 (backend down, rewrite missing)
+            if (response.status === 404 || response.status === 502) continue;
+            break;
+          } catch (e) {
+            lastError = e;
+            continue;
+          }
+        }
+
+        if (!response || !response.ok) {
+            throw lastError || new Error('AI backend unreachable. Start it with: uvicorn api_py.search:app --port 8000');
         }
         
         const data = await response.json();

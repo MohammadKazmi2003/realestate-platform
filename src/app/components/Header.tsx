@@ -15,7 +15,6 @@ export default function Header() {
   const navLinks = [
     { href: '/browse', label: 'Browse' },
     { href: '/newprojects', label: 'New Projects' },
-    { href: '/map', label: 'Map View' },
     user ? { href: '/my-listings', label: 'My Listings' } : null,
     user ? { href: '/favorites', label: 'Favorites' } : null,
   ].filter(Boolean);

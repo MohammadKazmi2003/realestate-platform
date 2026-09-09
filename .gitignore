@@ -39,3 +39,25 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local agent / tooling scaffolding (generated locally, never commit)
+.opencode/
+.playwright-cli/
+.playwright/
+.worker.log
+.worker.pid
+opencode.json
+components.json
+playwright.config.ts
+specs/
+test-results/
+test_results.json
+scripts/verify-map-consistency.js
+
+# python cache + local service dirs generated at runtime
+__pycache__/
+*/__pycache__/
+api_py/__pycache__/
+
+# local database dumps (schema/data snapshots, may contain PII)
+local_*.sql
