@@ -63,10 +63,138 @@ type AutocompleteSuggestion = {
   type: 'location' | 'property' | 'project' | 'geocoded';
   text: string;
   entity: string;
+  /** Stable MapTiler feature id — geometry is fetched by id on select so the
+   * clicked entity can never mismatch the outline/filter. */
+  id?: string;
+  place_type?: string[];
+  hasBoundary?: boolean;
   bbox?: number[];
   center?: number[];
   polygons?: { lat: number; lng: number }[][];
 };
+
+type BoundaryRing = { lat: number; lng: number };
+type BoundaryRings = BoundaryRing[][];
+
+/** All outer rings of a MapTiler GeoJSON geometry (shared Polygon/MultiPolygon
+ * handling — a lone `Polygon` must NOT be wrapped an extra level). */
+function allRingsFromGeometry(geo: any): BoundaryRings {
+  if (!geo || !Array.isArray(geo.coordinates)) return [];
+  const polys: number[][][][] =
+    geo.type === 'MultiPolygon'
+      ? geo.coordinates
+      : geo.type === 'Polygon'
+        ? [geo.coordinates]
+        : [];
+  const rings: BoundaryRings = [];
+  for (const poly of polys) {
+    for (const ring of poly) {
+      if (!Array.isArray(ring)) continue;
+      const pts: BoundaryRing[] = [];
+      for (const coord of ring) {
+        if (!Array.isArray(coord)) continue;
+        const [lng, lat] = coord;
+        if (Number.isFinite(lat) && Number.isFinite(lng)) pts.push({ lat, lng });
+      }
+      if (pts.length >= 3) rings.push(pts);
+    }
+  }
+  return rings;
+}
+
+/** A MapTiler bbox that collapses to a point (e.g. city `place` entries) can't
+ * outline or filter anything — treat it as a center lookup instead. */
+function isDegenerateBbox(bbox: number[]): boolean {
+  if (!Array.isArray(bbox) || bbox.length !== 4) return true;
+  const [west, south, east, north] = bbox;
+  return ![west, south, east, north].every(Number.isFinite) || west === east || south === north;
+}
+
+/** Administrative place types that can carry a real boundary polygon. */
+const ADMIN_PLACE_TYPES = new Set(['region', 'subregion', 'locality', 'municipality', 'neighborhood']);
+
+/** Country segment = trailing comma part of a place_name (for same-country guard). */
+function countryOf(placeName: string): string {
+  const parts = placeName.split(',');
+  return parts.length > 0 ? parts[parts.length - 1].trim().toLowerCase() : '';
+}
+
+/**
+ * Point-place fallback: some city `place` entities (e.g. Mumbai, Dubai) have
+ * no polygon of their own — only a point. Resolve matching areas from the
+ * suggestion list the user already saw (e.g. Mumbai City + Suburban
+ * districts): same country, name shares the locality token, real
+ * (non-degenerate) bbox. Administrative types win; any other polygon-bearing
+ * type is fallback rather than nothing. Geometries fetched by id in parallel
+ * (max 3 per tier). Deliberately uses the visible list — NOT a fresh text
+ * re-query, whose full-text candidates differ (all `place`, all degenerate).
+ * Returns merged rings + union bbox, or null when nothing qualifies.
+ */
+async function resolveAdminBoundary(
+  text: string,
+  suggestions: AutocompleteSuggestion[]
+): Promise<{ rings: BoundaryRings; bbox: { minLat: number; maxLat: number; minLng: number; maxLng: number } } | null> {
+  const locality = text.split(',')[0]?.trim().toLowerCase();
+  if (!locality) return null;
+  const homeCountry = countryOf(text);
+  // Relevant matches only (same country, shared locality token, real bbox) —
+  // but keep the mix dynamic: admin areas first, any other polygon-bearing
+  // type (lake, road corridor, address) as fallback rather than nothing.
+  const relevant = (suggestions || []).filter(s => {
+    if (!s || s.type !== 'geocoded' || !s.id) return false;
+    if (!s.text.toLowerCase().includes(locality)) return false;
+    if (homeCountry && countryOf(s.text) !== homeCountry) return false;
+    const b = s.bbox || [];
+    if (b.length !== 4 || b[0] === b[2] || b[1] === b[3]) return false;
+    return true;
+  });
+  const isAdmin = (s: AutocompleteSuggestion) =>
+    !Array.isArray(s.place_type) || s.place_type.some(t => ADMIN_PLACE_TYPES.has(t));
+  const ordered = [...relevant.filter(isAdmin), ...relevant.filter(s => !isAdmin(s))];
+  const resolveGroup = async (group: AutocompleteSuggestion[]) => {
+    const rings: BoundaryRings = [];
+    const boxes: number[][] = [];
+    const settled = await Promise.allSettled(group.slice(0, 3).map(c => fetchGeometryById(c.id!)));
+    group.slice(0, 3).forEach((c, i) => {
+      if (settled[i].status === 'fulfilled') {
+        const r = (settled[i] as PromiseFulfilledResult<BoundaryRings>).value;
+        if (r.length > 0) {
+          rings.push(...r);
+          if (c.bbox?.length === 4) boxes.push(c.bbox);
+        }
+      }
+    });
+    if (rings.length === 0 || boxes.length === 0) return null;
+    return {
+      rings,
+      bbox: {
+        minLng: Math.min(...boxes.map(b => b[0])),
+        minLat: Math.min(...boxes.map(b => b[1])),
+        maxLng: Math.max(...boxes.map(b => b[2])),
+        maxLat: Math.max(...boxes.map(b => b[3])),
+      },
+    };
+  };
+  return (
+    (await resolveGroup(ordered.filter(isAdmin))) ??
+    (await resolveGroup(ordered.filter(s => !isAdmin(s))))
+  );
+
+/** Fetch exact geometry for a MapTiler feature id (the clicked entity itself,
+ * never a fresh text query's first result). */
+async function fetchGeometryById(featureId: string, signal?: AbortSignal): Promise<BoundaryRings> {
+  const key = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+  if (!key) return [];
+  const res = await fetch(
+    `https://api.maptiler.com/geocoding/${encodeURIComponent(featureId)}.json?key=${key}&language=en`,
+    { signal: signal || AbortSignal.timeout(4000) }
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+  const geo = data.features?.[0]?.geometry;
+  if (!geo || (geo.type !== 'MultiPolygon' && geo.type !== 'Polygon')) return [];
+  return allRingsFromGeometry(geo);
+}
 
 async function searchProjects(params: any): Promise<{ results: any[]; total: number; nextCursor?: any[] | null }> {
   try {
@@ -163,6 +291,9 @@ export default function BrowsePage() {
   const geocodedBoundsRef = useRef<{ minLat: number; maxLat: number; minLng: number; maxLng: number } | null>(null);
 
   const [propertyTotal, setPropertyTotal] = useState(0);
+  // Count of listings matching everything EXCEPT listing purpose, populated
+  // only when the purpose filter zeroes results (intent-aware empty state).
+  const [withoutPurposeTotal, setWithoutPurposeTotal] = useState<number | null>(null);
   const [propertyNextCursor, setPropertyNextCursor] = useState<any[] | null>(null);
   const [projectNextCursor, setProjectNextCursor] = useState<any[] | null>(null);
   const [hasMoreProperties, setHasMoreProperties] = useState(false);
@@ -177,9 +308,14 @@ export default function BrowsePage() {
   const boundarySourceRef = useRef<maplibregl.GeoJSONSource | null>(null);
   const isDrawingRef = useRef(false);
   const drawPointsRef = useRef<{ lat: number; lng: number }[]>([]);
+  // Exact-ring boundary of the selected geocoded entity (ALL outer rings —
+  // mainland plus islands). Single source of truth for draw + filter so the
+  // outline and the results can never disagree. Freehand drawing keeps using
+  // drawPointsRef/boundaryPoints (single flat ring).
+  const geocodedRingsRef = useRef<BoundaryRings | null>(null);
   const isDrawingModeRef = useRef(false);
   const boundaryActiveRef = useRef(false);
-  const updateBoundaryLayerRef = useRef<(points: { lat: number; lng: number }[], isActive?: boolean) => void>(() => {});
+  const updateBoundaryLayerRef = useRef<(points: { lat: number; lng: number }[] | BoundaryRings, isActive?: boolean) => void>(() => {});
 
   const fetchPropertiesRef = useRef<typeof fetchAllProperties>(() => Promise.resolve());
   const searchAsIMoveRef = useRef(searchAsIMove);
@@ -191,6 +327,10 @@ export default function BrowsePage() {
   const abortRef = useRef<AbortController | null>(null);
   const autocompleteAbortRef = useRef<AbortController | null>(null);
   const autocompleteReqIdRef = useRef(0);  // A5: stale-response guard for autocomplete
+  // Latest suggestion list (with ids/place_type/bbox) — the point-place
+  // fallback resolves admin areas from THESE visible rows, never a fresh
+  // text query (whose candidates differ).
+  const suggestionListRef = useRef<AutocompleteSuggestion[]>([]);
   const filtersRef = useRef(filters);
 
   // Sidebar-hover → map highlight (fetch-free; hover renders card data only).
@@ -240,18 +380,27 @@ export default function BrowsePage() {
     const value = e.target.value;
     setFilters(prev => ({ ...prev, location: value }));
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    if (value.length >= 3) {
+    // Fire from 2 chars (server floor) so short prefixes suggest instantly.
+    if (value.trim().length >= 2) {
       debounceTimer.current = setTimeout(async () => {
         if (autocompleteAbortRef.current) autocompleteAbortRef.current.abort();
         const controller = new AbortController();
         autocompleteAbortRef.current = controller;
         const reqId = ++autocompleteReqIdRef.current;
         try {
-          const result = await autocompleteSearch(value, controller.signal, searchScopeRef.current);
+          // Proximity = live map center: nearby places rank first without
+          // hard-filtering far matches (bias, not bounds).
+          const center = mapRef.current?.getCenter();
+          const proximity =
+            center && Number.isFinite(center.lng) && Number.isFinite(center.lat)
+              ? `${center.lng},${center.lat}`
+              : undefined;
+          const result = await autocompleteSearch(value, controller.signal, searchScopeRef.current, tenant.map.geocodeCountries || undefined, proximity);
           // A5: ignore stale responses — only apply if this is the latest request
           if (reqId !== autocompleteReqIdRef.current) return;
           if (result?.suggestions) {
             setSuggestions(result.suggestions);
+            suggestionListRef.current = result.suggestions;
             setShowSuggestions(result.suggestions.length > 0);
           }
         } catch (err) {
@@ -268,7 +417,7 @@ export default function BrowsePage() {
     }
   };
 
-  const selectSuggestion = (suggestion: string | AutocompleteSuggestion) => {
+  const selectSuggestion = async (suggestion: string | AutocompleteSuggestion) => {
     // A5: cancel any in-flight autocomplete + pending debounce before selecting
     cancelAutocomplete();
     const text = typeof suggestion === 'string' ? suggestion : suggestion.text;
@@ -277,62 +426,77 @@ export default function BrowsePage() {
     setSuggestions([]);
 
     const sug = typeof suggestion === 'object' ? suggestion : null;
-
-    // Use actual polygon geometry if available (from two-step geocoding)
-    if (sug && sug.polygons && sug.polygons[0]?.length > 0) {
-      // Use the largest polygon ring by point count (most accurate for the administrative area).
-      // For MultiPolygon features like Mumbai Suburban District, this picks the main district
-      // area (1093 points) instead of a tiny island fragment (16 points).
-      const boundaryPoints = sug.polygons.reduce((largest, ring) =>
-        ring.length > largest.length ? ring : largest
-      );
-
-      // Use MapTiler bbox for viewport fitting (covers full geographic extent,
-      // more accurate than polygon[0] bounds for MultiPolygon features)
-      const bounds = (sug.bbox && sug.bbox.length === 4)
+    const sugBbox =
+      sug?.bbox && sug.bbox.length === 4
         ? { minLng: sug.bbox[0], minLat: sug.bbox[1], maxLng: sug.bbox[2], maxLat: sug.bbox[3] }
-        : { minLat: Math.min(...boundaryPoints.map(p => p.lat)),
-            maxLat: Math.max(...boundaryPoints.map(p => p.lat)),
-            minLng: Math.min(...boundaryPoints.map(p => p.lng)),
-            maxLng: Math.max(...boundaryPoints.map(p => p.lng)) };
+        : null;
 
-      geocodedBoundsRef.current = bounds;
+    if (sug && sug.type === 'geocoded' && sug.id) {
+      // Exact-entity geometry by feature id — never a fresh text query's first
+      // result, so the outline can't belong to a different place than clicked.
+      // ALL outer rings are kept (mainland + islands); an explicitly selected
+      // island filters by its own ring.
+      try {
+        const rings = await fetchGeometryById(sug.id);
+        if (rings.length > 0) {
+          const bounds = sugBbox ?? {
+            minLat: Math.min(...rings.flat().map(p => p.lat)),
+            maxLat: Math.max(...rings.flat().map(p => p.lat)),
+            minLng: Math.min(...rings.flat().map(p => p.lng)),
+            maxLng: Math.max(...rings.flat().map(p => p.lng)),
+          };
+          applyGeocodedBoundary(rings, bounds);
+          handleApplyFiltersWithLocation(text, { rings, bbox: bounds });
+          return;
+        }
+        // City `place` entities often have no polygon of their own (Point
+        // geometry + degenerate bbox). Resolve the matching administrative
+        // areas from the visible suggestion list (e.g. Mumbai → City +
+        // Suburban districts) and outline + filter by their exact rings.
+        const admin = await resolveAdminBoundary(text, suggestionListRef.current);
+        if (admin) {
+          applyGeocodedBoundary(admin.rings, admin.bbox);
+          handleApplyFiltersWithLocation(text, { rings: admin.rings, bbox: admin.bbox });
+          return;
+        }
+      } catch {}
+      // Geometry fetch failed → fall through to bbox/center fallbacks below.
+    }
 
-      drawPointsRef.current = boundaryPoints;
-      setBoundaryPoints(boundaryPoints);
-      setBoundaryActive(true);
-      updateBoundaryLayerRef.current(boundaryPoints, true);
-
-      if (mapRef.current) {
-        mapRef.current.fitBounds(
-          [bounds.minLng, bounds.minLat, bounds.maxLng, bounds.maxLat],
-          { padding: 40, duration: 800 }
-        );
-      }
-    } else if (sug?.bbox && sug.bbox.length === 4) {
-      // Fallback: bbox rectangle when no polygon geometry is available
+    if (sug?.bbox && sug.bbox.length === 4 && sugBbox && !isDegenerateBbox(sug.bbox)) {
+      // Fallback: bbox rectangle when exact geometry is unavailable.
       const [west, south, east, north] = sug.bbox;
-      geocodedBoundsRef.current = { minLat: south, maxLat: north, minLng: west, maxLng: east };
-
-      const boundaryPoints = [
+      const rect = [
         { lat: north, lng: west },
         { lat: north, lng: east },
         { lat: south, lng: east },
         { lat: south, lng: west },
       ];
-      drawPointsRef.current = boundaryPoints;
-      setBoundaryPoints(boundaryPoints);
-      setBoundaryActive(true);
-      updateBoundaryLayerRef.current(boundaryPoints, true);
-
+      applyGeocodedBoundary([rect], sugBbox);
       if (mapRef.current) {
         mapRef.current.fitBounds([west, south, east, north], { padding: 40, duration: 800 });
       }
-    } else if (sug?.center) {
-      const [lng, lat] = sug.center;
-      geocodedBoundsRef.current = { minLat: lat - 0.1, maxLat: lat + 0.1, minLng: lng - 0.1, maxLng: lng + 0.1 };
+      handleApplyFiltersWithLocation(text, { rings: [rect], bbox: sugBbox });
+      return;
     }
 
+    {
+      // Center-only (or degenerate point-bbox, e.g. city `place` entries):
+      // bounds box around the point, and clear any stale outline/rings so a
+      // previous boundary can't keep filtering the new search.
+      const center = sug?.center ?? (sugBbox ? [(sugBbox.minLng + sugBbox.maxLng) / 2, (sugBbox.minLat + sugBbox.maxLat) / 2] : null);
+      if (center) {
+        clearBoundaryState();
+        const [lng, lat] = center;
+        geocodedBoundsRef.current = { minLat: lat - 0.1, maxLat: lat + 0.1, minLng: lng - 0.1, maxLng: lng + 0.1 };
+        handleApplyFiltersWithLocation(text, { rings: null, bbox: geocodedBoundsRef.current });
+        return;
+      }
+    }
+
+    // Text-only suggestion (ES property/project/location name): no geography —
+    // clear stale boundary and let the text query (+ its own geocode fallback) run.
+    clearBoundaryState();
     handleApplyFiltersWithLocation(text);
   };
 
@@ -344,7 +508,7 @@ export default function BrowsePage() {
     return 'relevance';
   };
 
-  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: { lat: number; lng: number }[] | null) => {
+  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: BoundaryRings | null) => {
     // Cancel-on-new: the latest request represents the viewport we actually
     // need, so any in-flight request is aborted immediately instead of being
     // queued. Aborted requests fail with AbortError and are a silent no-op,
@@ -421,9 +585,19 @@ export default function BrowsePage() {
       params.propertyType = propTypeIdToName[Number(activeFilters.propertyTypeId)];
     }
 
-    const activePolygon = polygonOverride ?? (boundaryActiveRef.current ? boundaryPoints : null);
-    if (activePolygon && activePolygon.length >= 3) {
-      params.polygon = activePolygon;
+    // Exact-ring boundary wins (geocoded selection); freehand falls back to
+    // its flat ring. Sent as `polygons` so every ring filters (mainland AND
+    // islands); the server normalizes + caps for ES and cache keys.
+    const activeRings: BoundaryRings | null =
+      polygonOverride && polygonOverride.length > 0
+        ? polygonOverride
+        : geocodedRingsRef.current && geocodedRingsRef.current.length > 0
+          ? geocodedRingsRef.current
+          : boundaryActiveRef.current && boundaryPoints.length >= 3
+            ? [boundaryPoints]
+            : null;
+    if (activeRings && activeRings.length > 0) {
+      params.polygons = activeRings;
     }
     if (searchAsIMoveRef.current && bounds && !isListView) {
       // Clamp viewport bounds to valid coordinate ranges before sending.
@@ -468,8 +642,8 @@ export default function BrowsePage() {
         if (activeFilters.propertyTypeId && propTypeIdToName[Number(activeFilters.propertyTypeId)]) {
           combinedParams.propertyType = propTypeIdToName[Number(activeFilters.propertyTypeId)];
         }
-        if (params.polygon) {
-          combinedParams.polygon = params.polygon;
+        if (params.polygons) {
+          combinedParams.polygons = params.polygons;
         }
 
         const res = await fetch('/api/map-data', {
@@ -546,6 +720,9 @@ export default function BrowsePage() {
           setMarkerCount((response.markers || []).length);
           setProjectGroups(response.projectGroups || []);
           setCombinedNextCursor(response.nextCursor ?? null);
+          setWithoutPurposeTotal(
+            typeof response.withoutPurposeTotal === 'number' ? response.withoutPurposeTotal : null
+          );
 
           // The location fetch has completed with the correct (geocoded)
           // bounds, so the post-fitBounds moveend can now behave like a normal
@@ -570,10 +747,10 @@ export default function BrowsePage() {
           combinedParams.propertyType = propTypeIdToName[Number(activeFilters.propertyTypeId)];
         }
         if (params.bounds) combinedParams.bounds = params.bounds;
-        // Forward polygon boundary to Load More results — without this,
+        // Forward exact-ring boundary to Load More results — without this,
         // paginated results ignore the active boundary
-        if (params.polygon) {
-          combinedParams.polygon = params.polygon;
+        if (params.polygons) {
+          combinedParams.polygons = params.polygons;
         }
         if (cursorOverride?.propertyCursor) {
           combinedParams.cursor = cursorOverride.propertyCursor;
@@ -649,7 +826,7 @@ export default function BrowsePage() {
           pageSize: isAppend ? 12 : 100,
           sort: projectSortForBrowse(sortByRef.current),
           bounds: params.bounds,
-          polygon: params.polygon,
+          polygons: params.polygons,
           signal,
         };
         if (cursorOverride?.projectCursor) {
@@ -1031,9 +1208,18 @@ export default function BrowsePage() {
 
       // RECOVERY: If user selected a geocoded location before map finished loading,
       // the boundary polygon data was lost. Re-apply it now that the source exists.
-      if (drawPointsRef.current.length >= 3) {
-        updateBoundaryLayerRef.current(drawPointsRef.current, true);
+      // Exact geocoded rings win; freehand falls back to its flat ring.
+      if (geocodedRingsRef.current && geocodedRingsRef.current.length > 0) {
+        updateBoundaryLayerRef.current(geocodedRingsRef.current, true);
         // Also fit viewport to the geocoded boundary (was skipped because mapRef was null)
+        if (geocodedBoundsRef.current) {
+          const b = geocodedBoundsRef.current;
+          setTimeout(() => {
+            map.fitBounds([b.minLng, b.minLat, b.maxLng, b.maxLat], { padding: 40, duration: 0 });
+          }, 200);
+        }
+      } else if (drawPointsRef.current.length >= 3) {
+        updateBoundaryLayerRef.current(drawPointsRef.current, true);
         if (geocodedBoundsRef.current) {
           const b = geocodedBoundsRef.current;
           setTimeout(() => {
@@ -1266,69 +1452,71 @@ export default function BrowsePage() {
     }, 500);
   };
 
-  const handleApplyFiltersWithLocation = async (locationText: string) => {
-    // Only geocode if we don't already have bbox from a selected autocomplete suggestion
-    if (locationText && process.env.NEXT_PUBLIC_MAPTILER_KEY && !geocodedBoundsRef.current) {
+  const handleApplyFiltersWithLocation = async (
+    locationText: string,
+    explicit?: { rings: BoundaryRings | null; bbox: { minLat: number; maxLat: number; minLng: number; maxLng: number } | null } | null
+  ) => {
+    // Explicit geometry (from suggestion select by feature id) always wins —
+    // no text re-geocode, so the filter can never belong to another entity.
+    if (explicit !== undefined && explicit !== null) {
+      if (explicit.rings && explicit.rings.length > 0 && explicit.bbox) {
+        applyGeocodedBoundary(explicit.rings, explicit.bbox);
+      }
+      // rings null (center-only) / bbox already set by the caller: fall through
+      // straight to the fetch with the caller's state.
+    } else if (locationText && process.env.NEXT_PUBLIC_MAPTILER_KEY && !geocodedBoundsRef.current) {
+      // Typed-text fallback only (no suggestion geometry): resolve geography by
+      // text, keeping ALL outer rings so mainland + islands filter together.
       setSearchAsIMove(true);
       try {
         // Step 1: Forward geocoding — get feature IDs + bbox
         const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(locationText)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}${process.env.NEXT_PUBLIC_GEOCODE_COUNTRIES ? `&country=${process.env.NEXT_PUBLIC_GEOCODE_COUNTRIES}` : ''}&language=en`, { signal: AbortSignal.timeout(3000) });
+        if (!response.ok) throw new Error(`geocode ${response.status}`);
         const data = await response.json();
         if (data.features && data.features.length > 0) {
           const feature = data.features[0];
 
           // Step 2: Fetch actual polygon geometry by feature ID
-          let polygons: { lat: number; lng: number }[][] | null = null;
+          let rings: BoundaryRings = [];
           if (feature.id) {
             try {
               const geomResponse = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(feature.id)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&language=en`, { signal: AbortSignal.timeout(3000) });
+              if (!geomResponse.ok) throw new Error(`geometry ${geomResponse.status}`);
               const geomData = await geomResponse.json();
-              const geo = geomData.features?.[0]?.geometry;
-              if (geo && (geo.type === 'MultiPolygon' || geo.type === 'Polygon')) {
-                // Correctly handle both Polygon and MultiPolygon nesting
-                const rings = geo.type === 'MultiPolygon'
-                  ? geo.coordinates.flatMap((polygon: number[][][]) => polygon)
-                  : [geo.coordinates];
-                polygons = rings.map((ring: number[][]) => ring.map(([lng, lat]: number[]) => ({ lat, lng })));
-              }
+              rings = allRingsFromGeometry(geomData.features?.[0]?.geometry);
             } catch {}
           }
 
-          if (polygons && polygons[0]?.length > 0) {
-            // Use the largest polygon ring by point count (most accurate for the area)
-            const boundaryPoints = polygons.reduce((largest, ring) =>
-              ring.length > largest.length ? ring : largest
-            );
-            const bounds = {
-              minLat: Math.min(...boundaryPoints.map(p => p.lat)),
-              maxLat: Math.max(...boundaryPoints.map(p => p.lat)),
-              minLng: Math.min(...boundaryPoints.map(p => p.lng)),
-              maxLng: Math.max(...boundaryPoints.map(p => p.lng)),
-            };
-            geocodedBoundsRef.current = bounds;
-            drawPointsRef.current = boundaryPoints;
-            setBoundaryPoints(boundaryPoints);
-            setBoundaryActive(true);
-            updateBoundaryLayerRef.current(boundaryPoints, true);
-            mapRef.current?.fitBounds([bounds.minLng, bounds.minLat, bounds.maxLng, bounds.maxLat], { padding: 40, duration: 800 });
-          } else if (feature.bbox && feature.bbox.length === 4) {
-            // Fallback to bbox rectangle
+          if (rings.length > 0) {
+            // Prefer the authoritative feature bbox for the viewport (covers
+            // the full extent even when rings are fragmented) — unless it is
+            // a degenerate point, in which case derive from the rings.
+            const bbox = (feature.bbox && feature.bbox.length === 4 && !isDegenerateBbox(feature.bbox))
+              ? { minLng: feature.bbox[0], minLat: feature.bbox[1], maxLng: feature.bbox[2], maxLat: feature.bbox[3] }
+              : {
+                  minLat: Math.min(...rings.flat().map(p => p.lat)),
+                  maxLat: Math.max(...rings.flat().map(p => p.lat)),
+                  minLng: Math.min(...rings.flat().map(p => p.lng)),
+                  maxLng: Math.max(...rings.flat().map(p => p.lng)),
+                };
+            applyGeocodedBoundary(rings, bbox);
+          } else if (feature.bbox && feature.bbox.length === 4 && !isDegenerateBbox(feature.bbox)) {
+            // Fallback to bbox rectangle (skipped for point-bboxes — those
+            // become center lookups below instead of zero-area outlines).
             const [west, south, east, north] = feature.bbox;
-            mapRef.current?.fitBounds([west, south, east, north], { padding: 40, duration: 800 });
-            const pts = [
+            const rect = [
               { lat: north, lng: west },
               { lat: north, lng: east },
               { lat: south, lng: east },
               { lat: south, lng: west },
             ];
-            drawPointsRef.current = pts;
-            setBoundaryPoints(pts);
-            setBoundaryActive(true);
-            updateBoundaryLayerRef.current(pts, true);
-            geocodedBoundsRef.current = { minLat: south, maxLat: north, minLng: west, maxLng: east };
-          } else if (feature.center) {
-            mapRef.current?.flyTo({ center: feature.center, zoom: 13, essential: true });
-            const [lng, lat] = feature.center;
+            applyGeocodedBoundary([rect], { minLat: south, maxLat: north, minLng: west, maxLng: east });
+          } else if (feature.center || (feature.bbox && feature.bbox.length === 4)) {
+            // Center lookup (also covers degenerate point-bboxes): bounds box
+            // around the point, no outline, no stale rings.
+            const [lng, lat] = feature.center ?? [(feature.bbox[0] + feature.bbox[2]) / 2, (feature.bbox[1] + feature.bbox[3]) / 2];
+            clearBoundaryState();
+            mapRef.current?.flyTo({ center: [lng, lat], zoom: 13, essential: true });
             geocodedBoundsRef.current = { minLat: lat - 0.1, maxLat: lat + 0.1, minLng: lng - 0.1, maxLng: lng + 0.1 };
           }
         }
@@ -1344,10 +1532,15 @@ export default function BrowsePage() {
       ? { getSouthWest: () => ({ lat: geocodedBoundsRef.current!.minLat, lng: geocodedBoundsRef.current!.minLng }),
           getNorthEast: () => ({ lat: geocodedBoundsRef.current!.maxLat, lng: geocodedBoundsRef.current!.maxLng }) }
       : (searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null);
-    // Pass the boundary polygon directly as polygonOverride.
-    // This avoids the stale closure issue with boundaryActiveRef.
-    const polygon = drawPointsRef.current.length >= 3 ? drawPointsRef.current : null;
-    fetchAllProperties(searchBounds as any, undefined, polygon);
+    // Pass exact boundary rings directly (avoids stale-closure issues).
+    // Geocoded rings win; freehand falls back to its flat ring.
+    const activeRings: BoundaryRings | null =
+      geocodedRingsRef.current && geocodedRingsRef.current.length > 0
+        ? geocodedRingsRef.current
+        : drawPointsRef.current.length >= 3
+          ? [drawPointsRef.current]
+          : null;
+    fetchAllProperties(searchBounds as any, undefined, activeRings as any);
   };
 
   const handleApplyFilters = async () => {
@@ -1358,6 +1551,7 @@ export default function BrowsePage() {
     const defaultFilters = { location: '', minPrice: '', maxPrice: '', bhkTypeId: '', propertyTypeId: '' };
     filtersRef.current = defaultFilters;
     geocodedBoundsRef.current = null; // Clear any geocoded location
+    geocodedRingsRef.current = null; // Clear exact-ring boundary with it
     cancelAutocomplete();  // A5: reset autocomplete state on reset
     setLoading(true);
     setFilters(defaultFilters);
@@ -1392,19 +1586,27 @@ export default function BrowsePage() {
   const loadMore = useCallback(() => {
     const bounds = searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null;
     const scope = searchScopeRef.current;
+    // Explicit rings (not closure state): paginated pages filter the exact
+    // same boundary as page one. Geocoded exact rings win over freehand.
+    const activeRings: BoundaryRings | null =
+      geocodedRingsRef.current && geocodedRingsRef.current.length > 0
+        ? geocodedRingsRef.current
+        : boundaryActiveRef.current && drawPointsRef.current.length >= 3
+          ? [drawPointsRef.current]
+          : null;
     if (scope === 'both') {
       if (combinedNextCursor) {
         fetchAllProperties(bounds, {
           propertyCursor: combinedNextCursor,
           append: true,
-        });
+        }, activeRings);
       }
     } else {
       fetchAllProperties(bounds, {
         propertyCursor: (scope !== 'projects' && hasMoreProperties) ? propertyNextCursor : null,
         projectCursor: (scope !== 'properties' && hasMoreProjects) ? projectNextCursor : null,
         append: true,
-      });
+      }, activeRings);
     }
   }, [propertyNextCursor, projectNextCursor, hasMoreProperties, hasMoreProjects, combinedNextCursor]);
 
@@ -1484,32 +1686,50 @@ export default function BrowsePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const updateBoundaryLayer = useCallback((points: { lat: number; lng: number }[], isActive?: boolean) => {
+  const updateBoundaryLayer = useCallback((points: { lat: number; lng: number }[] | BoundaryRings, isActive?: boolean) => {
     const map = mapRef.current;
     if (!map) return;
     const src = map.getSource('boundary') as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
-    if (points.length < 2) {
-      src.setData({ type: 'FeatureCollection', features: [] } as any);
-      map.setPaintProperty('boundary-fill', 'fill-opacity', 0);
-      map.setPaintProperty('boundary-outline', 'line-opacity', 0);
-      map.setPaintProperty('boundary-vertices', 'circle-opacity', 0);
+    // Accept a single flat ring (freehand) or all outer rings of a geocoded
+    // entity (exact outline incl. islands). MultiPolygon $type still matches
+    // the Polygon fill/outline layers.
+    const rings: BoundaryRings =
+      points.length > 0 && Array.isArray((points as any)[0])
+        ? (points as BoundaryRings).filter(r => Array.isArray(r) && r.length >= 3)
+        : (points as { lat: number; lng: number }[]).length >= 3
+          ? [[...(points as { lat: number; lng: number }[])]]
+          : [];
+    const closeRing = (ring: BoundaryRing[]): [number, number][] => {
+      const coords: [number, number][] = ring.map(p => [p.lng, p.lat]);
+      coords.push(coords[0]);
+      return coords;
+    };
+    if (rings.length === 0) {
+      // Fewer than 3 points: clear, or preview a freehand stroke as a line.
+      const flat = points as { lat: number; lng: number }[];
+      if (!Array.isArray((points as any)[0]) && flat.length >= 2) {
+        const coords: [number, number][] = flat.map(p => [p.lng, p.lat]);
+        src.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString' as const, coordinates: coords }, properties: {} }] } as any);
+        map.setPaintProperty('boundary-outline', 'line-opacity', 0.8);
+      } else {
+        src.setData({ type: 'FeatureCollection', features: [] } as any);
+        map.setPaintProperty('boundary-fill', 'fill-opacity', 0);
+        map.setPaintProperty('boundary-outline', 'line-opacity', 0);
+        map.setPaintProperty('boundary-vertices', 'circle-opacity', 0);
+      }
       return;
     }
-    const coords: [number, number][] = points.map(p => [p.lng, p.lat]);
-    // Close the polygon ring (GeoJSON RFC 7946 requires first == last)
-    if (coords.length >= 3) {
-      coords.push(coords[0]);
-    }
-    const isClosed = points.length >= 3;
-    const geometry = isClosed
-      ? { type: 'Polygon' as const, coordinates: [coords] }
-      : { type: 'LineString' as const, coordinates: coords };
+    const geometry = rings.length === 1
+      // Close the polygon ring (GeoJSON RFC 7946 requires first == last)
+      ? { type: 'Polygon' as const, coordinates: [closeRing(rings[0])] }
+      : { type: 'MultiPolygon' as const, coordinates: rings.map(r => [closeRing(r)]) };
     src.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry, properties: {} }] } as any);
     const active = isActive ?? false;
-    map.setPaintProperty('boundary-fill', 'fill-opacity', active ? 0.15 : 0.12);
-    map.setPaintProperty('boundary-outline', 'line-opacity', 0.8);
-    map.setPaintProperty('boundary-outline', 'line-width', active ? 3 : 2);
+    // Outline only: never fill or tint the map — the base map stays normal.
+    map.setPaintProperty('boundary-fill', 'fill-opacity', 0);
+    map.setPaintProperty('boundary-outline', 'line-opacity', 0.9);
+    map.setPaintProperty('boundary-outline', 'line-width', 1.5);
     map.setPaintProperty('boundary-outline', 'line-dasharray', active ? [1, 0] : [4, 4]);
     map.setPaintProperty('boundary-vertices', 'circle-opacity', 0);
   }, []);
@@ -1518,10 +1738,47 @@ export default function BrowsePage() {
     updateBoundaryLayerRef.current = updateBoundaryLayer;
   }, [updateBoundaryLayer]);
 
+  type GeoBounds = { minLat: number; maxLat: number; minLng: number; maxLng: number };
+
+  // Single choke point for geocoded boundaries: the outline drawn and the
+  // rings sent to ES come from the SAME array, so they can never disagree.
+  const applyGeocodedBoundary = useCallback((rings: BoundaryRings, bbox: GeoBounds | null) => {
+    const valid = (rings || []).filter(r => Array.isArray(r) && r.length >= 3);
+    geocodedRingsRef.current = valid.length > 0 ? valid : null;
+    drawPointsRef.current = [];
+    if (valid.length > 0) {
+      setBoundaryPoints(valid.flat());
+      setBoundaryActive(true);
+      updateBoundaryLayerRef.current(valid, true);
+      if (bbox) {
+        geocodedBoundsRef.current = bbox;
+        if (mapRef.current) {
+          mapRef.current.fitBounds(
+            [bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat],
+            { padding: 40, duration: 800 }
+          );
+        }
+      }
+    }
+  }, []);
+
+  // Full boundary reset: outline, filter rings, freehand accumulator, bounds.
+  const clearBoundaryState = useCallback(() => {
+    geocodedRingsRef.current = null;
+    drawPointsRef.current = [];
+    setBoundaryPoints([]);
+    setBoundaryActive(false);
+    geocodedBoundsRef.current = null;
+    updateBoundaryLayerRef.current([]);
+  }, []);
+
   const activateDrawing = useCallback(() => {
     setIsDrawingMode(true);
     setBoundaryPoints([]);
     drawPointsRef.current = [];
+    // Freehand replaces any geocoded boundary — clear exact rings so they
+    // can't keep filtering alongside the new drawing.
+    geocodedRingsRef.current = null;
     if (mapRef.current) {
       const source = mapRef.current.getSource('browse-points') as maplibregl.GeoJSONSource | undefined;
       if (source) {
@@ -1537,8 +1794,12 @@ export default function BrowsePage() {
 
   const cancelDrawing = useCallback(() => {
     setIsDrawingMode(false);
+    // Full reset: a cancelled draw leaves no stale geocoded rings behind.
+    geocodedRingsRef.current = null;
+    geocodedBoundsRef.current = null;
     drawPointsRef.current = [];
     setBoundaryPoints([]);
+    setBoundaryActive(false);
     updateBoundaryLayer([]);
     if (mapRef.current) {
       mapRef.current.dragPan.enable();
@@ -1568,7 +1829,7 @@ export default function BrowsePage() {
     updateBoundaryLayer(simplified, true);
     // Pass current map bounds instead of null — null causes 400 "bounds required" error
     const bounds = mapRef.current?.getBounds() ?? null;
-    fetchPropertiesRef.current(bounds, undefined, simplified);
+    fetchPropertiesRef.current(bounds, undefined, [simplified]);
   }, [updateBoundaryLayer]);
 
   const removeBoundary = useCallback(() => {
@@ -1576,6 +1837,7 @@ export default function BrowsePage() {
     setBoundaryPoints([]);
     setIsDrawingMode(false);
     drawPointsRef.current = [];
+    geocodedRingsRef.current = null;
     geocodedBoundsRef.current = null;
     updateBoundaryLayer([]);
     if (mapRef.current) {
@@ -1989,7 +2251,14 @@ export default function BrowsePage() {
                   </div>
                 )}
                 {combinedList.length === 0 && !loading && (
-                  <p className="text-center text-text-color-light mt-10">No results found. Try moving the map or changing filters.</p>
+                  <div className="text-center mt-10 space-y-1">
+                    <p className="text-text-color-light">No results found. Try moving the map or changing filters.</p>
+                    {withoutPurposeTotal != null && withoutPurposeTotal > 0 && (
+                      <p className="text-sm text-text-color-light">
+                        {withoutPurposeTotal} nearby {withoutPurposeTotal === 1 ? 'listing is' : 'listings are'} under a different listing type — try {intent === 'rent' ? 'Buy' : 'Rent'}.
+                      </p>
+                    )}
+                  </div>
                 )}
               </>
             )}

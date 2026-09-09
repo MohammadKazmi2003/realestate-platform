@@ -45,10 +45,9 @@ export function getElasticsearchClient(): Client {
     maxRetries: 3,
     requestTimeout: 5000,
     sniffOnStart: false,
-    connectionPool: {
-      pingInterval: 60000,
-      resurrectStrategy: 'ping',
-    },
+    // @elastic/elasticsearch 8.19 removed the nested `connectionPool` options
+    // object; pool tuning is now top-level (defaults already ping/resurrect).
+    resurrectStrategy: 'ping',
   });
 
   return esClient;

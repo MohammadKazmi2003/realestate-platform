@@ -108,10 +108,12 @@ export async function searchProperties(params: SearchQueryInput, signal?: AbortS
   }
 }
 
-export async function autocompleteSearch(query: string, signal?: AbortSignal, scope?: string) {
+export async function autocompleteSearch(query: string, signal?: AbortSignal, scope?: string, country?: string, proximity?: string) {
   try {
     const scopeParam = scope ? `&scope=${scope}` : '';
-    const response = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(query)}${scopeParam}`, {
+    const countryParam = country ? `&country=${encodeURIComponent(country)}` : '';
+    const proximityParam = proximity ? `&proximity=${encodeURIComponent(proximity)}` : '';
+    const response = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(query)}${scopeParam}${countryParam}${proximityParam}`, {
       signal: signal || AbortSignal.timeout(5000),
     });
     if (!response.ok) {

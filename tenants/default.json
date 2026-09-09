@@ -50,8 +50,8 @@
     "radiusStep": 5,
     "arrayFields": ["amenities", "furnishings"],
     "stripFromMarkerKey": ["sort", "pageSize", "cursor"],
-    "polygonMaxPoints": 50,
-    "polygonPrecision": 4
+    "polygonMaxPoints": 1000,
+    "polygonPrecision": 6
   },
   "priceScales": {
     "$comment": "Zillow-style adaptive slider buckets per currency x purpose (sale|rent). tiers[] must ascend by upTo; step is the slider increment + snap granularity inside that band. min/max bound the track; max edge renders as ceilLabel (Any) and omits the ES lte. Edit JSON only — no code changes to add/modify currencies.",

@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
       query, location, minPrice, maxPrice, propertyType, bhkType,
       minBedrooms, maxBedrooms,
       listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
-      lat, lng, radiusKm, polygon,
+      lat, lng, radiusKm, polygon, polygons,
     } = body;
 
     if (!rawBounds) {
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
         query, location, minPrice, maxPrice, propertyType, bhkType,
         minBedrooms, maxBedrooms,
         listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
-        lat, lng, radiusKm, scope, sort, pageSize, cursor, polygon,
+        lat, lng, radiusKm, scope, sort, pageSize, cursor, polygon, polygons,
       }
     );
 
@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
           propertyTotal: cachedList.propertyTotal,
           projectTotal: cachedList.projectTotal,
           projectGroups: cachedList.projectGroups || [],
+          withoutPurposeTotal: cachedList.withoutPurposeTotal ?? null,
           zoom,
         },
         { headers: CACHE_HEADERS }
@@ -158,6 +159,8 @@ export async function POST(req: NextRequest) {
         projectTotal: searchResult.projectTotal,
         // Community rollup for "N New Homes" pills
         projectGroups: searchResult.projectGroups || [],
+        // Intent-aware empty state ("N available under other intents")
+        withoutPurposeTotal: searchResult.withoutPurposeTotal ?? null,
 
         // Metadata
         zoom,
@@ -165,6 +168,11 @@ export async function POST(req: NextRequest) {
       { headers: CACHE_HEADERS }
     );
   } catch (error: any) {
+    // Client aborts are routine here (cancel-on-new + 400ms pan debounce):
+    // don't log them as errors, just acknowledge the disconnect.
+    if (req.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      return NextResponse.json({ error: 'aborted' }, { status: 499 });
+    }
     logger.error('Map data API error', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

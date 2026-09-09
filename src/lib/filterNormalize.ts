@@ -52,6 +52,9 @@ export interface RawMapFilters {
   pageSize?: number;
   cursor?: unknown;
   polygon?: { lat: number; lng: number }[];
+  /** Exact-ring boundary: all outer rings of the selected entity (mainland +
+   * islands). A listing inside ANY ring matches. Supersedes `polygon`. */
+  polygons?: { lat: number; lng: number }[][];
 }
 
 export interface NormalizedMapFilters {
@@ -77,6 +80,7 @@ export interface NormalizedMapFilters {
   pageSize?: number;
   cursor?: unknown;
   polygon?: { lat: number; lng: number }[];
+  polygons?: { lat: number; lng: number }[][];
 }
 
 // Tier-aware price snapping. scope=both (or unknown) mixes currencies and
@@ -171,6 +175,48 @@ function normPolygon(
   return pts;
 }
 
+// Normalize exact-ring boundaries: every outer ring of the selected entity is
+// kept (mainland AND islands — an explicitly selected island filters by its
+// own ring). The point budget is shared across rings so large admin areas keep
+// their true shape instead of collapsing to a coarse sliver.
+function normPolygons(
+  rings: { lat: number; lng: number }[][] | undefined,
+  precision: number,
+  maxPoints: number
+): { lat: number; lng: number }[][] | undefined {
+  if (!rings || rings.length === 0) return undefined;
+  const cleaned = rings
+    .map((ring) =>
+      (ring || [])
+        .map((p) => ({ lat: cleanFloat(roundNum(p.lat, precision)), lng: cleanFloat(roundNum(p.lng, precision)) }))
+        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+    )
+    .filter((ring) => ring.length >= 3);
+  if (cleaned.length === 0) return undefined;
+  const total = cleaned.reduce((n, r) => n + r.length, 0);
+  const sampled =
+    total <= maxPoints
+      ? cleaned
+      : cleaned.map((ring) => {
+          const keep = Math.max(3, Math.floor((ring.length / total) * maxPoints));
+          if (ring.length <= keep) return ring;
+          const stride = ring.length / keep;
+          const out: { lat: number; lng: number }[] = [];
+          for (let i = 0; i < keep; i++) {
+            out.push(ring[Math.floor(i * stride)]);
+          }
+          return out;
+        });
+  return sampled.map((ring) => {
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first.lat !== last.lat || first.lng !== last.lng) {
+      return [...ring, { ...first }];
+    }
+    return ring;
+  });
+}
+
 // Trim float dust from bounds (~0.1m precision) so identical viewports hash
 // identically across runtimes. Deliberately NOT grid-snapped: the ES query
 // runs on these exact bounds, so every cached payload covers precisely the
@@ -221,6 +267,7 @@ function orderedForHash(f: NormalizedMapFilters): Record<string, unknown> {
     pageSize: f.pageSize,
     cursor: f.cursor,
     polygon: f.polygon,
+    polygons: f.polygons,
   };
 }
 
@@ -272,7 +319,29 @@ export function normalizeFilters(raw: RawMapFilters): NormalizedMapFilters {
   if (raw.pageSize != null) out.pageSize = raw.pageSize;
   if (raw.cursor !== undefined) out.cursor = raw.cursor;
   out.polygon = normPolygon(raw.polygon, cfg.polygonPrecision, cfg.polygonMaxPoints);
+  out.polygons = normPolygons(raw.polygons, cfg.polygonPrecision, cfg.polygonMaxPoints);
   return out;
+}
+
+/**
+ * Shared boundary normalizer for routes that build ES queries inline
+ * (legacy /api/search): rounds + caps + re-closes rings so page-2 filters
+ * the exact same population as the normalized /api/map-data page 1.
+ */
+export function normalizeBoundaryPolygons(
+  polygon?: { lat: number; lng: number }[] | null,
+  polygons?: { lat: number; lng: number }[][] | null
+): { lat: number; lng: number }[][] {
+  const cfg = tenant.filterNormalization;
+  if (Array.isArray(polygons) && polygons.length > 0) {
+    return normPolygons(polygons, cfg.polygonPrecision, cfg.polygonMaxPoints) || [];
+  }
+  const single = normPolygon(
+    Array.isArray(polygon) ? polygon : undefined,
+    cfg.polygonPrecision,
+    cfg.polygonMaxPoints
+  );
+  return single ? [single] : [];
 }
 
 function stripForMarkers(f: NormalizedMapFilters): NormalizedMapFilters {

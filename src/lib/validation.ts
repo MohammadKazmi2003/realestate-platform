@@ -68,6 +68,7 @@ export const searchQuerySchema = z.object({
   radiusKm: z.number().min(0).max(500).optional(),
   bounds: boundsSchema.optional(),
   polygon: polygonSchema,
+  polygons: z.array(z.array(polygonPointSchema).min(3)).max(32).optional(),
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(500).optional(),
   sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular']).optional(),

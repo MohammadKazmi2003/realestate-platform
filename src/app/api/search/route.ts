@@ -5,6 +5,7 @@ import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { searchQuerySchema } from '@/lib/validation';
 import { logger } from '@/lib/logger';
 import { enqueueAnalytics } from '@/lib/events';
+import { normalizeBoundaryPolygons } from '@/lib/filterNormalize';
 
 function roundBounds(b: any) {
   if (!b) return b;
@@ -41,17 +42,26 @@ export async function POST(req: NextRequest) {
     const {
       query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
       amenities = [], furnishings = [], bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds,
-      polygon, cursor, pageSize = 24, sort = 'newest', scope = 'properties',
-    } = parsed.data;
+      polygon, polygons, cursor, pageSize = 24, sort = 'newest', scope = 'properties',
+    } = parsed.data as any;
 
-    const query = sanitize(rawQuery)?.toLowerCase().trim();
-    const location = sanitize(rawLocation)?.toLowerCase().trim();
+    const stripNumbers = (s: string | undefined): string | undefined => {
+      if (!s) return s;
+      const t = s.replace(/\b\d{3,}\b/g, ' ').replace(/\s+/g, ' ').trim();
+      return t.length > 0 ? t : undefined;
+    };
+    const query = stripNumbers(sanitize(rawQuery)?.toLowerCase().trim());
+    const location = stripNumbers(sanitize(rawLocation)?.toLowerCase().trim());
     const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
     const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
+    // Normalized once so the key, the query, and /api/map-data page 1 all
+    // describe the identical boundary (fixes stale Load-More pages).
+    const boundaryRings = normalizeBoundaryPolygons(polygon as any, polygons as any);
+    const hasBoundary = boundaryRings.length > 0;
 
     // NOTE: cursor MUST be part of the key — without it every "load more"
     // page returns the cached page 1, which appends duplicate ids downstream.
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), pageSize, sort, scope, cursor: cursor ?? null })}`;
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), polygons: hasBoundary ? boundaryRings : null, pageSize, sort, scope, cursor: cursor ?? null })}`;
 
     const cached = await cacheGet(cacheKey);
     if (cached) {
@@ -68,8 +78,11 @@ export async function POST(req: NextRequest) {
     const commonFilters: any[] = [];
     const propertyFilters: any[] = [];
 
+    // With an exact boundary, geography filters and text only scores
+    // (small places often lack text tokens entirely — see esQueryBuilder).
+    const textClauses: any[] = [];
     if (query) {
-      must.push({
+      textClauses.push({
         multi_match: {
           query,
           fields: scope === 'both'
@@ -83,7 +96,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (location) {
-      must.push({
+      textClauses.push({
         multi_match: {
           query: location,
           fields: ['location_text^3', 'title^2', 'name^2', 'project_name^1'],
@@ -91,6 +104,13 @@ export async function POST(req: NextRequest) {
           fuzziness: 'AUTO',
         },
       });
+    }
+    if (textClauses.length > 0) {
+      if (hasBoundary) {
+        must.push({ bool: { should: textClauses, minimum_should_match: 0 } });
+      } else {
+        must.push(...textClauses);
+      }
     }
 
     commonFilters.push({ term: { status: 'available' } });
@@ -152,12 +172,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (polygon && polygon.length >= 3) {
+    if (boundaryRings.length === 1) {
       commonFilters.push({
         geo_polygon: {
           location: {
-            points: polygon.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
+            points: boundaryRings[0].map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
           },
+        },
+      });
+    } else if (boundaryRings.length > 1) {
+      commonFilters.push({
+        bool: {
+          should: boundaryRings.map((ring: any[]) => ({
+            geo_polygon: {
+              location: { points: ring.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })) },
+            },
+          })),
+          minimum_should_match: 1,
         },
       });
     }
@@ -286,11 +317,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Intent-aware empty state (mirrors esQueryBuilder.queryESListings):
+    // one cheap count without the purpose filter, only when total is 0.
+    let withoutPurposeTotal: number | null = null;
+    if (total === 0 && typeof listingPurpose === 'string' && listingPurpose.trim()) {
+      try {
+        const relaxedFilters = filters.filter(
+          (f: any) => JSON.stringify(f).indexOf('listing_purpose') === -1
+        );
+        const countRes: any = await es.count({
+          index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
+          query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: relaxedFilters } },
+        });
+        withoutPurposeTotal = typeof countRes.count === 'number' ? countRes.count : null;
+      } catch {
+        withoutPurposeTotal = null;
+      }
+    }
+
     const response: any = {
       results,
       total,
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
       aggregations: { facets: (esResponse as any).aggregations || {} },
+      withoutPurposeTotal,
     };
 
     if (scope === 'both') {

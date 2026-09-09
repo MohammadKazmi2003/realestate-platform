@@ -72,10 +72,33 @@ describe('filterNormalize — cache-key architecture invariants', () => {
     const a = prepareMapQuery(B, { ...BASE, polygon: ring });
     const b = prepareMapQuery(B, { ...BASE, polygon: [...ring].reverse() });
     // Reversed ring differs (shape order matters) but vertex count is capped.
-    expect(a.filters.polygon!.length).toBeLessThanOrEqual(51); // 50 + closing point
+    expect(a.filters.polygon!.length).toBeLessThanOrEqual(1001); // 1000 + closing point
     const tiny = ring.map((p) => ({ lat: p.lat + 1e-9, lng: p.lng + 1e-9 }));
     const c = prepareMapQuery(B, { ...BASE, polygon: tiny });
     expect(c.markerKey).toBe(a.markerKey);
+  });
+
+  it('exact-ring boundaries keep every ring (mainland + islands)', () => {
+    const mainland = Array.from({ length: 400 }, (_, i) => ({
+      lat: 25 + Math.sin((i / 400) * Math.PI * 2) * 0.5,
+      lng: 55 + Math.cos((i / 400) * Math.PI * 2) * 0.5,
+    }));
+    const island = [
+      { lat: 25.1, lng: 55.1 },
+      { lat: 25.11, lng: 55.1 },
+      { lat: 25.11, lng: 55.11 },
+      { lat: 25.1, lng: 55.11 },
+    ];
+    const q = prepareMapQuery(B, { ...BASE, polygons: [mainland, island] });
+    // Both rings survive normalization (shared 1000-pt budget, not winner-take-all).
+    expect(q.filters.polygons!.length).toBe(2);
+    expect(q.filters.polygons![1].length).toBeGreaterThanOrEqual(4);
+    const total = q.filters.polygons!.reduce((n, r) => n + r.length, 0);
+    expect(total).toBeLessThanOrEqual(1002); // 1000 + closing points
+    // Rings participate in the cache key (no cross-boundary reuse).
+    const other = prepareMapQuery(B, { ...BASE, polygons: [mainland] });
+    expect(other.markerKey).not.toBe(q.markerKey);
+    expect(other.listKey).not.toBe(q.listKey);
   });
 
   it('bounds in the prepared query equal the requested viewport (coverage)', () => {

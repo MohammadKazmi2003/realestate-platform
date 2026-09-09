@@ -55,14 +55,33 @@ function MyListingsPage() {
     setDeletingId(propertyId);
     setError(null);
     try {
-      // Deletion logic can remain the same, as RLS protects it.
-      const { error: deletePropertyError } = await supabase
+      // RLS scopes the delete to the owner's own rows. A missing/blocked
+      // policy deletes 0 rows WITHOUT an error, so verify the row is really
+      // gone — otherwise the card vanishes here and "loads back" on refetch.
+      const { data: deletedRows, error: deletePropertyError } = await supabase
         .from('properties')
         .delete()
         .eq('id', propertyId)
-        .eq('user_id', user?.id);
+        .eq('user_id', user?.id)
+        .select('id');
 
       if (deletePropertyError) throw deletePropertyError;
+      if (!deletedRows || deletedRows.length === 0) {
+        throw new Error('Delete was not permitted (property not removed). Please refresh and try again.');
+      }
+      // Best-effort: remove the property's storage folder so images don't orphan.
+      // Never blocks the delete itself.
+      try {
+        const folder = `${user?.id}/${propertyId}`;
+        const { data: files } = await supabase.storage.from('property-images').list(folder);
+        if (files && files.length > 0) {
+          await supabase.storage
+            .from('property-images')
+            .remove(files.map(f => `${folder}/${f.name}`));
+        }
+      } catch (storageErr) {
+        console.warn('Storage cleanup skipped:', storageErr);
+      }
       setMyProperties(prevProperties => prevProperties.filter(p => p.id !== propertyId));
       // Incremental search index: drop this one ES document (fire-and-forget).
       fetch('/api/search-index', {

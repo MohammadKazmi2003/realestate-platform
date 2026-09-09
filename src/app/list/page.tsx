@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Loader2, Search, SlidersHorizontal, X, ChevronDown, ChevronUp } from 'lucide-react';
 import Header from '@/app/components/Header';
 import { PropertyCard, PropertyCardProps } from '@/app/components/PropertyCard';
-import { searchProperties, mapEsResultToPropertyCard } from '@/lib/searchClient';
+import { searchProperties, mapEsResultToPropertyCard, autocompleteSearch } from '@/lib/searchClient';
 import { getLookup } from '@/lib/lookupCache';
 import { tenant } from '@/lib/tenant';
 import { mergeUniqueById } from '@/lib/collections';
@@ -321,6 +321,9 @@ export default function ListPage() {
   const [hasMore, setHasMore] = useState(true);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const lookupsLoadedRef = useRef(false);
+  // Count of listings matching everything EXCEPT listing purpose, populated
+  // only when the purpose filter zeroes results (intent-aware empty state).
+  const [withoutPurposeTotal, setWithoutPurposeTotal] = useState<number | null>(null);
 
   const [bhkTypes, setBhkTypes] = useState<BhkType[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<PropertyType[]>([]);
@@ -337,6 +340,15 @@ export default function ListPage() {
 
   const [amenitySearchTerm, setAmenitySearchTerm] = useState('');
   const [showAllAmenities, setShowAllAmenities] = useState(false);
+
+  // Text-only location suggestions (no boundaries on List — selecting one
+  // just fills the location text and refetches).
+  const [locSuggestions, setLocSuggestions] = useState<{ text: string; type?: string }[]>([]);
+  const [showLocSuggestions, setShowLocSuggestions] = useState(false);
+  const locBoxRef = useRef<HTMLDivElement>(null);
+  const locDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const locAbortRef = useRef<AbortController | null>(null);
+  const locReqIdRef = useRef(0);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   const itemsPerPage = 12;
@@ -400,12 +412,16 @@ export default function ListPage() {
         setProperties([]);
         setHasMore(false);
         setTotalCount(0);
+        setWithoutPurposeTotal(null);
       } else {
         const mapped = response.results.map((r: any) => mapEsResultToPropertyCard(r));
         setProperties(shouldReset ? mapped : prev => mergeUniqueById(prev, mapped));
         setNextCursor(response.nextCursor);
         setHasMore(!!response.nextCursor);
         setTotalCount(response.total || 0);
+        setWithoutPurposeTotal(
+          typeof response.withoutPurposeTotal === 'number' ? response.withoutPurposeTotal : null
+        );
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -504,6 +520,57 @@ export default function ListPage() {
     return 'buy';
   })();
 
+  const handleLocationChange = (value: string) => {
+    setFilters(prev => ({ ...prev, location: value }));
+    if (locDebounceRef.current) clearTimeout(locDebounceRef.current);
+    // Fire from 2 chars (server floor) so short prefixes suggest instantly.
+    if (value.trim().length >= 2) {
+      locDebounceRef.current = setTimeout(async () => {
+        if (locAbortRef.current) locAbortRef.current.abort();
+        const controller = new AbortController();
+        locAbortRef.current = controller;
+        const reqId = ++locReqIdRef.current;
+        try {
+          // Text-only suggestions: List never uses boundaries, so ES +
+          // MapTiler names are enough (bbox/center/polygons ignored).
+          const result = await autocompleteSearch(value, controller.signal, 'properties', tenant.map.geocodeCountries || undefined);
+          if (reqId !== locReqIdRef.current) return;
+          const sugs = (result?.suggestions || []).map((s: any) => ({ text: s.text, type: s.type }));
+          setLocSuggestions(sugs);
+          setShowLocSuggestions(sugs.length > 0);
+        } catch {
+          // Silent — plain text search still works on submit.
+        }
+      }, 350);
+    } else {
+      if (locAbortRef.current) locAbortRef.current.abort();
+      locAbortRef.current = null;
+      setShowLocSuggestions(false);
+      setLocSuggestions([]);
+    }
+    debouncedFetchProperties();
+  };
+
+  const selectLocSuggestion = (text: string) => {
+    if (locAbortRef.current) locAbortRef.current.abort();
+    locAbortRef.current = null;
+    if (locDebounceRef.current) clearTimeout(locDebounceRef.current);
+    setFilters(prev => ({ ...prev, location: text }));
+    setShowLocSuggestions(false);
+    setLocSuggestions([]);
+    debouncedFetchProperties();
+  };
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (locBoxRef.current && !locBoxRef.current.contains(e.target as Node)) {
+        setShowLocSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, []);
+
   const handleFilterChange = (key: keyof Filters, value: any) => {
     setFilters(prev => ({ ...prev, [key]: value }));
     // Keep the toolbar dropdown + URL in sync when the drawer select changes.
@@ -593,15 +660,30 @@ export default function ListPage() {
         <p className="text-center text-text-color-light mb-8 min-h-[1.5rem]">{totalCount > 0 ? `${totalCount} properties found` : ''}</p>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-8 shadow-neumorphic-outset p-3 rounded-3xl">
-          <div className="relative sm:max-w-sm md:max-w-md lg:max-w-lg flex-1">
+          <div className="relative sm:max-w-sm md:max-w-md lg:max-w-lg flex-1" ref={locBoxRef}>
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-color-light pointer-events-none" size={18} />
             <input
               type="text"
               placeholder="Search by location..."
               value={filters.location}
-              onChange={e => handleFilterChange('location', e.target.value)}
+              onChange={e => handleLocationChange(e.target.value)}
               className="w-full !pl-10 !pr-4 neumorphic-input"
             />
+            {showLocSuggestions && (
+              <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                {locSuggestions.map((s, i) => (
+                  <div key={i} onClick={() => selectLocSuggestion(s.text)} className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-blue-50 cursor-pointer transition-colors">
+                    <span className="text-base flex-shrink-0">
+                      {s.type === 'project' ? '🏗️' : s.type === 'property' ? '🏢' : '📍'}
+                    </span>
+                    <span className="flex-1 truncate">{s.text}</span>
+                    {s.type && (
+                      <span className="text-xs text-gray-400 flex-shrink-0 capitalize">{s.type}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2 sm:ml-auto">
             <select
@@ -680,6 +762,11 @@ export default function ListPage() {
           <div className="text-center py-20">
             <h2 className="text-xl font-semibold text-text-color-dark">No Properties Found</h2>
             <p className="text-text-color-light mt-2">Try adjusting your filters to find what you're looking for.</p>
+            {withoutPurposeTotal != null && withoutPurposeTotal > 0 && (
+              <p className="text-sm text-text-color-light mt-1">
+                {withoutPurposeTotal} matching {withoutPurposeTotal === 1 ? 'listing is' : 'listings are'} under a different listing type — try another option in the Listing Type dropdown.
+              </p>
+            )}
           </div>
         )}
       </main>

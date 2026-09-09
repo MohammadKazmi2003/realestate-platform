@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       page,
       bounds,
       polygon,
+      polygons,
     } = body;
 
     const sanitize = (s: string | undefined, maxLen = 200) => {
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
     };
     const normalizedAmenities = (amenities || []).map((a: string) => a.toLowerCase().trim());
     const normalizedConstructionPhases = (constructionPhases || []).map((c: string) => c.toLowerCase().trim());
-    const cacheKey = `ps:${JSON.stringify({ cleanedQuery, minPrice, maxPrice, constructionPhases: normalizedConstructionPhases, amenity: amenity?.toLowerCase().trim(), amenities: normalizedAmenities, sort, pageSize, cursor, page, bounds: roundBounds(bounds) })}`;
+    const cacheKey = `ps:${JSON.stringify({ cleanedQuery, minPrice, maxPrice, constructionPhases: normalizedConstructionPhases, amenity: amenity?.toLowerCase().trim(), amenities: normalizedAmenities, sort, pageSize, cursor, page, bounds: roundBounds(bounds), polygons: polygons ?? polygon ?? null })}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached);
@@ -100,12 +101,28 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (polygon && polygon.length >= 3) {
+    const boundaryRings: any[][] = Array.isArray(polygons)
+      ? polygons.filter((r: any) => Array.isArray(r) && r.length >= 3)
+      : Array.isArray(polygon) && polygon.length >= 3
+        ? [polygon]
+        : [];
+    if (boundaryRings.length === 1) {
       filters.push({
         geo_polygon: {
           location: {
-            points: polygon.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
+            points: boundaryRings[0].map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
           },
+        },
+      });
+    } else if (boundaryRings.length > 1) {
+      filters.push({
+        bool: {
+          should: boundaryRings.map((ring: any[]) => ({
+            geo_polygon: {
+              location: { points: ring.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })) },
+            },
+          })),
+          minimum_should_match: 1,
         },
       });
     }

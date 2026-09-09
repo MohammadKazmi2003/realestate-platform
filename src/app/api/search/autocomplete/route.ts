@@ -2,56 +2,28 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getElasticsearchClient, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkAutocompleteRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
+import { mergeSuggestions } from '@/lib/suggestions';
+import { scoreGeoCandidate, queryTokensOf } from '@/lib/geoRank';
 
 interface AutocompleteSuggestion {
   type: 'location' | 'property' | 'project' | 'geocoded';
   text: string;
   entity: string;
+  /** Stable MapTiler feature id — the client fetches exact geometry by id on
+   * select (one call), so the clicked entity can never mismatch the outline. */
+  id?: string;
+  /** MapTiler place types (e.g. ['place'], ['subregion']) — lets the client
+   * prefer administrative entities with real boundaries. */
+  place_type?: string[];
+  /** Heuristic: non-degenerate bbox ≈ a real boundary exists (city `place`
+   * entries often collapse to a point and have no polygon to outline). */
+  hasBoundary?: boolean;
   bbox?: number[];
   center?: number[];
   polygons?: { lat: number; lng: number }[][];
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY || '';
-
-function geoJsonCoordsToLatLng(coords: any): { lat: number; lng: number }[][] {
-  if (!coords || coords.length === 0) return [];
-  const result: { lat: number; lng: number }[][] = [];
-  const isMultiPolygon = Array.isArray(coords[0]) && Array.isArray(coords[0][0]) && Array.isArray(coords[0][0][0]);
-  if (isMultiPolygon) {
-    for (const polygon of coords) {
-      for (const ring of polygon) {
-        if (Array.isArray(ring)) {
-          result.push(ring.map(([lng, lat]: number[]) => ({ lat, lng })));
-        }
-      }
-    }
-  } else {
-    for (const ring of coords) {
-      if (Array.isArray(ring)) {
-        result.push(ring.map(([lng, lat]: number[]) => ({ lat, lng })));
-      }
-    }
-  }
-  return result;
-}
-
-async function fetchFeatureGeometry(featureId: string): Promise<{ lat: number; lng: number }[][] | null> {
-  if (!MAPTILER_KEY) return null;
-  try {
-    const url = `https://api.maptiler.com/geocoding/${encodeURIComponent(featureId)}.json?key=${MAPTILER_KEY}&language=en`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const geo = data.features?.[0]?.geometry;
-    if (geo && (geo.type === 'MultiPolygon' || geo.type === 'Polygon')) {
-      return geoJsonCoordsToLatLng(geo.coordinates);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 async function getESResults(q: string, indices: string[], signal?: AbortSignal): Promise<AutocompleteSuggestion[]> {
   const es = getElasticsearchClient();
@@ -62,7 +34,10 @@ async function getESResults(q: string, indices: string[], signal?: AbortSignal):
     query: {
       bool: {
         should: [
-          { match_phrase_prefix: { location_text: { query: q, boost: 3 } } },
+          // Edge-ngram subfield: order-insensitive prefix matching so small
+          // localities match from any token ("DN Nagar", "Old Panvel").
+          { match: { 'location_text.autocomplete': { query: q, boost: 3 } } },
+          { match_phrase_prefix: { location_text: { query: q, boost: 2 } } },
           { match_phrase_prefix: { title: { query: q, boost: 2 } } },
           { match_phrase_prefix: { name: { query: q, boost: 2 } } },
         ],
@@ -97,25 +72,48 @@ async function getESResults(q: string, indices: string[], signal?: AbortSignal):
   return suggestions;
 }
 
-async function getGeoResults(q: string): Promise<AutocompleteSuggestion[]> {
+async function getGeoResults(q: string, country?: string, proximity?: string): Promise<AutocompleteSuggestion[]> {
   if (!MAPTILER_KEY) return [];
   try {
-    const geoUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(q)}.json?key=${MAPTILER_KEY}&limit=5&language=en`;
+    // Geometry is resolved by feature id on select (exact entity, one call),
+    // so suggestions stay light: id + bbox + center only, no polygons here.
+    const countryParam = country ? `&country=${encodeURIComponent(country)}` : '';
+    // proximity=lng,lat biases toward the visible map without hard-filtering
+    // far matches (validated lng/lat ranges; ignored when malformed).
+    let proximityParam = '';
+    const m = (proximity || '').match(/^(-?\d+(\.\d+)?),(-?\d+(\.\d+)?)$/);
+    if (m) {
+      const lng = Number(m[1]);
+      const lat = Number(m[3]);
+      if (Number.isFinite(lng) && Number.isFinite(lat) && Math.abs(lng) <= 180 && Math.abs(lat) <= 85) {
+        proximityParam = `&proximity=${lng},${lat}`;
+      }
+    }
+    const geoUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(q)}.json?key=${MAPTILER_KEY}&limit=5&language=en${countryParam}${proximityParam}`;
     const geoResponse = await fetch(geoUrl, { signal: AbortSignal.timeout(3000) });
+    if (!geoResponse.ok) return [];
     const geoData = await geoResponse.json();
 
     const features = (geoData.features || []).slice(0, 5);
+    const queryTokens = queryTokensOf(q);
+    const ranked = features
+      .map((feature: any, i: number) => ({ feature, score: scoreGeoCandidate(feature, queryTokens), i }))
+      .sort((a, b) => b.score - a.score || a.i - b.i);
     const suggestions: AutocompleteSuggestion[] = [];
 
-    for (const feature of features) {
+    for (const { feature } of ranked) {
       const placeName = feature.place_name || '';
       if (placeName) {
+        const bbox: number[] | undefined = feature.bbox;
         suggestions.push({
           type: 'geocoded',
           text: placeName,
           entity: 'location',
-          bbox: feature.bbox,
+          id: feature.id,
+          bbox,
           center: feature.center,
+          place_type: Array.isArray(feature.place_type) ? feature.place_type : undefined,
+          hasBoundary: !!bbox && bbox.length === 4 && bbox[0] !== bbox[2] && bbox[1] !== bbox[3],
         });
       }
     }
@@ -139,6 +137,8 @@ export async function GET(req: NextRequest) {
   }
 
   const scope = req.nextUrl.searchParams.get('scope') || 'both';
+  const country = (req.nextUrl.searchParams.get('country') || '').trim().slice(0, 32);
+  const proximity = (req.nextUrl.searchParams.get('proximity') || '').trim().slice(0, 48);
 
   let indices: string[];
   if (scope === 'properties') {
@@ -149,7 +149,14 @@ export async function GET(req: NextRequest) {
     indices = [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS];
   }
 
-  const cacheKey = `ac:${scope}:${q.toLowerCase().trim()}`;
+  // Proximity rounded to ~1km in the key: nearby viewports share entries
+  // instead of each pixel producing a unique cache key.
+  const proximityKey = (() => {
+    const m = proximity.match(/^(-?\d+(\.\d+)?),(-?\d+(\.\d+)?)$/);
+    if (!m) return '';
+    return `${Number(m[1]).toFixed(2)},${Number(m[3]).toFixed(2)}`;
+  })();
+  const cacheKey = `ac:${scope}:${country.toLowerCase()}:${proximityKey}:${q.toLowerCase().trim()}`;
   const cached = await cacheGet(cacheKey);
   if (cached) {
     return NextResponse.json(cached);
@@ -161,7 +168,7 @@ export async function GET(req: NextRequest) {
     // (or geo times out) before we respond — geo is NEVER silently dropped.
     const esPromise = getESResults(q, indices, req.signal);
     const geoPromise = Promise.race([
-      getGeoResults(q),
+      getGeoResults(q, country || undefined, proximity || undefined),
       new Promise<AutocompleteSuggestion[]>(res => setTimeout(() => res([]), 2500)),
     ]);
 
@@ -172,32 +179,11 @@ export async function GET(req: NextRequest) {
       geoPromise.catch(() => [] as AutocompleteSuggestion[]),
     ]);
 
-    // Deduplicate: don't show same text twice
-    const seen = new Set<string>();
-    const esFiltered = esSuggestions.filter(s => {
-      if (seen.has(s.text)) return false;
-      seen.add(s.text);
-      return true;
-    });
-    const geoFiltered = geoSuggestions.filter(s => {
-      if (seen.has(s.text)) return false;
-      seen.add(s.text);
-      return true;
-    });
+    // Interleave: first geocoded (for map context), then ES matches.
+    // mergeSuggestions is bounded by construction — see src/lib/suggestions.ts.
+    const interleaved = mergeSuggestions<AutocompleteSuggestion>(esSuggestions, geoSuggestions, 8);
 
-    // Interleave: first geocoded (for map context), then ES matches
-    const interleaved: AutocompleteSuggestion[] = [];
-    let gIdx = 0, eIdx = 0;
-
-    if (gIdx < geoFiltered.length) {
-      interleaved.push(geoFiltered[gIdx++]);
-    }
-    while (interleaved.length < 8) {
-      if (eIdx < esFiltered.length) interleaved.push(esFiltered[eIdx++]);
-      if (gIdx < geoFiltered.length && interleaved.length < 8) interleaved.push(geoFiltered[gIdx++]);
-    }
-
-    const result = { suggestions: interleaved.slice(0, 8) };
+    const result = { suggestions: interleaved };
     // A2: Never cache empty results — prevents poisoning the cache for 120s
     if (interleaved.length > 0) {
       await cacheSet(cacheKey, result, 30);

@@ -93,11 +93,18 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
     query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType,
     minBedrooms, maxBedrooms,
     listingPurpose, amenities = [], furnishings = [], bathrooms, minArea, maxArea,
-    lat, lng, radiusKm, bounds, polygon,
+    lat, lng, radiusKm, bounds, polygon, polygons,
   } = params;
 
-  const query = sanitize(rawQuery)?.toLowerCase().trim();
-  const location = sanitize(rawLocation)?.toLowerCase().trim();
+  // Pincode/number groups (e.g. "Panvel, 410 206") never exist in flat
+  // location_text values — strip 3+ digit runs so they can't dilute matching.
+  const stripNumbers = (s: string | undefined): string | undefined => {
+    if (!s) return s;
+    const t = s.replace(/\b\d{3,}\b/g, ' ').replace(/\s+/g, ' ').trim();
+    return t.length > 0 ? t : undefined;
+  };
+  const query = stripNumbers(sanitize(rawQuery)?.toLowerCase().trim());
+  const location = stripNumbers(sanitize(rawLocation)?.toLowerCase().trim());
   const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
   const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
 
@@ -105,8 +112,23 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
   const commonFilters: any[] = [];
   const propertyFilters: any[] = [];
 
+  // Exact-ring boundary: a listing inside ANY ring of the selected entity
+  // matches (mainland or explicitly selected island). Single-ring legacy
+  // `polygon` is wrapped for the same code path. Computed early because text
+  // clauses demote to scoring-only whenever rings are present.
+  const boundaryRings: any[][] = Array.isArray(polygons)
+    ? polygons.filter((r: any) => Array.isArray(r) && r.length >= 3)
+    : Array.isArray(polygon) && polygon.length >= 3
+      ? [polygon]
+      : [];
+  const hasBoundary = boundaryRings.length > 0;
+
+  // Text clauses filter ONLY when no boundary is present. With exact rings,
+  // geography is the filter (small places often lack text tokens entirely)
+  // and text merely boosts genuinely matching titles.
+  const textClauses: any[] = [];
   if (query) {
-    must.push({
+    textClauses.push({
       multi_match: {
         query,
         fields: scope === 'both'
@@ -120,7 +142,7 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
   }
 
   if (location) {
-    must.push({
+    textClauses.push({
       multi_match: {
         query: location,
         fields: ['location_text^3', 'title^2', 'name^2', 'project_name^1'],
@@ -128,6 +150,13 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
         fuzziness: 'AUTO',
       },
     });
+  }
+  if (textClauses.length > 0) {
+    if (hasBoundary) {
+      must.push({ bool: { should: textClauses, minimum_should_match: 0 } });
+    } else {
+      must.push(...textClauses);
+    }
   }
 
   commonFilters.push({ term: { status: 'available' } });
@@ -190,10 +219,21 @@ function buildFilters(params: any, scope: string): { must: any[]; filters: any[]
     }
   }
 
-  if (polygon && polygon.length >= 3) {
+  if (boundaryRings.length === 1) {
     commonFilters.push({
       geo_polygon: {
-        location: { points: polygon.map((p: any) => ({ lat: p.lat, lon: p.lng })) },
+        location: { points: boundaryRings[0].map((p: any) => ({ lat: p.lat, lon: p.lng })) },
+      },
+    });
+  } else if (boundaryRings.length > 1) {
+    commonFilters.push({
+      bool: {
+        should: boundaryRings.map((ring: any[]) => ({
+          geo_polygon: {
+            location: { points: ring.map((p: any) => ({ lat: p.lat, lon: p.lng })) },
+          },
+        })),
+        minimum_should_match: 1,
       },
     });
   }
@@ -335,6 +375,28 @@ export async function queryESListings(params: any) {
       count: b.doc_count,
     }));
 
+  // Intent-aware empty state: when a purpose filter zeroes results, one cheap
+  // count-only retry without it tells the UI "N available under other intents"
+  // instead of a dead-end "No results". Runs ONLY on empty (no cost otherwise).
+  let withoutPurposeTotal: number | null = null;
+  if (total === 0 && typeof params?.listingPurpose === 'string' && params.listingPurpose.trim()) {
+    try {
+      const relaxed = buildFilters({ ...params, listingPurpose: undefined }, scope);
+      const countRes: any = await es.count({
+        index: indexForScope(scope),
+        query: {
+          bool: {
+            must: relaxed.must.length > 0 ? relaxed.must : [{ match_all: {} }],
+            filter: relaxed.filters,
+          },
+        },
+      });
+      withoutPurposeTotal = typeof countRes.count === 'number' ? countRes.count : null;
+    } catch {
+      withoutPurposeTotal = null;
+    }
+  }
+
   return {
     results,
     total,
@@ -343,6 +405,7 @@ export async function queryESListings(params: any) {
     projectTotal,
     projectGroups,
     nextCursor: results.length >= pageSize ? results[results.length - 1]._sort : null,
+    withoutPurposeTotal,
   };
 }
 
