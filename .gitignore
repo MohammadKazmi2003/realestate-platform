@@ -85,3 +85,4 @@ playwright.config.ts
 .worker.log
 # local database dumps (schema + data + auth; large and sensitive — never commit)
 local_*.sql
+local_*.sql.gz
