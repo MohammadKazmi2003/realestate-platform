@@ -31,6 +31,10 @@ function AddPropertyPage() {
 
     // --- STATE MANAGEMENT ---
     const [propertyTypeId, setPropertyTypeId] = useState<string>('');
+    // Sub-type within the chosen category (e.g. Apartment under Residential).
+    // Submit still sends the parent category id ('1'/'2'/'3') as the edge
+    // function only handles those; sub-type refines the UI selection.
+    const [propertySubTypeId, setPropertySubTypeId] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -112,6 +116,30 @@ function AddPropertyPage() {
     const selectedPropertyTypeName = useMemo(() => {
         return lookupData.propertyTypes.find(p => String(p.id) === propertyTypeId)?.name;
     }, [propertyTypeId, lookupData.propertyTypes]);
+
+    // Hierarchical picker: top-level categories first, children second.
+    // Previously parents + children were shown flat (7 overlapping buttons)
+    // and picking a child id broke submit (edge function expects '1'/'2'/'3').
+    const categoryOptions = useMemo(() => {
+        const byName = new Map(lookupData.propertyTypes.map(p => [p.name, p]));
+        const cats = ['Residential', 'Commercial', 'Land / Plot']
+            .map(n => byName.get(n))
+            .filter(Boolean) as LookupType[];
+        return cats.length > 0 ? cats : lookupData.propertyTypes;
+    }, [lookupData.propertyTypes]);
+
+    const subOptions = useMemo(() => {
+        if (selectedPropertyTypeName === 'Residential')
+            return lookupData.propertyTypes.filter(p => p.name.startsWith('Residential '));
+        if (selectedPropertyTypeName === 'Commercial')
+            return lookupData.propertyTypes.filter(p => p.name.startsWith('Commercial '));
+        return [];
+    }, [selectedPropertyTypeName, lookupData.propertyTypes]);
+
+    const handleCategorySelect = (id: string) => {
+        setPropertyTypeId(id);
+        setPropertySubTypeId('');
+    };
     
     const availableListingPurposes = useMemo(() => {
         if (selectedPropertyTypeName === 'Land / Plot') {
@@ -272,13 +300,25 @@ function AddPropertyPage() {
                     <section>
                         <h2 className="text-xl font-semibold text-text-color-dark border-b border-shadow-dark/20 pb-2 mb-4">1. Select Property Type</h2>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {lookupData.propertyTypes.map(pt => (
-                                <button type="button" key={pt.id} onClick={() => setPropertyTypeId(String(pt.id))} className={`neumorphic-button flex flex-col items-center justify-center p-6 gap-2 text-lg ${propertyTypeId === String(pt.id) ? 'shadow-neumorphic-inset bg-cta-gradient' : ''}`}>
+                            {categoryOptions.map(pt => (
+                                <button type="button" key={pt.id} onClick={() => handleCategorySelect(String(pt.id))} className={`neumorphic-button flex flex-col items-center justify-center p-6 gap-2 text-lg ${propertyTypeId === String(pt.id) ? 'shadow-neumorphic-inset bg-cta-gradient' : ''}`}>
                                     {pt.name === 'Residential' && <Home />} {pt.name === 'Commercial' && <Building />} {pt.name === 'Land / Plot' && <LandPlot />}
                                     <span>{pt.name}</span>
                                 </button>
                             ))}
                         </div>
+                        {subOptions.length > 0 && (
+                            <div className="mt-4">
+                                <p className="text-sm font-medium text-text-color-light mb-2">Select sub-type under {selectedPropertyTypeName}</p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {subOptions.map(st => (
+                                        <button type="button" key={st.id} onClick={() => setPropertySubTypeId(String(st.id))} className={`neumorphic-button flex flex-col items-center justify-center p-4 gap-2 ${propertySubTypeId === String(st.id) ? 'shadow-neumorphic-inset bg-cta-gradient' : ''}`}>
+                                            <span>{st.name.replace(/^(Residential|Commercial)\s+/, '')}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </section>
 
                     {propertyTypeId && (

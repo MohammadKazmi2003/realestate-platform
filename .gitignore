@@ -61,3 +61,4 @@ api_py/__pycache__/
 
 # local database dumps (schema/data snapshots, may contain PII)
 local_*.sql
+local_*.sql.gz
