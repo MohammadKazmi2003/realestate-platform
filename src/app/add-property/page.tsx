@@ -150,17 +150,48 @@ function AddPropertyPage() {
         return lookupData.listingPurposes;
     }, [selectedPropertyTypeName, lookupData.listingPurposes]);
     
+    // Near-duplicate amenity names hidden from the picker (UI only — rows stay
+    // in the DB, submit just uses the surviving twin's id). Edit freely.
+    // Kept twin is noted in brackets.
+    const HIDDEN_DUPLICATE_AMENITIES = useMemo(() => new Set([
+        'Club house / Community Center', // [Club House]
+        "Children's Play Area", // [Children Play Area]
+        'Cafe and Restaurants', // [Restaurants]
+        'Dining in building', // [Restaurants]
+        'Dine-in Cinema', // [Cinema]
+        'Work and Study', // [Study]
+        'Business Facilities', // [Business centre]
+        'Conference Room', // [Meeting rooms]
+        'Direct Beach Access', // [Beach Access]
+        'Centrally Air Conditioned', // [Central A/C]
+        'Vastu-compliant', // [Feng Shui / Vaastu Compliant]
+        'Gymnasium', // [Gym]
+        'CCTV Security', // [CCTV]
+    ]), []);
+
     const availableAmenitiesForType = useMemo(() => {
         if (!selectedPropertyTypeName) return [];
-        if (selectedPropertyTypeName === 'Residential') return lookupData.amenities;
-        if (selectedPropertyTypeName === 'Commercial') return lookupData.amenities;
-        // Correctly filter to only show relevant amenities for Land
-        const landRelevantAmenities = ['Water Storage', 'Security / Fire Alarm', 'Security Personnel', 'Visitor Parking'];
-        if (selectedPropertyTypeName === 'Land / Plot') {
-            return lookupData.amenities.filter(a => landRelevantAmenities.includes(a.name));
-        }
-        return [];
-    }, [selectedPropertyTypeName, lookupData.amenities]);
+        let list: Amenity[];
+        if (selectedPropertyTypeName === 'Residential')
+            list = lookupData.amenities.filter(a => a.property_type_scope === 'Residential' || a.property_type_scope === 'Both');
+        else if (selectedPropertyTypeName === 'Commercial')
+            list = lookupData.amenities.filter(a => a.property_type_scope === 'Commercial' || a.property_type_scope === 'Both');
+        else if (selectedPropertyTypeName === 'Land / Plot') {
+            // Correctly filter to only show relevant amenities for Land
+            const landRelevantAmenities = ['Water Storage', 'Security / Fire Alarm', 'Security Personnel', 'Visitor Parking'];
+            list = lookupData.amenities.filter(a => landRelevantAmenities.includes(a.name));
+        } else return [];
+        // Drop curated dupes, then collapse anything identical after
+        // case/punctuation/plural normalization (e.g. Lift vs Lift(s)).
+        const seen = new Set<string>();
+        return list.filter(a => {
+            if (HIDDEN_DUPLICATE_AMENITIES.has(a.name)) return false;
+            const key = a.name.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/s$/, '');
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }, [selectedPropertyTypeName, lookupData.amenities, HIDDEN_DUPLICATE_AMENITIES]);
 
     const availableImageTags = useMemo(() => {
         if (selectedPropertyTypeName === 'Residential') return [...residentialImageTags, ...commonImageTags];
