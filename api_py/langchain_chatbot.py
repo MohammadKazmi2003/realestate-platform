@@ -54,12 +54,16 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 if not all([GROQ_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
     raise ValueError("GROQ_API_KEY, SUPABASE_URL, and SUPABASE_SERVICE_KEY environment variables are missing.")
 
-# Model is env-configurable so retired IDs (e.g. llama-3.1-8b-instant) never
-# require a code change. Defaults to qwen/qwen3.6-27b on Groq.
-GROQ_MODEL = os.environ.get("GROQ_MODEL") or os.environ.get("LLM_MODEL") or "qwen/qwen3.6-27b"
+# Model is env-configurable so a model swap never requires a code change.
+# Defaults to openai/gpt-oss-20b on Groq.
+GROQ_MODEL = os.environ.get("GROQ_MODEL") or os.environ.get("LLM_MODEL") or "openai/gpt-oss-20b"
+# Groq enforces output-tokens-per-minute (OTPM) per model/tier and rejects any
+# request whose max_tokens exceeds that budget with 429. Keep a conservative
+# cap (override with GROQ_MAX_TOKENS once the tier limits are known).
+GROQ_MAX_TOKENS = int(os.environ.get("GROQ_MAX_TOKENS") or 800)
 
-llm_router = ChatGroq(temperature=0, model_name=GROQ_MODEL, api_key=GROQ_API_KEY)
-llm_generator = ChatGroq(temperature=0, model_name=GROQ_MODEL, api_key=GROQ_API_KEY)
+llm_router = ChatGroq(temperature=0, model_name=GROQ_MODEL, api_key=GROQ_API_KEY, max_tokens=min(GROQ_MAX_TOKENS, 512))
+llm_generator = ChatGroq(temperature=0, model_name=GROQ_MODEL, api_key=GROQ_API_KEY, max_tokens=GROQ_MAX_TOKENS)
 
 # --- NEW: Global Instantiation for Vector Store ---
 try:
