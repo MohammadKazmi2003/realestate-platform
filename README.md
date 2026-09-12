@@ -1,6 +1,6 @@
 # Real Estate Platform — Setup (Mac + Windows)
 
-Runs fully locally. The database starts empty — you add your own data.
+Runs fully locally. The database seeds itself with demo data (1 demo owner, 6 projects, 24 properties) via `supabase/seed.sql` — sign up to add your own on top.
 
 ## 1. Get the code
 Download the GitHub ZIP, extract it, open a terminal in the folder:
@@ -49,7 +49,7 @@ pip install -r requirements.txt
 supabase start
 supabase db reset
 ```
-Starts empty — you add your own data. Remote instead (optional): if you have the remote project's keys, replace the 5 Supabase values in `.env` (see commented example in `.env.example`) and skip `supabase start`.
+Starts with demo data (6 projects, 24 properties) from `supabase/seed.sql` — `db reset` reloads it. Remote instead (optional): if you have the remote project's keys, replace the 5 Supabase values in `.env` (see commented example in `.env.example`) and skip `supabase start`.
 
 ## 7. Start (2 terminals)
 ```bash

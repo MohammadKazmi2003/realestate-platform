@@ -7,7 +7,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/serverClient';
 // --- TYPE DEFINITIONS ---
 type CommonFormData = { title: string; description: string; price: string; location_text: string; listing_purpose_id: string; ownership_type_id: string; availability_status_id: string; phone_number: string; };
 type ResidentialFormData = { bhk_type_id: string; bathrooms: string; balconies: string; total_floors: string; property_on_floor: string; furnishing_status_id: string; carpet_area: string; built_up_area: string; super_built_up_area: string; };
-type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; };
+type CommercialFormData = { commercial_sub_type_id: string; office_type_id: string; min_seats: string; max_seats: string; cabins: string; meeting_rooms: string; private_washrooms: string; shared_washrooms: string; passenger_lifts: string; service_lifts: string; is_pre_leased: boolean; has_noc: boolean; has_occupancy_cert: boolean; carpet_area: string; total_floors: string; property_on_floor: string; };
 type LandFormData = { plot_area: string; area_unit: string; is_boundary_wall_made: boolean; };
 type ExistingImage = { id: number; tag: string; };
 type NewImageDbEntry = { media_url: string; tag: string; media_type: string; display_order: number; };
@@ -27,10 +27,10 @@ const safeParseFloat = (val: string | null | undefined): number | null => {
 
 // --- LOGGING ACTIONS ---
 export async function logPropertyView(propertyId: string) {
-  const supabase = createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
   try {
+    const supabase = await createSupabaseServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
     await supabase.from('event_logs').insert({
         property_id: propertyId,
         user_id: user.id,
@@ -48,10 +48,10 @@ export async function logLeadStatusChange(
     fromStatus: string,
     toStatus: string
 ) {
-    const supabase = createSupabaseServerClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    const supabase = await createSupabaseServerClient();
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
         await supabase.rpc('log_lead_status_change', {
             p_lead_id: leadId,
             p_from_status: fromStatus,
@@ -68,10 +68,10 @@ export async function logAction(
   entityId: string,
   metadata?: Record<string, any>
 ) {
-  const supabase = createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
+  const supabase = await createSupabaseServerClient();
   try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
     await supabase.rpc('log_action', {
       p_action: action,
       p_entity_type: entityType,
@@ -84,7 +84,7 @@ export async function logAction(
 }
 
 export async function createLead(formData: LeadFormData) {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -139,7 +139,7 @@ export async function updatePropertyAndManageImages(
   selectedLocationAdvantages: number[],
   selectedLandFeatures: number[]
 ) {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
 
   try {
     // 1. Update user's phone number

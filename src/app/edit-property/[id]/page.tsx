@@ -9,7 +9,6 @@ import { withAuth } from '@/utils/withAuth';
 import imageCompression from 'browser-image-compression';
 import { XCircle, Loader2, UploadCloud, Trash2, Building, Home, LandPlot } from 'lucide-react';
 import { updatePropertyAndManageImages } from '@/lib/actions';
-import { unstable_noStore as noStore } from 'next/cache';
 import type { PropertyDataType, LookupItem as BaseLookupType } from '@/lib/types';
 import dynamic from 'next/dynamic';
 
@@ -35,7 +34,6 @@ interface EditPropertyPageProps {
 }
 
 function EditPropertyPage({ params: paramsPromise }: EditPropertyPageProps) {
-  noStore();
   const params = use(paramsPromise);
   const { id: propertyId } = params;
   const router = useRouter();
