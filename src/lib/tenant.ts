@@ -41,6 +41,11 @@ const DEFAULT_FILTER_NORMALIZATION: FilterNormalizationConfig = {
   polygonPrecision: 4,
 };
 
+export interface AmenitiesHighlightConfig {
+  maxShown: number;
+  premium: string[];
+}
+
 export interface TenantConfig {
   slug: string;
   brand: { name: string };
@@ -48,6 +53,7 @@ export interface TenantConfig {
   currency: string;
   propertyCurrency: string;
   projectCurrency: string;
+  amenitiesHighlight?: AmenitiesHighlightConfig;
   moneyCompact: Record<string, { symbol: string; steps: MoneyStep[] }>;
   bedsModel: 'bhk' | 'bedrooms';
   bedsLabel: string;

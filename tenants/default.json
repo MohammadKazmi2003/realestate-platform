@@ -43,6 +43,36 @@
   "features": {
     "projects": true
   },
+  "amenitiesHighlight": {
+    "$comment": "Curated distinctive/premium amenities for map click-card highlights. Rendered first in config order, remainder fills from original order, capped at maxShown. Case-insensitive match; unknown names fall through to original order. Edit JSON only — no code changes to retune per market.",
+    "maxShown": 3,
+    "premium": [
+      "Private Pool",
+      "Infinity Pool",
+      "Private Jacuzzi",
+      "Jacuzzi & Steam",
+      "Hotel and Spa Facilities",
+      "Golf Course",
+      "Beach Club",
+      "Concierge",
+      "Smart home",
+      "Swimming Pool",
+      "Gym",
+      "Fitness Centre / GYM",
+      "Club House",
+      "Club house / Community Center",
+      "Tennis Courts",
+      "Tennis Court",
+      "Squash Court",
+      "Elegant Lobby",
+      "Walk-in Closet",
+      "Private Garden",
+      "Private Garden / Terrace",
+      "Landscaped Gardens",
+      "Vastu-compliant",
+      "Feng Shui / Vaastu Compliant"
+    ]
+  },
   "filterNormalization": {
     "$comment": "Cache-key normalization: snap continuous inputs to buckets so near-identical searches share one ES query. Price snaps WIDEN (min floors, max ceils) so results stay a superset — applied to BOTH the ES query and the hash, never hash-only. Steps are per display currency; scope=both uses the finest involved step.",
     "priceSteps": { "INR": 500000, "AED": 50000, "USD": 25000 },

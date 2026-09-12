@@ -1,13 +1,14 @@
 // src/app/components/CrmKanbanBoard.tsx
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue } from 'react';
+import Fuse from 'fuse.js';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core';
 import { SortableContext, useSortable, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { createPortal } from 'react-dom';
 import { supabase } from '@/lib/supabaseClient';
-import { Loader2, GripVertical, ChevronDown } from 'lucide-react';
+import { Loader2, GripVertical, ChevronDown, Search, X } from 'lucide-react';
 import { logLeadStatusChange } from '@/lib/actions';
 import { LeadDetailModal } from './LeadDetailModal';
 
@@ -20,7 +21,54 @@ type Lead = {
   property_title: string;
   status: string;
   created_at: string;
+  email?: string | null;
+  phone?: string | null;
+  message?: string | null;
 };
+
+/** Digits-only variant so "98765" matches "+91 98765 43210". */
+function digitsOnly(v: string | null | undefined): string {
+  return (v || '').replace(/\D/g, '');
+}
+
+/** Client-side full-text match across name + contact + message + property. */
+export function leadMatchesQuery(lead: Lead, rawQuery: string): boolean {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return true;
+  const haystacks = [
+    lead.name,
+    lead.email,
+    lead.phone,
+    lead.message,
+    lead.property_title,
+  ].map((v) => (v || '').toLowerCase());
+  if (haystacks.some((h) => h.includes(q))) return true;
+  const qDigits = digitsOnly(q);
+  if (qDigits.length >= 3 && digitsOnly(lead.phone).includes(qDigits)) return true;
+  return false;
+}
+
+function buildLeadFuse(leads: Lead[]): Fuse<Lead> {
+  return new Fuse(leads, {
+    keys: [
+      { name: 'name', weight: 0.35 },
+      { name: 'email', weight: 0.2 },
+      { name: 'phone', weight: 0.2 },
+      { name: 'message', weight: 0.1 },
+      { name: 'property_title', weight: 0.15 },
+    ],
+    threshold: 0.35,
+    ignoreLocation: true,
+    getFn: (obj, path) => {
+      const key = Array.isArray(path) ? path.join('.') : String(path);
+      const raw = (obj as any)?.[key];
+      if (raw == null) return '';
+      const str = String(raw);
+      // Index the digits variant alongside so partial phone numbers match.
+      return key === 'phone' ? `${str} ${digitsOnly(str)}` : str;
+    },
+  });
+}
 
 type Column = {
   id: string;
@@ -84,11 +132,17 @@ const LeadCard = ({ lead, isOverlay = false, onClick }: { lead: Lead; isOverlay?
 const KanbanColumn = ({
   column,
   state,
+  totalCount,
+  searchActive,
+  searchTerm,
   onCardClick,
   onLoadMore,
 }: {
   column: Column;
   state: ColumnState;
+  totalCount: number;
+  searchActive: boolean;
+  searchTerm: string;
   onCardClick: (lead: Lead) => void;
   onLoadMore: () => void;
 }) => {
@@ -99,7 +153,7 @@ const KanbanColumn = ({
       <h2 className="text-lg font-semibold mb-4 text-center text-text-color-dark">
         {column.title}
         <span className="ml-2 text-sm font-normal text-text-color-light">
-          ({state.leads.length}{state.hasMore ? '+' : ''})
+          ({searchActive ? `${state.leads.length}/${totalCount}` : `${state.leads.length}`}{!searchActive && state.hasMore ? '+' : ''})
         </span>
       </h2>
       <div ref={setNodeRef} className="flex-1 overflow-y-auto min-h-[200px] max-h-[70vh] p-1">
@@ -122,7 +176,9 @@ const KanbanColumn = ({
           </button>
         )}
         {!state.loading && state.leads.length === 0 && (
-          <p className="text-text-color-light text-center py-8 text-sm">No leads</p>
+          <p className="text-text-color-light text-center py-8 text-sm">
+            {searchActive ? <>No matches for &ldquo;{searchTerm}&rdquo;</> : 'No leads'}
+          </p>
         )}
       </div>
     </div>
@@ -148,6 +204,7 @@ async function fetchAgentLeads(
   }
 
   const result = data as { leads: LeadRow[]; has_more: boolean };
+  const strOrEmpty = (v: unknown): string => (v == null ? '' : String(v));
   return {
     leads: (result.leads || []).map((l: LeadRow) => ({
       id: String(l.id),
@@ -155,6 +212,9 @@ async function fetchAgentLeads(
       property_title: String(l.property_title),
       status: String(l.status),
       created_at: String(l.created_at),
+      email: strOrEmpty(l.email),
+      phone: strOrEmpty(l.phone),
+      message: strOrEmpty(l.message),
     })),
     hasMore: result.has_more,
   };
@@ -188,6 +248,11 @@ export const CrmKanbanBoard = ({ refreshKey = 0 }: { refreshKey?: number }) => {
   const [initialLoading, setInitialLoading] = useState(true);
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  // Client-side full-text search over already-loaded leads: zero server load.
+  // Deferred so keystrokes never jank the dnd-kit board.
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDeferredValue(searchQuery);
+  const searchActive = deferredQuery.trim().length > 0;
   const initialLoadDone = useRef(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isTabVisible = useRef(true);
@@ -362,6 +427,51 @@ export const CrmKanbanBoard = ({ refreshKey = 0 }: { refreshKey?: number }) => {
     }
   };
 
+  // Filtered view: exact substring/digits matcher UNION fuzzy Fuse hits,
+  // so deterministic matches always work and typos still resolve.
+  const visibleColumnsState = useMemo(() => {
+    if (!searchActive) return columnsState;
+    const next: Record<string, ColumnState> = {};
+    for (const [colId, col] of Object.entries(columnsState)) {
+      if (col.leads.length === 0) {
+        next[colId] = col;
+        continue;
+      }
+      const fuseHits = new Set(buildLeadFuse(col.leads).search(deferredQuery).map(r => r.item.id));
+      next[colId] = {
+        ...col,
+        leads: col.leads.filter(l => fuseHits.has(l.id) || leadMatchesQuery(l, deferredQuery)),
+      };
+    }
+    return next;
+  }, [columnsState, deferredQuery, searchActive]);
+
+  const totalLoaded = useMemo(
+    () => Object.values(columnsState).reduce((n, c) => n + c.leads.length, 0),
+    [columnsState]
+  );
+  const totalVisible = useMemo(
+    () => Object.values(visibleColumnsState).reduce((n, c) => n + c.leads.length, 0),
+    [visibleColumnsState]
+  );
+  const hasMoreAnywhere = useMemo(
+    () => Object.values(columnsState).some(c => c.hasMore),
+    [columnsState]
+  );
+
+  const handleArchivedLead = useCallback((leadId: string) => {
+    setColumnsState(prev => {
+      const next = { ...prev };
+      for (const [colId, col] of Object.entries(next)) {
+        if (col.leads.some(l => l.id === leadId)) {
+          next[colId] = { ...col, leads: col.leads.filter(l => l.id !== leadId) };
+        }
+      }
+      return next;
+    });
+    setSelectedLead(null);
+  }, []);
+
   if (initialLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -372,6 +482,33 @@ export const CrmKanbanBoard = ({ refreshKey = 0 }: { refreshKey?: number }) => {
 
   return (
     <>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-6">
+        <div className="relative flex-1 sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-color-light pointer-events-none" size={18} />
+          <input
+            type="text"
+            placeholder="Search leads by name, contact, message, property..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full !pl-10 !pr-10 neumorphic-input"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-color-light hover:text-text-color-dark"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
+        {searchActive && (
+          <p className="text-sm text-text-color-light whitespace-nowrap">
+            Showing {totalVisible} of {totalLoaded}
+            {hasMoreAnywhere ? ' loaded leads' : ' leads'}
+          </p>
+        )}
+      </div>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -380,22 +517,28 @@ export const CrmKanbanBoard = ({ refreshKey = 0 }: { refreshKey?: number }) => {
         onDragCancel={() => setActiveLead(null)}
       >
         <div className="flex flex-col md:flex-row gap-6 h-full">
-          {columns.map(column => (
-            <KanbanColumn
-              key={column.id}
-              column={column}
-              state={
-                columnsState[column.id] || {
-                  leads: [],
-                  cursor: null,
-                  hasMore: false,
-                  loading: false,
+          {columns.map(column => {
+            const full = columnsState[column.id];
+            return (
+              <KanbanColumn
+                key={column.id}
+                column={column}
+                state={
+                  visibleColumnsState[column.id] || {
+                    leads: [],
+                    cursor: null,
+                    hasMore: false,
+                    loading: false,
+                  }
                 }
-              }
-              onCardClick={setSelectedLead}
-              onLoadMore={() => loadMore(column.id)}
-            />
-          ))}
+                totalCount={full?.leads.length || 0}
+                searchActive={searchActive}
+                searchTerm={deferredQuery.trim()}
+                onCardClick={setSelectedLead}
+                onLoadMore={() => loadMore(column.id)}
+              />
+            );
+          })}
         </div>
 
         {createPortal(
@@ -406,7 +549,84 @@ export const CrmKanbanBoard = ({ refreshKey = 0 }: { refreshKey?: number }) => {
         )}
       </DndContext>
 
-      <LeadDetailModal lead={selectedLead} onClose={() => setSelectedLead(null)} />
+      <LeadDetailModal lead={selectedLead} onClose={() => setSelectedLead(null)} onArchived={handleArchivedLead} />
+    </>
+  );
+};
+
+/** Archived leads: simple list with restore. Fetches p_status='archived'
+ * (excluded from the board path by the RPC), paged the same keyset way. */
+export const ArchivedLeadsList = () => {
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+
+  const load = useCallback(async (cur: string | null, reset: boolean) => {
+    if (reset) setLoading(true);
+    else setLoadingMore(true);
+    try {
+      const { leads: rows, hasMore: more } = await fetchAgentLeads(cur, PAGE_SIZE, 'archived');
+      setLeads(prev => (reset ? rows : [...prev, ...rows]));
+      setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : cur);
+      setHasMore(more);
+    } finally {
+      if (reset) setLoading(false);
+      else setLoadingMore(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(null, true);
+  }, [load]);
+
+  const handleRestored = useCallback((leadId: string) => {
+    setLeads(prev => prev.filter(l => l.id !== leadId));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="animate-spin text-4xl text-text-color-light" />
+      </div>
+    );
+  }
+
+  if (leads.length === 0) {
+    return <p className="text-text-color-light text-center py-12">No archived leads.</p>;
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {leads.map(lead => (
+          <button
+            key={lead.id}
+            onClick={() => setSelectedLead(lead)}
+            className="p-4 rounded-2xl shadow-neumorphic-outset bg-bg-color text-left hover:shadow-neumorphic-inset transition-shadow"
+          >
+            <p className="font-bold text-text-color-dark">{lead.name}</p>
+            <p className="text-sm text-text-color-light">{lead.property_title}</p>
+            <p className="text-xs text-text-color-light mt-1">
+              Archived — click to view or restore
+            </p>
+          </button>
+        ))}
+      </div>
+      {hasMore && (
+        <div className="text-center mt-6">
+          <button
+            onClick={() => load(cursor, false)}
+            disabled={loadingMore}
+            className="neumorphic-button"
+          >
+            {loadingMore ? <Loader2 className="animate-spin" size={16} /> : 'Load more'}
+          </button>
+        </div>
+      )}
+      <LeadDetailModal lead={selectedLead} onClose={() => setSelectedLead(null)} archived onRestored={handleRestored} />
     </>
   );
 };

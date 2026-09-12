@@ -179,6 +179,7 @@ async function resolveAdminBoundary(
     (await resolveGroup(ordered.filter(isAdmin))) ??
     (await resolveGroup(ordered.filter(s => !isAdmin(s))))
   );
+}
 
 /** Fetch exact geometry for a MapTiler feature id (the clicked entity itself,
  * never a fresh text query's first result). */

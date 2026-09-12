@@ -4,14 +4,18 @@
 import React, { useState, useEffect, FormEvent } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/context/AuthContext';
-import { Loader2, X, MessageSquare, History } from 'lucide-react';
+import { Loader2, X, MessageSquare, History, Archive, ArchiveRestore } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { logLeadStatusChange } from '@/lib/actions';
 
 type Lead = {
   id: string;
   name: string;
   property_title: string;
   status: string;
+  email?: string | null;
+  phone?: string | null;
+  message?: string | null;
 };
 
 type Note = {
@@ -32,15 +36,22 @@ type HistoryLog = {
 type Props = {
   lead: Lead | null;
   onClose: () => void;
+  /** Called after a successful archive so the parent can drop the card. */
+  onArchived?: (leadId: string) => void;
+  /** Called after a successful restore so the parent can drop the row. */
+  onRestored?: (leadId: string) => void;
+  /** Archived view renders restore instead of archive. */
+  archived?: boolean;
 };
 
-export const LeadDetailModal = ({ lead, onClose }: Props) => {
+export const LeadDetailModal = ({ lead, onClose, onArchived, onRestored, archived = false }: Props) => {
   const { user } = useAuth();
   const [notes, setNotes] = useState<Note[]>([]);
   const [history, setHistory] = useState<HistoryLog[]>([]);
   const [newNote, setNewNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [activeTab, setActiveTab] = useState<'notes' | 'history'>('notes');
 
   useEffect(() => {
@@ -99,6 +110,45 @@ export const LeadDetailModal = ({ lead, onClose }: Props) => {
     setIsSubmittingNote(false);
   };
 
+  const handleArchive = async () => {
+    if (!lead || archived) return;
+    if (!confirm(`Archive lead "${lead.name}"? It will move to the Archived view and can be restored.`)) return;
+    setIsArchiving(true);
+    try {
+      const { error } = await supabase.from('leads').update({ status: 'archived' }).eq('id', lead.id);
+      if (error) throw error;
+      await logLeadStatusChange(lead.id, lead.status, 'archived');
+      onArchived?.(lead.id);
+      onClose();
+    } catch (err) {
+      console.error('Error archiving lead:', err);
+      alert('Failed to archive lead.');
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!lead || !archived) return;
+    // Restore to the most recent pre-archive status from history, else 'new'.
+    const target = history.length > 0 && history[0].from_status !== 'archived'
+      ? history[0].from_status
+      : 'new';
+    setIsArchiving(true);
+    try {
+      const { error } = await supabase.from('leads').update({ status: target }).eq('id', lead.id);
+      if (error) throw error;
+      await logLeadStatusChange(lead.id, 'archived', target);
+      onRestored?.(lead.id);
+      onClose();
+    } catch (err) {
+      console.error('Error restoring lead:', err);
+      alert('Failed to restore lead.');
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
   if (!lead) return null;
 
   return (
@@ -108,10 +158,39 @@ export const LeadDetailModal = ({ lead, onClose }: Props) => {
           <div>
             <h2 className="text-2xl font-bold text-text-color-dark">{lead.name}</h2>
             <p className="text-text-color-light">Regarding: {lead.property_title}</p>
+            {(lead.email || lead.phone) && (
+              <p className="text-sm text-text-color-light mt-1">
+                {[lead.email, lead.phone].filter(Boolean).join(' • ')}
+              </p>
+            )}
+            {lead.message && (
+              <p className="text-sm text-text-color-light mt-1 italic">&ldquo;{lead.message}&rdquo;</p>
+            )}
           </div>
-          <button onClick={onClose} className="neumorphic-button !p-2 !rounded-full">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {archived ? (
+              <button
+                onClick={handleRestore}
+                disabled={isArchiving}
+                title="Restore lead"
+                className="neumorphic-button !p-2 !rounded-full"
+              >
+                {isArchiving ? <Loader2 size={20} className="animate-spin" /> : <ArchiveRestore size={20} />}
+              </button>
+            ) : (
+              <button
+                onClick={handleArchive}
+                disabled={isArchiving}
+                title="Archive lead"
+                className="neumorphic-button !p-2 !rounded-full"
+              >
+                {isArchiving ? <Loader2 size={20} className="animate-spin" /> : <Archive size={20} />}
+              </button>
+            )}
+            <button onClick={onClose} className="neumorphic-button !p-2 !rounded-full">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="flex border-b border-shadow-dark/20 mb-4">

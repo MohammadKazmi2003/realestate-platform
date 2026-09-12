@@ -2,6 +2,7 @@ import type maplibregl from 'maplibre-gl';
 import type { ClusterPoint, HoverPointData } from './mapLayers';
 import { formatMoneyCompact, formatArea, formatBedsList, formatPossession, formatProgress } from '@/lib/format';
 import { tenant } from '@/lib/tenant';
+import { highlightAmenities } from '@/lib/amenityHighlight';
 
 const CARD_CLASS = 'map-preview-card';
 const LISTING_CARD_CLASS = 'map-listing-card';
@@ -271,7 +272,8 @@ export function showListingPreviewCard(
     : '';
   // Amenity highlights live ONLY in this map-click card (not sidebar cards).
   // Shown for both properties and projects once full details are fetched.
-  const amenityList = (listing.amenities || []).slice(0, 3);
+  // Curated premium names first (tenant config), remainder in index order.
+  const amenityList = highlightAmenities(listing.amenities);
   const amenityTotal = listing.amenities_total ?? (listing.amenities || []).length;
   const amenityExtra = Math.max(0, amenityTotal - amenityList.length);
   const amenitiesHtml = amenityList.length > 0
