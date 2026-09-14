@@ -17,6 +17,7 @@ import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoi
 import { tenant } from '@/lib/tenant';
 import { formatMoneyCompact } from '@/lib/format';
 import { mergeUniqueById } from '@/lib/collections';
+import { tileStringArray, tileNumberArray, tileGalleryComplete } from '@/lib/tileGallery';
 import PriceRangeFilter, { PriceRangeValue } from '@/app/components/PriceRangeFilter';
 import { IntentTabs } from '@/app/components/IntentTabs';
 import { intentToListingPurpose, parseIntentFromSearch, withIntentInSearch, type Intent } from '@/lib/intent';
@@ -546,10 +547,25 @@ export default function BrowsePage() {
             balconies: m.balconies ?? null,
             furnishing_status: m.furnishing_status || null,
             listing_purpose: m.listing_purpose || null,
+            property_type: m.property_type || null,
             area_sqft: m.area_sqft ?? null,
             area_unit: m.area_unit || null,
             location_text: m.location_text || null,
             is_new: !!m.is_new,
+            // Click-card preview payload (renders the final card instantly —
+            // no content fetch needed; the click fetch only tops up photos).
+            low_price: m.low_price ?? null,
+            high_price: m.high_price ?? null,
+            developer_name: m.developer_name || null,
+            construction_phase: m.construction_phase || null,
+            construction_progress_percent: m.construction_progress_percent ?? null,
+            delivery_date: m.delivery_date || null,
+            amenities: Array.isArray(m.amenities) ? m.amenities : [],
+            amenities_total: typeof m.amenities_total === 'number' ? m.amenities_total : (Array.isArray(m.amenities) ? m.amenities.length : 0),
+            bedrooms_list: Array.isArray(m.bedrooms_list) ? m.bedrooms_list : [],
+            unit_count: m.unit_count ?? null,
+            payment_plan_summary: m.payment_plan_summary || null,
+            image_count: typeof m.image_count === 'number' ? m.image_count : null,
           },
         });
       }
@@ -689,6 +705,9 @@ export default function BrowsePage() {
                 delivery_date: r.delivery_date || null,
                 developer_name: r.developer_name || '',
                 primary_image: r.image_url || null,
+                all_images: Array.isArray(r.all_images)
+                  ? [r.image_url, ...r.all_images].filter((u): u is string => typeof u === 'string' && u.length > 0).filter((u, i, arr) => arr.indexOf(u) === i)
+                  : (r.image_url ? [r.image_url] : []),
                 location_name: r.location_text || null,
                 bedrooms_list: Array.isArray(r.bedrooms_list) ? r.bedrooms_list : [],
                 unit_count: r.unit_count ?? null,
@@ -797,6 +816,9 @@ export default function BrowsePage() {
                 delivery_date: r.delivery_date || null,
                 developer_name: r.developer_name || '',
                 primary_image: r.image_url || null,
+                all_images: Array.isArray(r.all_images)
+                  ? [r.image_url, ...r.all_images].filter((u): u is string => typeof u === 'string' && u.length > 0).filter((u, i, arr) => arr.indexOf(u) === i)
+                  : (r.image_url ? [r.image_url] : []),
                 location_name: r.location_text || null,
                 bedrooms_list: Array.isArray(r.bedrooms_list) ? r.bedrooms_list : [],
                 unit_count: r.unit_count ?? null,
@@ -846,6 +868,9 @@ export default function BrowsePage() {
           delivery_date: r.delivery_date || null,
           developer_name: r.developer_name || '',
           primary_image: r.primary_image || null,
+          all_images: Array.isArray(r.all_images)
+            ? [r.primary_image, ...r.all_images].filter((u): u is string => typeof u === 'string' && u.length > 0).filter((u, i, arr) => arr.indexOf(u) === i)
+            : (r.primary_image ? [r.primary_image] : []),
           location_name: r.location_name || null,
           bedrooms_list: Array.isArray(r.bedrooms_list) ? r.bedrooms_list : [],
           unit_count: r.unit_count ?? null,
@@ -1076,8 +1101,16 @@ export default function BrowsePage() {
 
       const reqId = ++clickReqIdRef.current;
       const isProject = props.type === 'project';
-      // Instant card from tile data (single image) so the map never flashes
-      // empty; upgraded to full fetched details with gallery below.
+      // MapLibre stringifies array props — parse back before rendering.
+      const tileAmenities = tileStringArray(props.amenities);
+      const tileAmenitiesTotal = typeof props.amenities_total === 'number'
+        ? props.amenities_total
+        : tileAmenities.length;
+      const tileBeds = tileNumberArray(props.bedrooms_list);
+      // Instant FINAL card from tile data: markers now carry the complete
+      // preview payload (amenities, price range, project extras), so this
+      // first paint already has final size/layout. The fetch below only tops
+      // up the photo gallery (overlay-only, zero reflow).
       showListingPreviewCard(map, {
         id: props.id,
         entity_type: isProject ? 'project' : 'property',
@@ -1085,8 +1118,8 @@ export default function BrowsePage() {
         lon: pointLngLat.lng,
         title: props.title || '',
         price: isProject ? 0 : (props.price || 0),
-        low_price: isProject ? (props.price || 0) : null,
-        high_price: null,
+        low_price: isProject ? (props.low_price ?? props.price ?? 0) : null,
+        high_price: isProject ? (props.high_price ?? null) : null,
         image_url: props.image_url || null,
         location_text: props.location_text || null,
         area_sqft: props.area_sqft ?? null,
@@ -1096,6 +1129,16 @@ export default function BrowsePage() {
         balconies: props.balconies ?? null,
         furnishing_status: props.furnishing_status || null,
         listing_purpose: props.listing_purpose || null,
+        property_type: props.property_type || null,
+        developer_name: props.developer_name || null,
+        construction_phase: props.construction_phase || null,
+        construction_progress_percent: props.construction_progress_percent ?? null,
+        delivery_date: props.delivery_date || null,
+        amenities: tileAmenities,
+        amenities_total: tileAmenitiesTotal,
+        bedrooms_list: tileBeds,
+        unit_count: props.unit_count ?? null,
+        payment_plan_summary: props.payment_plan_summary || null,
       }, pointLngLat);
 
       // Click-response cache: second click on the same marker skips the fetch.
@@ -1135,7 +1178,48 @@ export default function BrowsePage() {
         return;
       }
 
-      // Full details are fetched on click only — hover paths never fetch.
+      // Single-photo listings (tile image_count is authoritative): the tile
+      // card above is already complete — gallery included — so skip the fetch
+      // entirely. No second render, no reflow, no extra request. Docs indexed
+      // before image_count existed report null and still fetch (safe fallback).
+      if (tileGalleryComplete(typeof props.image_count === 'number' ? props.image_count : null)) {
+        markerCacheRef.current.set(clickKey, {
+          id: props.id,
+          type: props.type,
+          lat: pointLngLat.lat,
+          lon: pointLngLat.lng,
+          title: props.title || '',
+          price: isProject ? (props.low_price ?? props.price ?? 0) : (props.price || 0),
+          image: props.image_url || null,
+          location: props.location_text || null,
+          all_images: props.image_url ? [props.image_url] : [],
+          bhk_type: props.bhk_type || null,
+          bathrooms: props.bathrooms ?? null,
+          balconies: props.balconies ?? null,
+          furnishing_status: props.furnishing_status || null,
+          listing_purpose: props.listing_purpose || null,
+          area_sqft: props.area_sqft ?? null,
+          area_unit: props.area_unit || null,
+          location_text: props.location_text || null,
+          low_price: props.low_price ?? null,
+          high_price: props.high_price ?? null,
+          developer_name: props.developer_name || null,
+          construction_phase: props.construction_phase || null,
+          construction_progress_percent: props.construction_progress_percent ?? null,
+          delivery_date: props.delivery_date || null,
+          property_type: props.property_type || null,
+          amenities: tileAmenities,
+          amenities_total: tileAmenitiesTotal,
+          bedrooms_list: tileBeds,
+          unit_count: props.unit_count ?? null,
+          payment_plan_summary: props.payment_plan_summary || null,
+        });
+        return;
+      }
+
+      // Gallery top-up for multi-photo listings: the card above already shows
+      // final text content, so this only grows the photo carousel (overlay
+      // dots, zero reflow). Skipped entirely for single-photo/known tiles.
       // The card only upgrades if it is still open for THIS pin (X, background
       // click, or a newer pin click invalidates the upgrade).
       fetch(`/api/listings/${encodeURIComponent(props.id)}`)

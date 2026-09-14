@@ -26,7 +26,7 @@ export default function Header() {
   );
 
   return (
-    <header className="w-full px-4 sm:px-6 py-3 flex items-center justify-between z-10 sticky top-0 bg-bg-color">
+    <header className="w-full px-4 sm:px-6 py-3 flex items-center justify-between z-30 sticky top-0 bg-bg-color">
       
       <div className="flex-1 flex justify-start">
         <Link href="/" className="text-xl font-bold text-text-color-dark hover:text-opacity-80 transition-colors flex items-center gap-2">

@@ -102,6 +102,8 @@ export type Project = {
   delivery_date: string | null;
   developer_name: string;
   primary_image: string | null;
+  /** Full gallery (uncapped). Cards render a lazy window over this list. */
+  all_images?: string[] | null;
   location_name: string | null;
   bedrooms_list?: number[] | null;
   unit_count?: number | null;

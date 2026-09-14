@@ -1,17 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { ListingImage } from './ListingImage';
+import { ListingCarousel } from './ListingCarousel';
 import { formatMoney, formatArea } from '@/lib/format';
 import { tenant } from '@/lib/tenant';
 import { WhatsAppButton } from './WhatsAppButton'
-import {
-  Carousel,
-  CarouselContent,
-  CarouselItem,
-  CarouselNext,
-  CarouselPrevious,
-} from '@/components/ui/carousel'
 // UPDATED: Removed GalleryVerticalEnd
 import { MapPin, Bed, Bath, Briefcase, Users, Ruler, Dot, Sofa, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -105,6 +98,9 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
   const images = rawImages.length > 0
     ? rawImages
     : [{ image_url: 'https://placehold.co/600x400/DEE4ED/3D4A5C?text=No+Image' }];
+  // Full gallery, uncapped — ListingCarousel lazy-windows it (current ± 1 +
+  // preload-next) so 20+ photos cost ~1 download until the user swipes.
+  const imageUrls = images.map((img) => img.image_url).filter((u): u is string => typeof u === 'string' && u.length > 0);
 
   // `area` (ES card path) vs `area_sqft` (PG/RPC fallback path) — support both
   // so rental + sale cards always show area in sq. ft. when available.
@@ -132,32 +128,11 @@ export function PropertyCard({ property, actions }: PropertyCardProps) {
   return (
     <div className="shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color h-full">
       <div className="relative">
-        <Carousel className="w-full rounded-2xl overflow-hidden shadow-neumorphic-inset">
-          <CarouselContent>
-            {images.map((img, index) => (
-              <CarouselItem key={index}>
-                <Link href={`/property/${property.id}`}>
-                  <div className="w-full h-48 bg-bg-color relative">
-                    <ListingImage
-                      src={img.image_url}
-                      alt={`Image ${index + 1} of ${property.title}`}
-                      fill
-                      sizes="(max-width: 768px) 100vw, 50vw"
-                      loading="lazy"
-                      className="object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                </Link>
-              </CarouselItem>
-            ))}
-          </CarouselContent>
-          {images.length > 1 && (
-            <>
-              <CarouselPrevious className="absolute left-2" />
-              <CarouselNext className="absolute right-2" />
-            </>
-          )}
-        </Carousel>
+        <ListingCarousel
+          images={imageUrls}
+          alt={property.title || 'Property'}
+          linkHref={`/property/${property.id}`}
+        />
         {badgeLabel && (
           <span className={cn(
             "absolute top-3 left-3 text-xs font-bold px-3 py-1 rounded-full shadow-neumorphic-outset",

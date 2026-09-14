@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import type { PropertyDataType, MediaItem, LookupItem } from '@/lib/types';
-import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext } from '@/components/ui/carousel';
+import { ListingCarousel } from '@/app/components/ListingCarousel';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
@@ -205,21 +205,15 @@ export default function PropertyDetailClient({ property }: Props) {
             <section>
                 <h2 className="text-2xl font-semibold mb-4 text-text-color-dark">Gallery</h2>
                 {images.length > 0 ? (
-                    <Carousel opts={{ loop: images.length > 1 }} className="w-full">
-                        <CarouselContent className="-ml-2">
-                        {images.map((img, index) => (
-                            <CarouselItem key={img.id} onClick={() => openImageViewer(index)} className="cursor-pointer pl-2 basis-full md:basis-1/2 lg:basis-1/3">
-                            <div className="p-1 shadow-neumorphic-inset-sm rounded-2xl group">
-                                <div className="relative overflow-hidden rounded-xl">
-                                    <img src={img.media_url} alt={`${img.tag || 'Property Image'} - ${index + 1}`} loading="lazy" className="w-full h-64 object-cover group-hover:scale-105 transition-transform duration-300"/>
-                                    {img.tag && <div className="absolute bottom-0 left-0 bg-black/50 text-white px-3 py-1 text-sm font-semibold rounded-tr-xl">{img.tag}</div>}
-                                </div>
-                            </div>
-                            </CarouselItem>
-                        ))}
-                        </CarouselContent>
-                        {images.length > 1 && (<><CarouselPrevious /><CarouselNext /></>)}
-                    </Carousel>
+                    <ListingCarousel
+                        images={images.map((m) => m.media_url).filter((u): u is string => typeof u === 'string' && u.length > 0)}
+                        tags={images.map((m) => m.tag)}
+                        alt={property.title || 'Property'}
+                        frameClassName="aspect-video"
+                        imageClassName="object-cover"
+                        sizes="(max-width: 1024px) 100vw, 1024px"
+                        onSlideClick={(i) => openImageViewer(i)}
+                    />
                 ) : (
                     <div className="text-center py-10 shadow-neumorphic-inset rounded-2xl">
                         <p className="italic text-text-color-light">No images available for this property.</p>

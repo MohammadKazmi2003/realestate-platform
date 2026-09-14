@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ListingImage } from './ListingImage';
+import { ListingCarousel } from './ListingCarousel';
 import { formatMoneyRange, formatBedsList, formatPossession, formatProgress } from '@/lib/format';
 import { tenant } from '@/lib/tenant';
 import { Building, Calendar, MapPin, BedDouble, Wallet } from 'lucide-react';
@@ -16,30 +16,31 @@ type ProjectCardProps = {
 };
 
 export function ProjectCard({ project }: ProjectCardProps) {
-  const imageUrl = project.primary_image || 'https://placehold.co/600x400/e2e8f0/334155?text=No+Image';
+  // Full gallery, uncapped — ListingCarousel lazy-windows it (current ± 1 +
+  // preload-next) so long galleries cost ~1 download until the user swipes.
+  const gallery = [project.primary_image, ...(project.all_images || [])]
+    .filter((u): u is string => typeof u === 'string' && u.length > 0)
+    .filter((u, i, arr) => arr.indexOf(u) === i);
   const bedsSummary = formatBedsList(project.bedrooms_list);
   const possession = formatPossession(project.delivery_date);
   const progress = formatProgress(project.construction_progress_percent ?? null);
 
   return (
-    <Link href={`/projects/${project.id}`} className="block shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color h-full">
+    <div className="block shadow-neumorphic-outset hover:shadow-[6px_6px_12px_var(--shadow-dark),-6px_-6px_12px_var(--shadow-light)] transition-all duration-300 rounded-3xl p-1 group flex flex-col bg-bg-color h-full">
       <div className="relative">
-        <div className="w-full h-48 bg-bg-color rounded-2xl overflow-hidden shadow-neumorphic-inset relative">
-          <ListingImage
-            src={imageUrl}
-            alt={project.name}
-            fill
-            sizes="(max-width: 768px) 100vw, 50vw"
-            loading="lazy"
-            className="object-cover group-hover:scale-105 transition-transform duration-300"
-          />
-        </div>
+        <ListingCarousel
+          images={gallery}
+          alt={project.name}
+          linkHref={`/projects/${project.id}`}
+        />
       </div>
 
       <div className="flex flex-col flex-grow p-4">
-        <h2 className="text-lg font-semibold truncate text-text-color-dark" title={project.name}>
-          {project.name}
-        </h2>
+        <Link href={`/projects/${project.id}`}>
+          <h2 className="text-lg font-semibold truncate text-text-color-dark" title={project.name}>
+            {project.name}
+          </h2>
+        </Link>
         <p className="text-sm text-text-color-light flex items-center gap-1 truncate" title={project.location_name || undefined}>
           <MapPin size={12} /> {project.location_name || 'Location not specified'}
         </p>
@@ -90,6 +91,6 @@ export function ProjectCard({ project }: ProjectCardProps) {
           </p>
         </div>
       </div>
-    </Link>
+    </div>
   );
 }

@@ -182,7 +182,9 @@ export async function POST(req: NextRequest) {
         delivery_date: hit._source.delivery_date || null,
         developer_name: hit._source.developer_name || '',
         primary_image: hit._source.image_url || null,
-        all_images: Array.isArray(hit._source.all_images) ? hit._source.all_images.slice(0, 8) : [],
+        // Full gallery, uncapped — cards lazy-window it (current ± 1), so
+        // long galleries cost ~1 download until the user swipes.
+        all_images: Array.isArray(hit._source.all_images) ? hit._source.all_images.filter((u: unknown): u is string => typeof u === 'string' && u.length > 0) : [],
         location_name: hit._source.location_text || null,
         bedrooms_list: Array.isArray(hit._source.bedrooms_list) ? hit._source.bedrooms_list : [],
         unit_count: hit._source.unit_count ?? null,

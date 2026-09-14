@@ -141,85 +141,151 @@ body {
   position: absolute;
   top: 8px;
   right: 8px;
-  z-index: 2;
-  width: 26px;
-  height: 26px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
   border: none;
   border-radius: 50%;
-  background: rgba(15, 23, 42, 0.55);
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(2px);
   color: #fff;
-  font-size: 16px;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.15s ease;
 }
 .map-listing-close:hover {
   background: rgba(15, 23, 42, 0.8);
+}
+/* Minimal controls reveal on hover/focus; always visible on touch devices. */
+.map-listing-card:hover .map-listing-close,
+.map-listing-card:focus-within .map-listing-close,
+.map-listing-close:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .map-listing-close,
+  .map-listing-prev,
+  .map-listing-next {
+    opacity: 1;
+  }
 }
 .map-listing-img-wrap {
   position: relative;
   height: 170px;
   background: #eef2f7;
+  overflow: hidden;
 }
 .map-listing-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+/* Sliding gallery layers: the incoming photo slides in while the outgoing
+   slides out (transforms driven from previewCard.ts). Clipped by the wrap. */
+.map-listing-slide {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+  /* Layers are purely visual — controls above them must stay clickable. */
+  pointer-events: none;
+}
 .map-listing-prev,
 .map-listing-next {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 28px;
-  height: 28px;
+  z-index: 3;
+  background: none;
   border: none;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.55);
-  color: #fff;
-  font-size: 18px;
-  line-height: 1;
+  padding: 10px 2px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-bottom: 2px;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .map-listing-prev:hover,
 .map-listing-next:hover {
-  background: rgba(15, 23, 42, 0.8);
+  transform: translateY(-50%) scale(1.15);
 }
-.map-listing-prev { left: 8px; }
-.map-listing-next { right: 8px; }
+.map-listing-card:hover .map-listing-prev,
+.map-listing-card:hover .map-listing-next,
+.map-listing-card:focus-within .map-listing-prev,
+.map-listing-card:focus-within .map-listing-next,
+.map-listing-prev:focus-visible,
+.map-listing-next:focus-visible {
+  opacity: 1;
+}
+.map-listing-prev { left: 4px; }
+.map-listing-next { right: 4px; }
+/* Invisible side tap zones — tap either edge to navigate without aiming. */
+.map-listing-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 32%;
+  z-index: 2;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.map-listing-zone-prev { left: 0; }
+.map-listing-zone-next { right: 0; }
 .map-listing-dots {
   position: absolute;
   bottom: 8px;
-  left: 0;
-  right: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  /* Fixed 5-slot viewport for the sliding track (see previewCard.ts).
+   * NOTE: keep display:block — flex centering would recenter the overflowing
+   * track and break the window math. */
+  display: block;
+  width: 50px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  border-radius: 999px;
+  padding: 4px 0;
+  pointer-events: none;
+}
+.map-listing-track {
   display: flex;
-  gap: 5px;
-  justify-content: center;
+  width: max-content;
+  transition: transform 0.3s ease;
+}
+.map-listing-slot {
+  width: 10px;
+  flex: none;
+  display: flex;
   align-items: center;
+  justify-content: center;
 }
 .map-listing-dot {
-  width: 7px;
-  height: 7px;
+  width: 5px;
+  height: 5px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.55);
   cursor: pointer;
+  pointer-events: auto;
 }
 .map-listing-dot.active {
   background: #fff;
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
 }
 .map-listing-count {
   position: absolute;
   top: 8px;
-  right: 8px;
+  left: 8px;
+  z-index: 3;
   font-size: 0.65rem;
   font-weight: 700;
   color: #fff;

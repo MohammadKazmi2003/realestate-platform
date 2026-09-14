@@ -33,6 +33,22 @@ export interface ClusterPoint {
   area_unit?: string | null;
   location_text?: string | null;
   is_new?: boolean;
+  // Click-card preview payload (travels with the tile so the card renders
+  // final content instantly).
+  low_price?: number | null;
+  high_price?: number | null;
+  property_type?: string | null;
+  developer_name?: string | null;
+  construction_phase?: string | null;
+  construction_progress_percent?: number | null;
+  delivery_date?: string | null;
+  amenities?: string[] | null;
+  amenities_total?: number | null;
+  bedrooms_list?: number[] | null;
+  unit_count?: number | null;
+  payment_plan_summary?: string | null;
+  /** Photo count (null on docs indexed before the field existed → fetch). */
+  image_count?: number | null;
 }
 
 export interface HoverPointData {

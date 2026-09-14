@@ -7,6 +7,7 @@ import { ProjectDetails } from '@/lib/types';
 import { formatMoney, formatMoneyRange } from '@/lib/format';
 import { tenant } from '@/lib/tenant';
 import dynamic from 'next/dynamic';
+import { ListingCarousel } from '@/app/components/ListingCarousel';
 
 const LocationMap = dynamic(() => import('@/app/components/LocationMap').then(m => ({ default: m.LocationMap })), {
   ssr: false,
@@ -17,7 +18,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
   const [project, setProject] = useState<ProjectDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeImageUrl, setActiveImageUrl] = useState<string | null>(null);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
 
   const { id } = use(paramsPromise);
 
@@ -30,9 +31,7 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
         if (!res.ok) { setError('Project not found.'); return; }
         const data: ProjectDetails = await res.json();
         setProject(data);
-        if (data.project_media?.length) {
-          setActiveImageUrl(data.project_media[0].storage_path_original);
-        }
+        setActiveImageIndex(0);
       } catch { setError('Failed to load project details.'); }
       finally { setLoading(false); }
     };
@@ -74,25 +73,36 @@ export default function ProjectDetailsPage({ params: paramsPromise }: { params: 
           {project.project_media?.length > 0 && (
             <section>
               <h2 className="text-2xl font-semibold mb-4 text-text-color-dark">Gallery</h2>
-              <div className="bg-black rounded-lg mb-4 w-full aspect-video flex items-center justify-center shadow-neumorphic-inset">
-                {activeImageUrl ? (
-                  <img src={activeImageUrl} alt="Main project view" className="w-full h-full object-contain rounded-lg" />
-                ) : (
-                  <p className="text-white">No Image Available</p>
-                )}
-              </div>
+              <ListingCarousel
+                images={project.project_media.map((m) => m.storage_path_original).filter((u): u is string => typeof u === 'string' && u.length > 0)}
+                alt={project.title}
+                frameClassName="aspect-video"
+                imageClassName="object-contain bg-black"
+                sizes="(max-width: 1024px) 100vw, 1024px"
+                selectedIndex={activeImageIndex}
+                onSelect={setActiveImageIndex}
+              />
               {project.project_media.length > 1 && (
-                <div className="flex space-x-2 overflow-x-auto pb-2">
-                  {project.project_media.map((image) => (
-                    <img
+                <div className="flex space-x-2 overflow-x-auto pb-2 mt-3">
+                  {project.project_media.map((image, i) => (
+                    <button
                       key={image.id}
-                      src={image.storage_path_original}
-                      alt="Project thumbnail"
-                      onClick={() => setActiveImageUrl(image.storage_path_original)}
-                      className={`w-24 h-16 object-cover rounded-md flex-shrink-0 cursor-pointer border-2 transition-all ${
-                        activeImageUrl === image.storage_path_original ? 'border-blue-600' : 'border-transparent'
+                      type="button"
+                      onClick={() => setActiveImageIndex(i)}
+                      aria-label={`Show image ${i + 1}`}
+                      aria-current={i === activeImageIndex ? 'true' : undefined}
+                      className={`flex-shrink-0 rounded-md overflow-hidden border-2 transition-all ${
+                        activeImageIndex === i ? 'border-blue-600' : 'border-transparent'
                       }`}
-                    />
+                    >
+                      <img
+                        src={image.storage_path_original}
+                        alt={`Project thumbnail ${i + 1}`}
+                        loading="lazy"
+                        decoding="async"
+                        className="w-24 h-16 object-cover"
+                      />
+                    </button>
                   ))}
                 </div>
               )}

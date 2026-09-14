@@ -35,6 +35,10 @@ type ListingImageProps = {
   sizes?: string;
   className?: string;
   loading?: 'lazy' | 'eager';
+  /** Eager hero slide: skips lazy + hints the browser to fetch ASAP. */
+  priority?: boolean;
+  fetchPriority?: 'high' | 'low' | 'auto';
+  decoding?: 'async' | 'sync' | 'auto';
   fallbackSrc?: string;
 };
 
@@ -45,10 +49,16 @@ export function ListingImage({
   sizes,
   className,
   loading = 'lazy',
+  priority = false,
+  fetchPriority,
+  decoding = 'async',
   fallbackSrc = 'https://placehold.co/600x400/e2e8f0/334155?text=Image+Error',
 }: ListingImageProps) {
   const [failed, setFailed] = useState(false);
   const effectiveSrc = failed ? fallbackSrc : src;
+  // Priority slides are always eager with a high fetch hint.
+  const effectiveLoading = priority ? 'eager' : loading;
+  const effectiveFetchPriority = fetchPriority ?? (priority ? 'high' : 'auto');
 
   if (!isOptimizable(effectiveSrc)) {
     return (
@@ -56,7 +66,9 @@ export function ListingImage({
       <img
         src={effectiveSrc}
         alt={alt}
-        loading={loading}
+        loading={effectiveLoading}
+        fetchPriority={effectiveFetchPriority}
+        decoding={decoding}
         className={className}
         style={fill ? { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' } : undefined}
         onError={() => setFailed(true)}
@@ -71,7 +83,8 @@ export function ListingImage({
         alt={alt}
         fill
         sizes={sizes}
-        loading={loading}
+        loading={effectiveLoading}
+        fetchPriority={effectiveFetchPriority}
         className={className}
         onError={() => setFailed(true)}
       />
@@ -85,7 +98,8 @@ export function ListingImage({
       width={600}
       height={400}
       sizes={sizes}
-      loading={loading}
+      loading={effectiveLoading}
+      fetchPriority={effectiveFetchPriority}
       className={className}
       onError={() => setFailed(true)}
     />

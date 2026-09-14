@@ -159,6 +159,13 @@ export interface SearchResult {
 export function mapEsResultToPropertyCard(esResult: any): SearchResult {
   const location = esResult.location || {};
   const allImages: string[] = Array.isArray(esResult.all_images) ? esResult.all_images : [];
+  // Full gallery, uncapped: primary `image_url` first, then the rest deduped.
+  // Cards render a lazy window (current ± 1) so 20+ images cost ~1 download
+  // upfront. See ListingCarousel.
+  const gallery = [
+    ...(typeof esResult.image_url === 'string' && esResult.image_url ? [esResult.image_url] : []),
+    ...allImages.filter((u): u is string => typeof u === 'string' && u.length > 0),
+  ].filter((u, i, arr) => arr.indexOf(u) === i);
   return {
     id: esResult.id,
     title: esResult.title || null,
@@ -169,12 +176,8 @@ export function mapEsResultToPropertyCard(esResult: any): SearchResult {
     area_unit: esResult.area_unit || 'sqft',
     owner_phone: esResult.owner_phone || null,
     user_id: esResult.user_id || null,
-    images: esResult.image_url
-      ? [{ image_url: esResult.image_url }]
-      : allImages.length > 0
-        ? allImages.map((url: string) => ({ image_url: url }))
-        : [],
-    image_url: esResult.image_url || allImages[0] || null,
+    images: gallery.map((url: string) => ({ image_url: url })),
+    image_url: gallery[0] || null,
     property_type_name: esResult.property_type || null,
     property_type: esResult.property_type || null,
     bhk_type_label: esResult.bhk_type || null,

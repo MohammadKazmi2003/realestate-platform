@@ -138,6 +138,9 @@ export async function buildPropertyDoc(propertyId: string): Promise<AnyRow | nul
     property_score: property.property_score || 0,
     image_url: (mediaRes as AnyRow)?.data?.[0]?.media_url || null,
     all_images: ((mediaRes as AnyRow)?.data || []).map((m: AnyRow) => m.media_url),
+    // Lets map tiles render the final click card with zero follow-up fetches
+    // for single-photo listings (see queryESMapMarkers / browse click path).
+    image_count: ((mediaRes as AnyRow)?.data || []).length,
     owner_name: (profileRes as AnyRow)?.data?.name || '',
     owner_phone: (profileRes as AnyRow)?.data?.phone_number || '',
     project_name: (projectRes as AnyRow)?.data?.name || '',
@@ -206,6 +209,7 @@ export async function buildProjectDoc(projectId: string): Promise<AnyRow | null>
     amenities,
     image_url: gallery[0] || null,
     all_images: gallery,
+    image_count: gallery.length,
     bedrooms_list,
     unit_count: ((unitsRes as AnyRow)?.data || []).length,
     payment_plan_summary: project.payment_plan_summary || null,

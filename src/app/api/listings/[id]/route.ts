@@ -52,14 +52,15 @@ export async function GET(
 
     const src = hit._source as any;
     const isProject = src.entity_type === 'project';
-    // Full gallery for the click carousel (cap 8 URLs to bound payload).
+    // Full gallery, uncapped — the map card mounts only the visible slide and
+    // preloads adjacent ones, so 20+ photos cost ~1 download until swiped.
     // Falls back to the single cover image when all_images is absent.
     const gallery = [
       ...(Array.isArray(src.all_images) ? src.all_images : []),
       src.image_url,
       src.primary_image,
     ].filter((u): u is string => typeof u === 'string' && u.length > 0);
-    const all_images = Array.from(new Set(gallery)).slice(0, 8);
+    const all_images = Array.from(new Set(gallery));
     const result = {
       id: src.id ?? id,
       entity_type: src.entity_type,

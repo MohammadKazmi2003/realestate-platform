@@ -293,13 +293,20 @@ const LISTING_SOURCE_FIELDS = [
 
 // Lightweight fields needed to draw one map dot per listing + hover preview
 // without an N+1 fetch (image/specs travel with the tile payload).
+// ALSO carries the full click-card preview payload (amenities, price range,
+// project extras): clicking a dot renders the FINAL card immediately with no
+// follow-up fetch for text content — the click fetch only tops up the photo
+// gallery. ~330B/marker raw (~25-40KB gzipped per 500-dot viewport, cached).
 const MARKER_SOURCE_FIELDS = [
   'id', 'entity_type', 'location',
-  'price', 'sort_price', 'low_price', 'title', 'name',
+  'price', 'sort_price', 'low_price', 'high_price', 'title', 'name',
   'image_url', 'primary_image', 'bhk_type', 'bathrooms', 'balconies',
-  'furnishing_status', 'listing_purpose',
+  'furnishing_status', 'listing_purpose', 'property_type',
   'area_sqft', 'area_unit', 'location_text', 'created_at',
   'developer_name', 'project_name',
+  'construction_phase', 'construction_progress_percent', 'delivery_date',
+  'amenities', 'amenities_total', 'bedrooms_list', 'unit_count',
+  'payment_plan_summary', 'image_count',
 ];
 
 // Listings newer than this render a "New" badge (computed server-side, no
@@ -454,12 +461,17 @@ export async function queryESMapMarkers(params: any) {
       const loc = src.location || {};
       const isProject = src.entity_type === 'project';
       const created = src.created_at ? Date.parse(src.created_at) : NaN;
+      // Card preview payload: amenities capped at 6 (card shows 3 + "+N
+      // more"); true count travels separately so the label stays honest.
+      const fullAmenities = Array.isArray(src.amenities) ? src.amenities : [];
       return {
         id: src.id,
         entity_type: src.entity_type,
         lat: loc.lat ?? null,
         lon: loc.lon ?? null,
         price: isProject ? (src.low_price || 0) : (src.sort_price || src.price || 0),
+        low_price: src.low_price ?? null,
+        high_price: src.high_price ?? null,
         title: src.title || src.name || '',
         image_url: src.image_url || src.primary_image || null,
         bhk_type: src.bhk_type || null,
@@ -467,10 +479,22 @@ export async function queryESMapMarkers(params: any) {
         balconies: src.balconies ?? null,
         furnishing_status: src.furnishing_status || null,
         listing_purpose: src.listing_purpose || null,
+        property_type: src.property_type || null,
         area_sqft: src.area_sqft ?? null,
         area_unit: src.area_unit || null,
         location_text: src.location_text || null,
         is_new: Number.isFinite(created) ? created >= newCutoff : false,
+        developer_name: src.developer_name || null,
+        project_name: src.project_name || null,
+        construction_phase: src.construction_phase || null,
+        construction_progress_percent: src.construction_progress_percent ?? null,
+        delivery_date: src.delivery_date || null,
+        amenities: fullAmenities.slice(0, 6),
+        amenities_total: fullAmenities.length,
+        bedrooms_list: Array.isArray(src.bedrooms_list) ? src.bedrooms_list : [],
+        unit_count: src.unit_count ?? null,
+        payment_plan_summary: src.payment_plan_summary || null,
+        image_count: typeof src.image_count === 'number' ? src.image_count : null,
       };
     });
   }
