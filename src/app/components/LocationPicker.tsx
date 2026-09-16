@@ -131,7 +131,17 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ onLocationChange, initi
 
           map.on('error', (e) => {
             console.error('A MapLibre GL error occurred:', e.error);
-            setMapError(`Map failed to load. Please check API key and network.`);
+            // Surface the HTTP status so "invalid key" (401/403 from MapTiler)
+            // is distinguishable from network/CORS failures. e.error carries
+            // `status` for tile/style AJAX failures.
+            const status = (e.error as { status?: number } | undefined)?.status;
+            const detail =
+              status === 401 || status === 403
+                ? `MapTiler rejected the key (HTTP ${status}). The key in the running app is invalid — check the style.json request URL in DevTools Network: if it shows a placeholder, .env was not reloaded (restart dev server); if it shows your key, regenerate it at maptiler.com.`
+                : status
+                  ? `Map tiles failed (HTTP ${status}). Check network connection.`
+                  : `Map failed to load. Please check API key and network.`;
+            setMapError(detail);
             setIsLoading(false);
           });
 
