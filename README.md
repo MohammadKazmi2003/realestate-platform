@@ -49,7 +49,10 @@ pip install -r requirements.txt
 supabase start
 supabase db reset
 ```
-Starts with demo data (6 projects, 24 properties) from `supabase/seed.sql` — `db reset` reloads it. Remote instead (optional): if you have the remote project's keys, replace the 5 Supabase values in `.env` (see commented example in `.env.example`) and skip `supabase start`.
+`start` launches Postgres + Auth + Storage + Edge Functions (the `create-listing` function is served automatically — no separate deploy needed locally; `supabase functions serve` is only for hot-reload). `reset` applies all migrations and loads demo data (6 projects, 24 properties) from `supabase/seed.sql`. Verify with `supabase status` (Studio: `http://localhost:54323`).
+- The `WARN: config section [inbucket] is deprecated` line is harmless — email is not required locally (confirmation is off, sign-up returns a session immediately).
+- The `property-images` storage bucket is created by a migration — nothing to configure.
+- Remote instead (optional): if you have the remote project's keys, replace the 3 Supabase values in `.env` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` — see commented example in `.env.example`) and skip `supabase start`.
 
 ## 7. Start (2 terminals)
 ```bash

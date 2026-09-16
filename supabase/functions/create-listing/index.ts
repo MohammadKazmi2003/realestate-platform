@@ -84,17 +84,62 @@ serve(async (req: Request) => {
     if (propertyError) throw propertyError;
     const propertyId = property.id;
 
-    // 3. Conditionally insert into property detail tables
+    // 3. Conditionally insert into property detail tables.
+    // Form state sends '' for every unfilled field — raw spreads fail with
+    // `invalid input syntax for type integer: ""` AFTER the property row was
+    // already inserted (orphan property, no details). Parse everything.
     const detailPromises = [];
     if (propertyTypeId === '1' && residentialData) {
-        detailPromises.push(supabaseAdmin.from('details_residential').insert({ property_id: propertyId, ...residentialData }));
+        const r = residentialData as Record<string, unknown>;
+        detailPromises.push(supabaseAdmin.from('details_residential').insert({
+            property_id: propertyId,
+            bhk_type_id: safeParseInt(r.bhk_type_id as string | undefined),
+            bathrooms: safeParseInt(r.bathrooms as string | undefined),
+            balconies: safeParseInt(r.balconies as string | undefined),
+            total_floors: safeParseInt(r.total_floors as string | undefined),
+            property_on_floor: safeParseInt(r.property_on_floor as string | undefined),
+            furnishing_status_id: safeParseInt(r.furnishing_status_id as string | undefined),
+            carpet_area: safeParseFloat(r.carpet_area as string | undefined),
+            built_up_area: safeParseFloat(r.built_up_area as string | undefined),
+            super_built_up_area: safeParseFloat(r.super_built_up_area as string | undefined),
+        }));
     } else if (propertyTypeId === '2' && commercialData) {
-        detailPromises.push(supabaseAdmin.from('details_commercial').insert({ property_id: propertyId, ...commercialData }));
+        const c = commercialData as Record<string, unknown>;
+        detailPromises.push(supabaseAdmin.from('details_commercial').insert({
+            property_id: propertyId,
+            commercial_sub_type_id: safeParseInt(c.commercial_sub_type_id as string | undefined),
+            office_type_id: safeParseInt(c.office_type_id as string | undefined),
+            min_seats: safeParseInt(c.min_seats as string | undefined),
+            max_seats: safeParseInt(c.max_seats as string | undefined),
+            cabins: safeParseInt(c.cabins as string | undefined),
+            meeting_rooms: safeParseInt(c.meeting_rooms as string | undefined),
+            private_washrooms: safeParseInt(c.private_washrooms as string | undefined),
+            shared_washrooms: safeParseInt(c.shared_washrooms as string | undefined),
+            passenger_lifts: safeParseInt(c.passenger_lifts as string | undefined),
+            service_lifts: safeParseInt(c.service_lifts as string | undefined),
+            total_floors: safeParseInt(c.total_floors as string | undefined),
+            property_on_floor: safeParseInt(c.property_on_floor as string | undefined),
+            carpet_area: safeParseFloat(c.carpet_area as string | undefined),
+            is_pre_leased: Boolean(c.is_pre_leased),
+            has_noc: Boolean(c.has_noc),
+            has_occupancy_cert: Boolean(c.has_occupancy_cert),
+        }));
     } else if (propertyTypeId === '3' && landData) {
-        detailPromises.push(supabaseAdmin.from('details_land').insert({ property_id: propertyId, ...landData }));
+        const l = landData as Record<string, unknown>;
+        detailPromises.push(supabaseAdmin.from('details_land').insert({
+            property_id: propertyId,
+            plot_area: safeParseFloat(l.plot_area as string | undefined),
+            area_unit: (l.area_unit as string) || 'sqft',
+            is_boundary_wall_made: Boolean(l.is_boundary_wall_made),
+        }));
     }
 
-    await Promise.all(detailPromises);
+    const detailResults = await Promise.all(detailPromises);
+    for (const res of detailResults) {
+        if ((res as { error?: { message?: string } }).error) {
+            throw new Error(`Details insert failed: ${(res as { error: { message: string } }).error.message}`);
+        }
+    }
 
     // 4. Concurrently insert into all relevant junction tables
     const junctionPromises = [];
@@ -115,7 +160,12 @@ serve(async (req: Request) => {
         junctionPromises.push(supabaseAdmin.from('junction_property_land_features').insert(landFeatures.map((id: number) => ({ property_id: propertyId, feature_id: id }))));
     }
     
-    await Promise.all(junctionPromises);
+    const junctionResults = await Promise.all(junctionPromises);
+    for (const res of junctionResults) {
+        if ((res as { error?: { message?: string } }).error) {
+            throw new Error(`Relation insert failed: ${(res as { error: { message: string } }).error.message}`);
+        }
+    }
 
     // 5. Return a successful response
     return new Response(JSON.stringify({ propertyId }), {

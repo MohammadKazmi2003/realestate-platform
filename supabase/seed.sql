@@ -27,10 +27,29 @@ INSERT INTO public.lookup_furnishing_statuses (id, name) VALUES
   (4, 'Fully Furnished'), (5, 'Semi Furnished'), (6, 'Unfurnished')
   ON CONFLICT DO NOTHING;
 
--- 2. Demo owner profile (NOT a real user; properties.user_id references profiles, not auth.users).
+-- 2. Demo auth user + owner profile.
+-- Fresh databases enforce profiles.id -> auth.users(id) (see migration
+-- 20250620001853), so the auth row must exist BEFORE the profile row.
+-- The handle_new_user trigger auto-creates a profile on auth insert; the
+-- upsert below then ensures name/phone/role regardless of who created it.
+-- NOTE: no auth.identities row is seeded, so this demo user is for data
+-- ownership/display only — sign in with a real sign-up.
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+INSERT INTO auth.users (id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at, confirmation_sent_at)
+VALUES (
+  '11111111-1111-4111-8111-111111111111',
+  'authenticated', 'authenticated', 'demo-owner@example.com',
+  crypt('demo-owner-local-only', gen_salt('bf')),
+  now(),
+  '{"provider":"email","providers":["email"]}',
+  '{"full_name":"Demo Owner"}',
+  now(), now(), now()
+)
+ON CONFLICT (id) DO NOTHING;
+-- Demo owner profile (properties.user_id references profiles, not auth.users).
 INSERT INTO public.profiles (id, name, email, phone_number, role_id) VALUES
   ('11111111-1111-4111-8111-111111111111', 'Demo Owner', 'demo-owner@example.com', '+911234567890', 2)
-  ON CONFLICT DO NOTHING;
+  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, phone_number = EXCLUDED.phone_number, role_id = EXCLUDED.role_id;
 
 -- 3. Demo projects.
 INSERT INTO public.projects (id, name, builder_name, description, slug, construction_phase, low_price, high_price, price_currency, is_verified) VALUES
