@@ -27,7 +27,16 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ onLocationChange, initi
   const [isLoading, setIsLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
   
-  const MAPTILER_API_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+  // NEXT_PUBLIC_ vars are inlined when `next dev` starts, so a key added to
+  // .env afterwards is invisible until restart. Also treat the .env.example
+  // placeholder as missing so users get guidance instead of a MapTiler 403.
+  const RAW_MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+  const MAPTILER_API_KEY =
+    RAW_MAPTILER_KEY && !RAW_MAPTILER_KEY.startsWith('paste-your-')
+      ? RAW_MAPTILER_KEY
+      : undefined;
+  const MAP_KEY_HINT =
+    'Map key not configured. Set NEXT_PUBLIC_MAPTILER_KEY in .env, delete .next, and restart the dev server.';
 
   const debounce = useCallback(<F extends (...args: any[]) => any>(func: F, delay: number) => {
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -72,7 +81,7 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ onLocationChange, initi
 
     if (!mapNode) return;
     if (!MAPTILER_API_KEY) {
-      setMapError("Map API Key is missing. Please check your .env.local file.");
+      setMapError(MAP_KEY_HINT);
       setIsLoading(false);
       return;
     }
