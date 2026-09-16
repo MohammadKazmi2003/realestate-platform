@@ -19,12 +19,16 @@ describe('filterNormalize — cache-key architecture invariants', () => {
     expect(panned.listKey).not.toBe(a.listKey);
   });
 
-  it('sort/page changes keep the marker key but change the list key', () => {
+  it('sort changes the marker key (sort-aware tiles), page/cursor do not', () => {
     const a = prepareMapQuery(B, BASE);
-    const sorted = prepareMapQuery(B, { ...BASE, sort: 'price_asc', pageSize: 24, cursor: ['x'] as any });
-    // Markers show physical pins — ordering/pagination must not refetch them.
-    expect(sorted.markerKey).toBe(a.markerKey);
+    const sorted = prepareMapQuery(B, { ...BASE, sort: 'price_asc' });
+    // Tile reps are sort-ordered per cell — a sort change must miss cache.
+    expect(sorted.markerKey).not.toBe(a.markerKey);
     expect(sorted.listKey).not.toBe(a.listKey);
+    const paged = prepareMapQuery(B, { ...BASE, pageSize: 24, cursor: ['x'] as any });
+    // Pagination never affects markers — same pins on every page.
+    expect(paged.markerKey).toBe(a.markerKey);
+    expect(paged.listKey).not.toBe(a.listKey);
   });
 
   it('array order does not change the key (Rule 1)', () => {

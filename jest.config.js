@@ -13,6 +13,7 @@ const customJestConfig = {
     '\\.(css|less|sass|scss)$': 'identity-obj-proxy',
   },
   testEnvironment: 'jest-environment-jsdom',
+  testPathIgnorePatterns: ['<rootDir>/node_modules/', '<rootDir>/specs/', '<rootDir>/cypress/', '<rootDir>/tests/e2e'],
   collectCoverageFrom: [
     'src/**/*.{js,jsx,ts,tsx}',
     '!src/**/*.d.ts',

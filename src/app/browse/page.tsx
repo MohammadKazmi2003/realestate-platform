@@ -32,7 +32,7 @@ type PropertyBrowse = PropertyCardProps['property'] & {
 type BhkType = { id: number; label: string; };
 type PropertyType = { id: number; name: string; };
 type SearchScope = 'properties' | 'projects' | 'both';
-type SortOption = 'popular' | 'newest' | 'price_asc' | 'price_desc';
+  type SortOption = 'popular' | 'newest' | 'price_asc' | 'price_desc' | 'beds' | 'baths' | 'sqft' | 'lot';
 
 type ProjectBrowse = Project & {
   latitude: number | null;
@@ -293,6 +293,8 @@ export default function BrowsePage() {
   const geocodedBoundsRef = useRef<{ minLat: number; maxLat: number; minLng: number; maxLng: number } | null>(null);
 
   const [propertyTotal, setPropertyTotal] = useState(0);
+  // totalRelation 'gte' means count was capped (P1: track 10K) — badge shows 10K+.
+  const [totalRelation, setTotalRelation] = useState<string | undefined>(undefined);
   // Count of listings matching everything EXCEPT listing purpose, populated
   // only when the purpose filter zeroes results (intent-aware empty state).
   const [withoutPurposeTotal, setWithoutPurposeTotal] = useState<number | null>(null);
@@ -525,9 +527,35 @@ export default function BrowsePage() {
     // Paint density dots from a markers array (shared by full + tiles modes).
     const paintMarkers = (map: maplibregl.Map, markers: any[]) => {
       const mapFeatures: GeoJSON.Feature[] = [];
+      // Top-5 densest cells get numeric count labels (marker-count layer);
+      // all other dots render label-free with heat-shaded color. Ranked by
+      // grid-cell count desc, deterministic tiebreak on id.
+      const rankedForLabels = [...markers]
+        .filter((m: any) => m.lat != null && m.lon != null)
+        .sort((a: any, b: any) => {
+          const ca = typeof a._cellCount === 'number' ? a._cellCount : 1;
+          const cb = typeof b._cellCount === 'number' ? b._cellCount : 1;
+          if (cb !== ca) return cb - ca;
+          return String(a.id).localeCompare(String(b.id));
+        })
+        .slice(0, 5);
+      const topCellIds = new Set(rankedForLabels.map((m: any) => `${m.entity_type || ''}:${m.id}`));
+      const formatCount = (n: number): string => {
+        if (!Number.isFinite(n) || n <= 1) return '';
+        if (n >= 1000000) {
+          const v = n / 1000000;
+          return `${Number.isInteger(v) ? v : v.toFixed(1)}M`;
+        }
+        if (n >= 1000) {
+          const v = n / 1000;
+          return `${Number.isInteger(v) ? v : v.toFixed(1)}K`;
+        }
+        return `${n}`;
+      };
       for (const m of markers) {
         if (m.lat == null || m.lon == null) continue;
         const isProject = m.entity_type === 'project';
+        const cellCount = typeof m._cellCount === 'number' && m._cellCount > 1 ? Math.round(m._cellCount) : 1;
         mapFeatures.push({
           type: 'Feature' as const,
           geometry: { type: 'Point' as const, coordinates: [m.lon, m.lat] },
@@ -541,6 +569,12 @@ export default function BrowsePage() {
               isProject ? tenant.projectCurrency : tenant.propertyCurrency
             ),
             sort_key: m.price || 0,
+            // Grid-cell density badge (tile MAP path): top-5 densest cells show
+            // their count (marker-count layer); all other dots are label-free
+            // with heat-shaded color. Singles carry count 1 (no badge).
+            _cellCount: cellCount,
+            count_label: formatCount(cellCount),
+            _topCell: topCellIds.has(`${m.entity_type || ''}:${m.id}`),
             image_url: m.image_url || null,
             bhk_type: m.bhk_type || null,
             bathrooms: m.bathrooms ?? null,
@@ -737,6 +771,7 @@ export default function BrowsePage() {
           setSortedResultOrder(order);
           setPropertyTotal(response.propertyTotal ?? 0);
           setProjectTotal(response.projectTotal ?? 0);
+          setTotalRelation(response.totalRelation);
           setMarkerCount((response.markers || []).length);
           setProjectGroups(response.projectGroups || []);
           setCombinedNextCursor(response.nextCursor ?? null);
@@ -2235,6 +2270,10 @@ export default function BrowsePage() {
                       <option value="popular">Most Popular</option>
                       <option value="price_asc">Price Low → High</option>
                       <option value="price_desc">Price High → Low</option>
+                      <option value="beds">Bedrooms</option>
+                      <option value="baths">Bathrooms</option>
+                      <option value="sqft">Area (sqft)</option>
+                      <option value="lot">Lot Size</option>
                     </select>
 
                     {/* BHK quick filter */}
@@ -2373,7 +2412,7 @@ export default function BrowsePage() {
           {!loading && (propertyTotal + projectTotal) > 0 && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1.5 pointer-events-none">
               <div className="rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
-                {markerCount} of {(propertyTotal + projectTotal).toLocaleString()} homes
+                {markerCount} of {(propertyTotal + projectTotal).toLocaleString()}{totalRelation === 'gte' ? '+' : ''} homes
               </div>
               {projectGroups.length > 0 && (
                 <div className="flex flex-wrap justify-center gap-1 max-w-md pointer-events-auto">

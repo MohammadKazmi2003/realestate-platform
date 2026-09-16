@@ -71,7 +71,7 @@ export const searchQuerySchema = z.object({
   polygons: z.array(z.array(polygonPointSchema).min(3)).max(32).optional(),
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(500).optional(),
-  sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular']).optional(),
+  sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular', 'beds', 'baths', 'sqft', 'lot']).optional(),
   scope: z.enum(['properties', 'projects', 'both']).optional(),
 });
 

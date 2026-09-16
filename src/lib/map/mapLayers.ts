@@ -8,6 +8,7 @@ const LAYERS = {
   unclusteredProperties: 'unclustered-properties',
   unclusteredProjects: 'unclustered-projects',
   markerPrice: 'marker-price',
+  markerCount: 'marker-count',
   highlightedPin: 'highlighted-pin',
 } as const;
 
@@ -49,6 +50,9 @@ export interface ClusterPoint {
   payment_plan_summary?: string | null;
   /** Photo count (null on docs indexed before the field existed → fetch). */
   image_count?: number | null;
+  /** Grid-cell density: how many matching listings this dot represents.
+   * 1 (or null) = single listing; >1 renders a count badge under the dot. */
+  _cellCount?: number | null;
 }
 
 export interface HoverPointData {
@@ -79,9 +83,17 @@ const DOT_HALO_RADIUS = 4;
 const DOT_HALO_OPACITY = 0.28;
 const DOT_HALO_BLUR = 0.5;
 
-function dotPaint(color: string, zoom: number): any {
+function dotPaint(lightColor: string, darkColor: string, zoom: number): any {
+  // Heat ramp (dark = dense): per-dot color interpolates by grid-cell count.
+  // Raw counts (log-skewed) with hand-tuned stops; singles keep base color.
   return {
-    'circle-color': color,
+    'circle-color': [
+      'interpolate', ['linear'], ['coalesce', ['get', '_cellCount'], 1],
+      1, lightColor,
+      10, lightColor,
+      100, darkColor,
+      1000, darkColor,
+    ],
     'circle-radius': getCircleRadius(zoom),
     'circle-stroke-width': 2,
     'circle-stroke-color': '#ffffff',
@@ -244,7 +256,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
     type: 'circle',
     source: SOURCE_ID,
     filter: ['==', ['get', 'type'], 'property'],
-    paint: dotPaint(PROPERTY_COLOR, map.getZoom()),
+    paint: dotPaint(PROPERTY_COLOR, '#1E3A8A', map.getZoom()),
   });
 
   addLayerOnce({
@@ -252,7 +264,7 @@ export function setupMapLayers(map: maplibregl.Map): void {
     type: 'circle',
     source: SOURCE_ID,
     filter: ['==', ['get', 'type'], 'project'],
-    paint: dotPaint(PROJECT_COLOR, map.getZoom()),
+    paint: dotPaint(PROJECT_COLOR, '#064E3B', map.getZoom()),
   });
 
   // Zillow-style price labels on the densest dots. Collision detection hides
@@ -274,6 +286,33 @@ export function setupMapLayers(map: maplibregl.Map): void {
     paint: {
       'text-color': '#111827',
       'text-halo-color': '#ffffff',
+      'text-halo-width': 2,
+      'text-halo-blur': 0.5,
+    },
+  });
+
+  // Density labels for the top 5 densest cells only (screenshot clutter fix):
+  // per-dot numeric badges are removed — density reads from dot darkness,
+  // and only the 5 densest cells (flagged _topCell server/client-side) show a
+  // count. allow-overlap:true so the top 5 always win placement.
+  addLayerOnce({
+    id: LAYERS.markerCount,
+    type: 'symbol',
+    source: SOURCE_ID,
+    filter: ['==', ['coalesce', ['get', '_topCell'], false], true],
+    layout: {
+      'text-field': ['coalesce', ['get', 'count_label'], ''],
+      'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+      'text-size': 11,
+      'text-offset': [0, 1.1],
+      'text-anchor': 'top',
+      'symbol-sort-key': ['coalesce', ['get', '_cellCount'], 0],
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+    },
+    paint: {
+      'text-color': '#ffffff',
+      'text-halo-color': 'rgba(15, 23, 42, 0.85)',
       'text-halo-width': 2,
       'text-halo-blur': 0.5,
     },

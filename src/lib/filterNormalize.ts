@@ -13,7 +13,7 @@
 // configure them per country without code changes.
 
 import { tenant } from './tenant';
-import { buildFilterHash } from './mapTiles';
+import { buildFilterHash, buildFilterHash64 } from './mapTiles';
 import {
   getPriceScale,
   purposeFromListingPurpose,
@@ -345,7 +345,10 @@ export function normalizeBoundaryPolygons(
 }
 
 function stripForMarkers(f: NormalizedMapFilters): NormalizedMapFilters {
-  // Markers show physical pins — list ordering/pagination never affect them.
+  // Pagination never affects markers (pageSize/cursor stripped); sort DOES
+  // (tile reps are sort-ordered per cell, and the legacy fallback sample is
+  // seeded per key) — so sort travels via the sortBucket suffix on markerKey,
+  // not inside the filter hash.
   const strip = new Set(tenant.filterNormalization.stripFromMarkerKey);
   const out: NormalizedMapFilters = { ...f };
   if (strip.has('sort')) delete out.sort;
@@ -381,7 +384,34 @@ export function prepareMapQuery(
   const filters = normalizeFilters(rawFilters);
   const bounds = trimBounds(clampBounds(rawBounds));
   const rb = fmtBounds(bounds);
-  const markerKey = `md:v4:m:${rb}:${buildFilterHash(orderedForHash(stripForMarkers(filters)))}`;
+  // markerKey carries the sort bucket suffix: tile reps are sort-ordered and
+  // the legacy sample is seeded per key, so a sort change must miss cache.
+  // Pagination stays stripped (same pins on every page).
+  const markerKey = `md:v4:m:${rb}:${buildFilterHash(orderedForHash(stripForMarkers(filters)))}:${sortBucketForKey(filters.sort)}`;
   const listKey = `md:v4:l:${rb}:${buildFilterHash(orderedForHash(filters))}`;
   return { bounds, filters, markerKey, listKey };
+}
+
+// --- v5 tile keys (additive, P2+) ---
+// Tile extent is implicit in z/x/y via tileToBounds — bounds NOT in key.
+// sortHash is hero-bucketed (newest|price_asc|price_desc|default) to avoid
+// key explosion. filterHash uses widen-only snapped filters.
+export function sortBucketForKey(sort?: string): string {
+  if (
+    sort === 'price_asc' || sort === 'price_desc' || sort === 'newest' ||
+    sort === 'beds' || sort === 'baths' || sort === 'sqft' || sort === 'lot'
+  ) return sort;
+  return 'default';
+}
+
+export function prepareTileQuery(
+  tile: { z: number; x: number; y: number },
+  rawFilters: RawMapFilters
+): { filters: NormalizedMapFilters; tileKey: string; filterHash: string; sortHash: string } {
+  const filters = normalizeFilters(rawFilters);
+  const stripped = stripForMarkers(filters);
+  const filterHash = buildFilterHash64(orderedForHash(stripped) as Record<string, any>);
+  const sortHash = sortBucketForKey(filters.sort);
+  const tileKey = `md:v5:t:${tile.z}/${tile.x}/${tile.y}:${filterHash}:${sortHash}`;
+  return { filters, tileKey, filterHash, sortHash };
 }

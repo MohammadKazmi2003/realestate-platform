@@ -1,4 +1,5 @@
 import { getElasticsearchClient, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS } from '@/lib/elasticsearch';
+import { flags } from '@/lib/flags';
 
 function sanitize(s: string | undefined, maxLen = 200): string | undefined {
   if (!s) return s;
@@ -33,6 +34,31 @@ function buildSortClauseInner(sort: string, lat?: number, lng?: number, scope?: 
     }
     if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
     if (sort === 'popular') return [{ _score: { order: 'desc' } }];
+    // Bedroom/bathroom/area sorts use the property scalar fields. Project docs
+    // lack these fields, so they sink via missing:_last (documented: mixed
+    // both-scope sorts rank properties first, projects last). unmapped_type is
+    // required: without it ES fails the shard with "No mapping found ... in
+    // order to sort on" (projects index has no such field, dynamic:false).
+    if (sort === 'beds') {
+      return [
+        { bedrooms: { order: 'desc', missing: '_last', unmapped_type: 'integer' } },
+        { _score: { order: 'desc' } },
+      ];
+    }
+    if (sort === 'baths') {
+      return [
+        { bathrooms: { order: 'desc', missing: '_last', unmapped_type: 'integer' } },
+        { _score: { order: 'desc' } },
+      ];
+    }
+    // sqft + lot both order by area_sqft (no separate lot field exists;
+    // area_sqft folds carpet/built-up/super-built-up/plot — documented).
+    if (sort === 'sqft' || sort === 'lot') {
+      return [
+        { area_sqft: { order: 'desc', missing: '_last', unmapped_type: 'float' } },
+        { _score: { order: 'desc' } },
+      ];
+    }
     // Unknown sort values fall back to newest (honest default).
     return [{ created_at: { order: 'desc' } }];
   }
@@ -41,12 +67,20 @@ function buildSortClauseInner(sort: string, lat?: number, lng?: number, scope?: 
     if (sort === 'price_desc') return [{ low_price: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }];
     if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
     if (sort === 'popular') return [{ _score: { order: 'desc' } }];
+    // Projects store bedroom options as bedrooms_list (int[]); min mode ranks
+    // by smallest unit. Baths/sqft/lot have no project scalar — documented
+    // fallback to newest so the map still shifts recency-wise.
+    if (sort === 'beds') return [{ bedrooms_list: { order: 'desc', mode: 'min', missing: '_last' } }, { _score: { order: 'desc' } }];
+    if (sort === 'baths' || sort === 'sqft' || sort === 'lot') return [{ created_at: { order: 'desc' } }];
     return [{ created_at: { order: 'desc' } }];
   }
   if (sort === 'price_asc') return [{ price: { order: 'asc', missing: '_last' } }, { _score: { order: 'desc' } }];
-  if (sort === 'price_desc') return [{ price: { order: 'desc' } }, { _score: { order: 'desc' } }];
+  if (sort === 'price_desc') return [{ price: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }];
   if (sort === 'newest') return [{ created_at: { order: 'desc' } }];
   if (sort === 'popular') return [{ _score: { order: 'desc' } }];
+  if (sort === 'beds') return [{ bedrooms: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }];
+  if (sort === 'baths') return [{ bathrooms: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }];
+  if (sort === 'sqft' || sort === 'lot') return [{ area_sqft: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }];
   if (lat != null && lng != null) {
     return [
       { _geo_distance: { location: { lat, lon: lng }, order: 'asc', unit: 'km', distance_type: 'plane' } },
@@ -88,7 +122,7 @@ function priceFieldForScope(scope: string) {
 // Shared query/filter construction. The sidebar list (queryESListings), the map
 // markers (queryESMapMarkers) and the totals all use the SAME filtered
 // population, so the list, the badge, and the map dots can never diverge.
-function buildFilters(params: any, scope: string): { must: any[]; filters: any[] } {
+export function buildFilters(params: any, scope: string): { must: any[]; filters: any[] } {
   const {
     query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType,
     minBedrooms, maxBedrooms,
@@ -330,8 +364,9 @@ export async function queryESListings(params: any) {
   const esQuery: any = {
     index: indexForScope(scope),
     size: pageSize,
-    // Exact totals up to 100k for "35,443 results" badges (markers keep false).
-    track_total_hits: 100000,
+    // P1: cap exact totals (default 10K+, honest via relation) behind flag.
+    // Legacy 100000 forced global counting on every pan — unaffordable at millions.
+    track_total_hits: flags.listCap10K ? flags.listTrackCap : 100000,
     query,
     sort: buildSortClause(sort, lat, lng, scope),
     aggs: buildAggregations(scope),

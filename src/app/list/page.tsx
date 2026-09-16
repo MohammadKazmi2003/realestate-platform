@@ -32,7 +32,7 @@ type PropertyType = { id: number; name: string; };
 type ListingPurpose = { id: number; name: string; };
 type FurnishingStatus = { id: number; name: string; };
 type Amenity = { id: number; name: string; category?: string; };
-type SortOption = 'popular' | 'newest' | 'price_asc' | 'price_desc';
+  type SortOption = 'popular' | 'newest' | 'price_asc' | 'price_desc' | 'beds' | 'baths' | 'sqft' | 'lot';
 
 const BATHROOM_OPTIONS = [1, 2, 3, 4, 5, 6];
 const INITIAL_AMENITIES_COUNT = 8;
@@ -705,6 +705,10 @@ export default function ListPage() {
               <option value="popular">Most Popular</option>
               <option value="price_asc">Price: Low → High</option>
               <option value="price_desc">Price: High → Low</option>
+              <option value="beds">Bedrooms</option>
+              <option value="baths">Bathrooms</option>
+              <option value="sqft">Area (sqft)</option>
+              <option value="lot">Lot Size</option>
             </select>
             <button onClick={() => setIsFilterOpen(true)} className="neumorphic-button flex items-center gap-2 relative whitespace-nowrap">
               <SlidersHorizontal size={16} /> Filters

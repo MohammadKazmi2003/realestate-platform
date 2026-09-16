@@ -217,15 +217,14 @@ export async function POST(req: NextRequest) {
     let sortClause: any[];
     if (scope === 'both') {
       if (sort === 'price_asc') {
+        // P1: indexed missing:_last (filter-cache friendly), no painless script.
         sortClause = [
-          { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-          { sort_price: { order: 'asc' } },
+          { sort_price: { order: 'asc', missing: '_last' } },
           { _score: { order: 'desc' } },
         ];
       } else if (sort === 'price_desc') {
         sortClause = [
-          { _script: { type: 'number', script: { source: "doc['sort_price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-          { sort_price: { order: 'desc' } },
+          { sort_price: { order: 'desc', missing: '_last' } },
           { _score: { order: 'desc' } },
         ];
       } else if (sort === 'newest') {
@@ -239,15 +238,13 @@ export async function POST(req: NextRequest) {
       sortClause = [{ _score: { order: 'desc' } }, { created_at: { order: 'desc' } }];
       if (sort === 'price_asc') {
         sortClause = [
-          { _script: { type: 'number', script: { source: "doc['price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-          { price: { order: 'asc' } },
+          { price: { order: 'asc', missing: '_last' } },
           { _score: { order: 'desc' } },
         ];
       }
       if (sort === 'price_desc') {
         sortClause = [
-          { _script: { type: 'number', script: { source: "doc['price'].value == 0 ? 1 : 0" }, order: 'asc' } },
-          { price: { order: 'desc' } },
+          { price: { order: 'desc', missing: '_last' } },
           { _score: { order: 'desc' } },
         ];
       }
@@ -269,6 +266,8 @@ export async function POST(req: NextRequest) {
     const esQuery: any = {
       index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
       size: pageSize,
+      // P1: cap exact totals (default 10K+, honest via relation) — matches map-data LIST.
+      track_total_hits: 10000,
       query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
       // Unique tiebreaker so search_after pagination can never return the
       // same doc on two pages (tied sorts otherwise overlap → duplicate keys).
@@ -306,6 +305,7 @@ export async function POST(req: NextRequest) {
     }));
 
     const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
+    const totalRelation = typeof esResponse.hits.total === 'object' ? (esResponse.hits.total as any).relation : undefined;
 
     let propertyTotal = 0;
     let projectTotal = 0;
@@ -338,6 +338,7 @@ export async function POST(req: NextRequest) {
     const response: any = {
       results,
       total,
+      totalRelation,
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
       aggregations: { facets: (esResponse as any).aggregations || {} },
       withoutPurposeTotal,
