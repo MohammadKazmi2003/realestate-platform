@@ -17,6 +17,8 @@
     "seed": "node scripts/seed-data.js",
     "provision": "node scripts/provision-customer.js",
     "worker": "npx tsx src/worker/index.ts",
+    "scale:smoke": "npx tsx scripts/scale-smoke.ts",
+    "scale:stress": "npx tsx scripts/scale-stress.ts",
     "start:all": "./start-all.sh",
     "stop:all": "./stop-all.sh",
     "sync:all": "./sync-all.sh",

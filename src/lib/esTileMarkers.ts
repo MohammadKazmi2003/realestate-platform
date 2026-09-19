@@ -7,8 +7,10 @@
 // handful of coarse cells at low zoom.
 
 import { getElasticsearchClient, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS } from '@/lib/elasticsearch';
-import { precisionForZoom } from '@/lib/mapTiles';
+import { precisionForZoom, maxPrecisionForZoom } from '@/lib/mapTiles';
 import { tileToBounds } from '@/lib/mapTiles';
+import { logger } from '@/lib/logger';
+import { flags } from '@/lib/flags';
 
 // Re-export marker mapping shape parity: server maps buckets -> same marker objects
 // as queryESMapMarkers (id, entity_type, lat/lon, price, title, image, specs...).
@@ -98,17 +100,37 @@ export interface TileAggParams {
 // Raising precision splits jittered/close coordinates into many cells; the
 // size:1000 cap bounds worst-case cost at scale. Truly stacked points (identical
 // coordinates) never split — those render as count badges via _cellCount.
+// Scale-ready: attempts default 2 (env TILE_MAX_ATTEMPTS), shard_size default
+// 1500 (env TILE_SHARD_SIZE), low-zoom precision capped via
+// maxPrecisionForZoom() so per-shard bucket build stays bounded as shards grow.
 const MIN_OCCUPIED_CELLS = 150;
 const MAX_GRID_PRECISION = 12;
 const PRECISION_STEP = 3;
-const MAX_PRECISION_ATTEMPTS = 4;
+function maxPrecisionAttempts(): number {
+  try {
+    return flags.tileMaxAttempts;
+  } catch {
+    const v = Number(process.env.TILE_MAX_ATTEMPTS);
+    return Number.isFinite(v) ? Math.max(1, Math.min(4, v)) : 2;
+  }
+}
+function tileShardSize(): number {
+  try {
+    return flags.tileShardSize;
+  } catch {
+    const v = Number(process.env.TILE_SHARD_SIZE);
+    return Number.isFinite(v) ? Math.max(500, Math.min(5000, v)) : 1500;
+  }
+}
 // Below this many cells the growth ratio is noise (3→4 cells looks "flat"
 // but finer precision still splits) — always refine until attempts/max cap.
 const DIMINISHING_MIN_CELLS = 30;
 const DIMINISHING_RATIO = 1.2;
 
 export function buildTileAggQuery(p: TileAggParams): any {
-  const precision = p.precision ?? precisionForZoom(p.zoom);
+  const basePrec = p.precision ?? precisionForZoom(p.zoom);
+  // Low-zoom cap: overview zooms concentrate via cells, not 500 pins.
+  const precision = Math.min(basePrec, maxPrecisionForZoom(p.zoom), MAX_GRID_PRECISION);
   // Tile bounds constrain aggregation (widen-only already applied upstream).
   const tileBox = {
     top_left: { lat: p.tileBounds.maxLat, lon: p.tileBounds.minLng },
@@ -126,7 +148,7 @@ export function buildTileAggQuery(p: TileAggParams): any {
         field: 'location',
         precision,
         size: 1000,
-        shard_size: 5000,
+        shard_size: tileShardSize(),
         bounds: tileBox,
       },
       aggs: {
@@ -249,6 +271,19 @@ export async function queryTileMarkersForBounds(opts: {
   // Both: two sub-aggs (props + projects) merged by cell key to preserve mix
   // without forced quota. Single scope: one agg.
   const needsSplit = opts.scope === 'both';
+  // Scale-ready routing: coarse 1° region key. Ignored by ES until indices
+  // are created with routing — safe to send now so adding shards later
+  // prunes S→k without code change. World spans return [] → scatter.
+  let routing: string | undefined;
+  try {
+    if (flags.geoRouting) {
+      const { routingForBounds } = await import('@/lib/mapTiles');
+      const r = routingForBounds(opts.tileBounds);
+      routing = r.length > 0 ? r.join(',') : undefined;
+    }
+  } catch {
+    routing = undefined;
+  }
   const runOne = async (index: string | string[], extraFilter?: any, precision?: number) => {
     const body = buildTileAggQuery({
       tileBounds: opts.tileBounds,
@@ -263,6 +298,7 @@ export async function queryTileMarkersForBounds(opts: {
     const res: any = await es.search({
       index,
       ...body,
+      ...(routing ? { routing } : {}),
       request_cache: true,
       timeout: `${opts.timeoutMs || 4000}ms`,
       allow_partial_search_results: true,
@@ -270,7 +306,7 @@ export async function queryTileMarkersForBounds(opts: {
     return res;
   };
 
-  const basePrecision = precisionForZoom(opts.zoom);
+  const basePrecision = Math.min(precisionForZoom(opts.zoom), maxPrecisionForZoom(opts.zoom));
 
   const fetchAtPrecision = async (precision: number) => {
     if (!needsSplit) {
@@ -357,18 +393,25 @@ export async function queryTileMarkersForBounds(opts: {
 
   // Adaptive precision: coarse grids collapse clustered cities into a handful
   // of cells (1 rep each = near-empty map). Step precision up while occupied
-  // cells stay sparse. Stop on diminishing returns (stacked identical coords
-  // never split) or attempt cap. Miss-path only; results are cached per tile.
+  // cells stay sparse. First refinement jumps +4 when the base attempt is
+  // pathologically sparse (<30 cells) to save a round-trip, then +3.
+  // Stop on diminishing returns (stacked identical coords never split),
+  // low-zoom cap (overview uses badges), or attempt cap (default 2).
+  // Miss-path only; results are cached per tile.
   let precision = basePrecision;
   let out = await fetchAtPrecision(precision);
   let attempts = 1;
+  const attemptCap = maxPrecisionAttempts();
+  const precisionCap = Math.min(MAX_GRID_PRECISION, maxPrecisionForZoom(opts.zoom));
   while (
     out.cells.length < MIN_OCCUPIED_CELLS &&
-    precision < MAX_GRID_PRECISION &&
-    attempts < MAX_PRECISION_ATTEMPTS
+    precision < precisionCap &&
+    attempts < attemptCap
   ) {
     const prevCells = out.cells.length;
-    precision = Math.min(MAX_GRID_PRECISION, precision + PRECISION_STEP);
+    // P1: sparse first attempts jump further (fewer rounds, same endpoint).
+    const step = prevCells < DIMINISHING_MIN_CELLS ? PRECISION_STEP + 1 : PRECISION_STEP;
+    precision = Math.min(precisionCap, precision + step);
     try {
       out = await fetchAtPrecision(precision);
     } catch {
@@ -380,6 +423,13 @@ export async function queryTileMarkersForBounds(opts: {
     if (prevCells >= DIMINISHING_MIN_CELLS && out.cells.length <= Math.ceil(prevCells * DIMINISHING_RATIO)) break;
     if (out.cells.length >= MIN_OCCUPIED_CELLS) break;
   }
+  // P0 observability: adaptive fire-rate + endpoint per zoom band.
+  logger.info('tile adaptive', {
+    zoom: opts.zoom, scope: opts.scope,
+    basePrecision, precisionUsed: precision,
+    cells: out.cells.length, attempts,
+    took: (out as any)?.took ?? null,
+  });
   return { ...out, precisionUsed: precision };
 }
 

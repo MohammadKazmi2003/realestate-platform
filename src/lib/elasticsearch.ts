@@ -36,15 +36,30 @@ export function recordEsFailure() {
 export function getElasticsearchClient(): Client {
   if (esClient) return esClient;
 
-  const node = process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
+  // Scale-ready: comma-separated ELASTICSEARCH_URLS (or ELASTICSEARCH_URL)
+  // lets you add nodes/replicas with env only — no code change. Single-node
+  // default preserves local dev. Sniffing + pool tuning via env.
+  const rawNodes =
+    process.env.ELASTICSEARCH_URLS || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
+  const nodes = rawNodes
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const node = nodes.length > 1 ? nodes : nodes[0];
   const apiKey = process.env.ELASTICSEARCH_API_KEY;
+  const sniffOnStart = ['1', 'true', 'on', 'yes'].includes(
+    String(process.env.ES_SNIFF_ON_START || '').toLowerCase()
+  );
+  const reqTimeout = Number(process.env.ES_REQUEST_TIMEOUT_MS);
+  const maxRetries = Number(process.env.ES_MAX_RETRIES);
 
   esClient = new Client({
-    node,
+    nodes: nodes.length > 1 ? nodes : undefined,
+    node: nodes.length > 1 ? undefined : (node as string),
     ...(apiKey ? { auth: { apiKey } } : {}),
-    maxRetries: 3,
-    requestTimeout: 5000,
-    sniffOnStart: false,
+    maxRetries: Number.isFinite(maxRetries) ? maxRetries : 3,
+    requestTimeout: Number.isFinite(reqTimeout) ? reqTimeout : 5000,
+    sniffOnStart,
     // @elastic/elasticsearch 8.19 removed the nested `connectionPool` options
     // object; pool tuning is now top-level (defaults already ping/resurrect).
     resurrectStrategy: 'ping',

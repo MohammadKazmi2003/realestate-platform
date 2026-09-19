@@ -23,6 +23,10 @@ export const flags = {
   // P1: cap LIST exact totals to 10K (badge shows 10K+ when gte).
   get listCap10K() { return envOn('LIST_CAP_10K', true); },
   get listTrackCap() { return envNum('LIST_TRACK_CAP', 10000); },
+  // P2: exact badge totals from filter→value_count counter siblings on LIST
+  // (cheap counters riding the matching-doc pass — exact at every scale).
+  // Off restores legacy track_total_hits + by_entity_type badge path.
+  get exactCountCounters() { return envOn('EXACT_COUNT_COUNTERS', true); },
   // P2: tile v5 keys + tiered TTLs.
   get tileCacheV5() { return envOn('TILE_CACHE_V5', true); },
   // P3: shadow grid query (log-only, never served).
@@ -37,6 +41,21 @@ export const flags = {
   get quantileFilter() { return envOn('QUANTILE_FILTER', true); },
   // P6: msearch split (LIST+TILEs in one RTT). Fallback to Promise.all.
   get msearchEnabled() { return envOn('MSEARCH_ENABLED', true); },
+  // Scale-ready P0: lazy project pills (skip by_project agg on list path).
+  // Client fetches /api/project-groups separately. Default ON.
+  get lazyPills() { return envOn('LAZY_PILLS', true); },
+  // Scale-ready P0: tile fan-out caps. Env-overridable without code change
+  // so adding ES nodes/replicas scales linearly (bounded per-query work).
+  get tileMaxAttempts() { return Math.max(1, Math.min(4, envNum('TILE_MAX_ATTEMPTS', 2))); },
+  get tileShardSize() { return Math.max(500, Math.min(5000, envNum('TILE_SHARD_SIZE', 1500))); },
+  get tileMaxPrecisionLowZoom() { return Math.max(4, Math.min(12, envNum('TILE_MAX_PRECISION_LOW_ZOOM', 6))); },
+  get tileMaxTiles() { return Math.max(4, Math.min(12, envNum('TILE_MAX_TILES', 8))); },
+  // Scale-ready: geohash routing (forward-compatible; ignored until indices
+  // are created with routing). ON means queries send `routing` param.
+  get geoRouting() { return envOn('GEO_ROUTING', true); },
+  // Scale-ready: distributed singleflight via Redis SET NX (cross-instance
+  // dedup). Falls back to in-process map when Redis is down.
+  get distSingleflight() { return envOn('DIST_SINGLEFLIGHT', true); },
   // Observability only.
   get obsOnly() { return envOn('OBS_ONLY', false); },
 };

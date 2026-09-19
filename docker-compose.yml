@@ -3,6 +3,10 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
     container_name: realestate-es
     environment:
+      # Scale-ready: single-node for local. For prod, set discovery.type unset,
+      # cluster.name same across nodes, ES_JAVA_OPTS 50% RAM, and create indices
+      # with ES_SHARDS/ES_REPLICAS (scripts/es-indexer.js) + routing. Add nodes
+      # via ELASTICSEARCH_URLS="http://es01:9200,http://es02:9200" — no code change.
       - discovery.type=single-node
       - xpack.security.enabled=false
       - xpack.ml.enabled=false
@@ -42,7 +46,10 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy noeviction
+    # Scale-ready: volatile-lru so tile/list cache evicts cold keys instead of
+    # failing writes (noeviction caused silent cache drops → ES herd). Increase
+    # --maxmemory with load; add nodes via REDIS_CLUSTER=1 + comma REDIS_URL.
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy volatile-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

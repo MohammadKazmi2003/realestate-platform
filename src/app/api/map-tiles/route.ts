@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isEsAvailable } from '@/lib/elasticsearch';
-import { cacheGet, cacheSet } from '@/lib/redis';
+import { cacheGet, cacheSet, singleflightCompute } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { checkMapRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { prepareTileQuery, normalizeFilters } from '@/lib/filterNormalize';
@@ -9,6 +9,22 @@ import { buildFiltersForTiles } from '@/lib/esTileFilters';
 import { queryTileMarkersForBounds } from '@/lib/esTileMarkers';
 import { mergeTileMarkers } from '@/lib/tileMerge';
 import { flags } from '@/lib/flags';
+
+// Scale-ready: bounded tile concurrency so one pan can't open 12-24 ES
+// sockets at once. Adding Next/ES nodes then scales QPS instead of
+// amplifying per-request sockets. Env TILE_CONCURRENCY, default 6.
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length) as R[];
+  let i = 0;
+  const workers = new Array(Math.max(1, Math.min(limit, items.length))).fill(0).map(async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 // Additive P4 route: quantized tile MAP (size:0 grid), never exact-viewport.
 // Client fetches ALL covering tiles and merges/clips — never single center tile.
@@ -108,40 +124,42 @@ export async function POST(req: NextRequest) {
     const t0 = Date.now();
     const tileResults: { markers: any[] }[] = [];
     const allCells: { key: string; count: number }[] = [];
-    await Promise.all(
-      tiles.map(async (t) => {
+    const conc = Math.max(1, Math.min(8, Number(process.env.TILE_CONCURRENCY) || 6));
+    await mapWithConcurrency(tiles, conc, async (t) => {
         const { tileKey, filters } = prepareTileQuery(t, { scope, sort: sortStr, ...rest } as any);
-        const cached = await cacheGet<any>(tileKey);
-        if (cached) {
-          tileResults.push(cached);
-          if (Array.isArray(cached.cells)) allCells.push(...cached.cells);
-          return;
-        }
-        const { must, filters: baseFilters } = buildFiltersForTiles({ ...filters, sort: sortStr, scope }, String(scope));
-        void filters;
-        const tb = tileToBounds(t.z, t.x, t.y);
-        const allFilters = quantileRange ? [...baseFilters, quantileRange] : baseFilters;
-        const r = await queryTileMarkersForBounds({
-          tileBounds: tb,
-          must,
-          filters: allFilters,
-          scope: String(scope),
-          sort: sortStr,
-          zoom: Number(zoom) || 10,
-          withPercentiles: flags.quantileFilter,
-          timeoutMs: 4000,
-        }).catch((e) => {
-          logger.warn('tile agg failed', e);
-          return null;
-        });
-        if (r) {
-          const payload = { markers: r.markers, cells: r.cells, took: r.took };
-          await cacheSet(tileKey, payload, ttl);
+        // Distributed singleflight: N Next instances coalesce on the same
+        // tile key via Redis lock (vs per-process Map only).
+        const { value: cachedOrComputed } = await singleflightCompute<any>(
+          tileKey,
+          ttl,
+          async () => {
+            const { must, filters: baseFilters } = buildFiltersForTiles({ ...filters, sort: sortStr, scope }, String(scope));
+            void filters;
+            const tb = tileToBounds(t.z, t.x, t.y);
+            const allFilters = quantileRange ? [...baseFilters, quantileRange] : baseFilters;
+            const r = await queryTileMarkersForBounds({
+              tileBounds: tb,
+              must,
+              filters: allFilters,
+              scope: String(scope),
+              sort: sortStr,
+              zoom: Number(zoom) || 10,
+              withPercentiles: flags.quantileFilter,
+              timeoutMs: 4000,
+            }).catch((e) => {
+              logger.warn('tile agg failed', e);
+              return null;
+            });
+            if (!r) return null;
+            return { markers: r.markers, cells: r.cells, took: r.took };
+          }
+        );
+        const payload = cachedOrComputed;
+        if (payload) {
           tileResults.push(payload);
-          allCells.push(...r.cells);
+          if (Array.isArray((payload as any).cells)) allCells.push(...(payload as any).cells);
         }
-      })
-    );
+      });
 
     let merged = mergeTileMarkers(tileResults, { minLat, maxLat, minLng, maxLng }, sortStr, 500);
     // Same contract as map-data: narrowed population ≤500 -> exact sort-aware
@@ -191,6 +209,46 @@ export async function POST(req: NextRequest) {
     );
   } catch (e: any) {
     logger.error('map-tiles error', e?.message || e);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+// Scale-ready CDN path: GET is cacheable by stock CDNs (POST is not).
+// Same tile-aligned keys (md:v5:t:z/x/y:filterHash:sort) so edge hits share
+// across users. Clients should prefer GET for unfiltered/base pans; POST
+// remains for complex filtered bodies.
+export async function GET(req: NextRequest) {
+  try {
+    const identifier = getRateLimitIdentifier(req);
+    const { allowed } = await checkMapRateLimit(identifier);
+    if (!allowed) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+    const sp = req.nextUrl.searchParams;
+    const num = (k: string) => {
+      const v = sp.get(k);
+      return v == null ? undefined : Number(v);
+    };
+    const bounds = { minLat: num('minLat'), maxLat: num('maxLat'), minLng: num('minLng'), maxLng: num('maxLng') };
+    if (![bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng].every(Number.isFinite)) {
+      return NextResponse.json({ error: 'bounds (minLat,maxLat,minLng,maxLng) required' }, { status: 400 });
+    }
+    const forward = new Request(req.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(req.headers.get('x-forwarded-for') ? { 'x-forwarded-for': req.headers.get('x-forwarded-for') as string } : {}) },
+      body: JSON.stringify({
+        bounds,
+        zoom: num('zoom') ?? 10,
+        scope: sp.get('scope') || 'both',
+        sort: sp.get('sort') || 'newest',
+        ...(sp.get('query') ? { query: sp.get('query') } : {}),
+        ...(sp.get('listingPurpose') ? { listingPurpose: sp.get('listingPurpose') } : {}),
+        ...(sp.get('minPrice') ? { minPrice: num('minPrice') } : {}),
+        ...(sp.get('maxPrice') ? { maxPrice: num('maxPrice') } : {}),
+      }),
+    }) as NextRequest;
+    // Reuse POST path (single implementation) — CDN caches this GET URL.
+    return POST(forward as NextRequest);
+  } catch (e: any) {
+    logger.error('map-tiles GET error', e?.message || e);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

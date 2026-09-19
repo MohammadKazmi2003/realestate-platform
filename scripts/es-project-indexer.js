@@ -63,17 +63,25 @@ async function createIndex() {
     console.log(`Deleted existing index: ${INDEX_NAME}`);
   }
 
+  // Scale-ready: same ES_SHARDS/ES_REPLICAS contract as properties indexer.
+  const numShards = Math.max(1, Number(process.env.ES_SHARDS) || 1);
+  const numReplicas = Math.max(0, Number(process.env.ES_REPLICAS ?? 1) || 0);
   const mappingsPath = path.join(__dirname, '..', 'es-config', 'projects-mappings.json');
   let body = {
-    settings: { number_of_shards: 1, number_of_replicas: 1 },
+    settings: { number_of_shards: numShards, number_of_replicas: numReplicas },
   };
 
   if (fs.existsSync(mappingsPath)) {
     body = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
+    body.settings = {
+      ...(body.settings || {}),
+      number_of_shards: numShards,
+      number_of_replicas: numReplicas,
+    };
   }
 
   await es.indices.create({ index: INDEX_NAME, body });
-  console.log(`Created index: ${INDEX_NAME} with project mappings`);
+  console.log(`Created index: ${INDEX_NAME} with project mappings (shards=${numShards} replicas=${numReplicas})`);
 }
 
 async function setupAlias() {

@@ -297,16 +297,64 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
   return { must, filters };
 }
 
-function buildAggregations(scope: string) {
+function buildAggregations(scope: string, noEntityCounts = false) {
   // Entity-type counts for the scope badge (properties vs projects).
+  // NOTE: when exactCountCounters is on, totals come from the cheap
+  // filter→value_count siblings on the fill/LIST query instead — this terms
+  // agg is skipped (it visits all N matches on every pan).
   const aggs: any = {};
-  if (scope === 'both') {
+  if (scope === 'both' && !noEntityCounts) {
     aggs.by_entity_type = { terms: { field: 'entity_type', size: 5 } };
   }
-  // Community rollup for "N New Homes" pills — one lightweight terms agg,
-  // cached with the list response. Missing on projects index → empty buckets.
-  aggs.by_project = { terms: { field: 'project_name.keyword', size: 20 } };
+  // Community rollup for "N New Homes" pills — LAZY by default (flags.lazyPills):
+  // skipped on the list critical path (~15-20% CPU at 10M docs: terms over all
+  // N matches + ordinals). Client fetches /api/project-groups separately with
+  // its own long-TTL cache. Set LAZY_PILLS=0 to restore inline pills.
+  let lazy = true;
+  try {
+    lazy = flags.lazyPills;
+  } catch {
+    lazy = process.env.LAZY_PILLS !== '0';
+  }
+  if (!lazy) {
+    aggs.by_project = { terms: { field: 'project_name.keyword', size: 20 } };
+  }
   return aggs;
+}
+
+// Exact totals without track_total_hits: filter→value_count siblings ride the
+// same matching-doc pass the query already performs (one integer increment per
+// doc — no heap, no fetch, no ordinals). Cost ≈ +2-5% of the query vs full
+// exact counting; exact at every scale (no cap, no truncation, no shard
+// pre-trim — unlike grid-bucket sums). `id` is keyword on both indices (the
+// pagination tiebreaker sorts on it), so the counter equals doc count.
+function buildExactCountAggs(must: any[], filters: any[]) {
+  const scoped = (extra: any) => ({
+    filter: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: [...filters, extra] } },
+    aggs: { total: { value_count: { field: 'id' } } },
+  });
+  return {
+    // Un-narrowed viewport population — deliberately built from base filters
+    // WITHOUT any quantileRange (counting the narrowed set would ratchet).
+    exact_total: {
+      filter: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+      aggs: { total: { value_count: { field: 'id' } } },
+    },
+    exact_property: scoped({ term: { entity_type: 'property' } }),
+    exact_project: scoped({ term: { entity_type: 'project' } }),
+  };
+}
+
+function readExactCount(aggregations: any): { total: number; property: number; project: number } | null {
+  try {
+    const t = aggregations?.exact_total?.total?.value;
+    const p = aggregations?.exact_property?.total?.value;
+    const j = aggregations?.exact_project?.total?.value;
+    if (typeof t !== 'number' || typeof p !== 'number' || typeof j !== 'number') return null;
+    return { total: t, property: p, project: j };
+  } catch {
+    return null;
+  }
 }
 
 const LISTING_SOURCE_FIELDS = [
@@ -364,12 +412,17 @@ export async function queryESListings(params: any) {
   const esQuery: any = {
     index: indexForScope(scope),
     size: pageSize,
-    // P1: cap exact totals (default 10K+, honest via relation) behind flag.
-    // Legacy 100000 forced global counting on every pan — unaffordable at millions.
-    track_total_hits: flags.listCap10K ? flags.listTrackCap : 100000,
+    // Exact totals now come from filter→value_count siblings below (cheap
+    // counters riding the same matching-doc pass — exact at every scale).
+    // track_total_hits stays off: legacy capped counting (even 10K) is pure
+    // overhead once counters exist. Reversible via flags.exactCountCounters.
+    track_total_hits: flags.exactCountCounters ? false : (flags.listCap10K ? flags.listTrackCap : 100000),
     query,
     sort: buildSortClause(sort, lat, lng, scope),
-    aggs: buildAggregations(scope),
+    aggs: {
+      ...buildAggregations(scope, flags.exactCountCounters),
+      ...(flags.exactCountCounters ? buildExactCountAggs(must, filters) : {}),
+    },
     // Only return fields used by the browse page — cuts response size by ~55%
     _source: LISTING_SOURCE_FIELDS,
   };
@@ -396,18 +449,30 @@ export async function queryESListings(params: any) {
   const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total || 0;
   const totalRelation = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.relation : undefined;
 
+  // Exact badge totals from the counter siblings when present (always eq —
+  // counters have no cap, truncation, or shard pre-trim). Falls back to the
+  // legacy capped/terms path when the flag is off or aggs are missing.
+  const exact = readExactCount((esResponse as any).aggregations);
+  const exactTotal = exact != null ? exact.total : total;
+  const exactRelation = exact != null ? 'eq' : totalRelation;
+
   let propertyTotal = 0;
   let projectTotal = 0;
   if (scope === 'both') {
-    const byEntity = (esResponse.aggregations as any)?.by_entity_type?.buckets || [];
-    for (const b of byEntity) {
-      if (b.key === 'property') propertyTotal = b.doc_count;
-      if (b.key === 'project') projectTotal = b.doc_count;
+    if (exact != null) {
+      propertyTotal = exact.property;
+      projectTotal = exact.project;
+    } else {
+      const byEntity = (esResponse.aggregations as any)?.by_entity_type?.buckets || [];
+      for (const b of byEntity) {
+        if (b.key === 'property') propertyTotal = b.doc_count;
+        if (b.key === 'project') projectTotal = b.doc_count;
+      }
     }
   } else if (scope === 'projects') {
-    projectTotal = total;
+    projectTotal = exactTotal;
   } else {
-    propertyTotal = total;
+    propertyTotal = exactTotal;
   }
 
   const projectGroups = ((esResponse.aggregations as any)?.by_project?.buckets || [])
@@ -420,8 +485,9 @@ export async function queryESListings(params: any) {
   // Intent-aware empty state: when a purpose filter zeroes results, one cheap
   // count-only retry without it tells the UI "N available under other intents"
   // instead of a dead-end "No results". Runs ONLY on empty (no cost otherwise).
+  // Gated on the exact total so the capped/legacy path behaves identically.
   let withoutPurposeTotal: number | null = null;
-  if (total === 0 && typeof params?.listingPurpose === 'string' && params.listingPurpose.trim()) {
+  if (exactTotal === 0 && typeof params?.listingPurpose === 'string' && params.listingPurpose.trim()) {
     try {
       const relaxed = buildFilters({ ...params, listingPurpose: undefined }, scope);
       const countRes: any = await es.count({
@@ -441,8 +507,8 @@ export async function queryESListings(params: any) {
 
   return {
     results,
-    total,
-    totalRelation,
+    total: exactTotal,
+    totalRelation: exactRelation,
     propertyTotal,
     projectTotal,
     projectGroups,
@@ -541,4 +607,24 @@ export async function queryESMapMarkers(params: any) {
   // ~37 blue + ~463 green dots, not a forced 250/250). Bonus: 1 ES query
   // per pan instead of 2.
   return run(indexForScope(scope), MARKER_LIMIT);
+}
+
+// Lazy pills: standalone by_project terms agg (size:0, no hits) so the list
+// critical path skips it. Same filtered population as queryESListings via
+// buildFilters — same bounds+filters, own long-TTL cache key in the route.
+// request_cache:true + track_total_hits:false; cheap at every scale.
+export async function queryESProjectGroups(params: any, scope = 'both') {
+  const es = getElasticsearchClient();
+  const { must, filters } = buildFilters(params, scope);
+  const res: any = await es.search({
+    index: indexForScope(scope),
+    size: 0,
+    track_total_hits: false,
+    query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+    aggs: { by_project: { terms: { field: 'project_name.keyword', size: 20 } } },
+    request_cache: true,
+  } as any);
+  return ((res?.aggregations as any)?.by_project?.buckets || [])
+    .filter((b: any) => b.key && String(b.key).trim().length > 0)
+    .map((b: any) => ({ name: b.key, count: b.doc_count }));
 }

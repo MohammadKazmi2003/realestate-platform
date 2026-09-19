@@ -6,6 +6,7 @@ import { searchQuerySchema } from '@/lib/validation';
 import { logger } from '@/lib/logger';
 import { enqueueAnalytics } from '@/lib/events';
 import { normalizeBoundaryPolygons } from '@/lib/filterNormalize';
+import { flags } from '@/lib/flags';
 
 function roundBounds(b: any) {
   if (!b) return b;
@@ -266,8 +267,10 @@ export async function POST(req: NextRequest) {
     const esQuery: any = {
       index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
       size: pageSize,
-      // P1: cap exact totals (default 10K+, honest via relation) — matches map-data LIST.
-      track_total_hits: 10000,
+      // Exact badge totals come from filter→value_count siblings below (cheap
+      // counters riding the matching-doc pass — exact at every scale), so the
+      // legacy capped count is off. Reversible via flags.exactCountCounters.
+      track_total_hits: flags.exactCountCounters ? false : 10000,
       query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
       // Unique tiebreaker so search_after pagination can never return the
       // same doc on two pages (tied sorts otherwise overlap → duplicate keys).
@@ -277,7 +280,9 @@ export async function POST(req: NextRequest) {
 
     if (scope === 'both') {
       esQuery.aggs = {
-        by_entity_type: { terms: { field: 'entity_type', size: 2 } },
+        // by_entity_type replaced by exact counters below when the flag is on
+        // (terms over all N matches on every page is pure overhead).
+        ...(flags.exactCountCounters ? {} : { by_entity_type: { terms: { field: 'entity_type', size: 2 } } }),
       };
     } else {
       esQuery.aggs = {
@@ -287,6 +292,31 @@ export async function POST(req: NextRequest) {
         by_furnishing: { terms: { field: 'furnishing_status', size: 10 } },
         by_amenities: { terms: { field: 'amenities', size: 50 } },
         price_stats: { stats: { field: 'price' } },
+      };
+    }
+
+    // Exact totals via filter→value_count siblings (same cheap-counter pattern
+    // as map-data LIST): one integer increment per already-visited matching
+    // doc — no heap, no fetch, no ordinals. Un-narrowed base filters on purpose
+    // (quantile ranges must never feed the badge count).
+    if (flags.exactCountCounters) {
+      const scoped = (extra: any) => ({
+        filter: {
+          bool: {
+            must: must.length > 0 ? must : [{ match_all: {} }],
+            filter: [...filters, extra],
+          },
+        },
+        aggs: { total: { value_count: { field: 'id' } } },
+      });
+      esQuery.aggs = {
+        ...(esQuery.aggs || {}),
+        exact_total: {
+          filter: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+          aggs: { total: { value_count: { field: 'id' } } },
+        },
+        exact_property: scoped({ term: { entity_type: 'property' } }),
+        exact_project: scoped({ term: { entity_type: 'project' } }),
       };
     }
 
@@ -307,20 +337,38 @@ export async function POST(req: NextRequest) {
     const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
     const totalRelation = typeof esResponse.hits.total === 'object' ? (esResponse.hits.total as any).relation : undefined;
 
+    // Exact badge totals from the counter siblings when present (always eq).
+    // Falls back to the legacy capped/terms path when the flag is off.
+    const xTotal: number | undefined = (esResponse as any).aggregations?.exact_total?.total?.value;
+    const xProp: number | undefined = (esResponse as any).aggregations?.exact_property?.total?.value;
+    const xProj: number | undefined = (esResponse as any).aggregations?.exact_project?.total?.value;
+    const hasExact = typeof xTotal === 'number' && typeof xProp === 'number' && typeof xProj === 'number';
+    const exactTotal: number = hasExact ? (xTotal as number) : (typeof total === 'number' ? total : 0);
+    const exactRelation = hasExact ? 'eq' : totalRelation;
+
     let propertyTotal = 0;
     let projectTotal = 0;
     if (scope === 'both') {
-      const entityAgg = (esResponse as any).aggregations?.by_entity_type?.buckets || [];
-      for (const bucket of entityAgg) {
-        if (bucket.key === 'property') propertyTotal = bucket.doc_count;
-        if (bucket.key === 'project') projectTotal = bucket.doc_count;
+      if (typeof xProp === 'number' && typeof xProj === 'number') {
+        propertyTotal = xProp;
+        projectTotal = xProj;
+      } else {
+        const entityAgg = (esResponse as any).aggregations?.by_entity_type?.buckets || [];
+        for (const bucket of entityAgg) {
+          if (bucket.key === 'property') propertyTotal = bucket.doc_count;
+          if (bucket.key === 'project') projectTotal = bucket.doc_count;
+        }
       }
+    } else if (scope === 'projects') {
+      projectTotal = exactTotal;
+    } else {
+      propertyTotal = exactTotal;
     }
 
     // Intent-aware empty state (mirrors esQueryBuilder.queryESListings):
     // one cheap count without the purpose filter, only when total is 0.
     let withoutPurposeTotal: number | null = null;
-    if (total === 0 && typeof listingPurpose === 'string' && listingPurpose.trim()) {
+    if (exactTotal === 0 && typeof listingPurpose === 'string' && listingPurpose.trim()) {
       try {
         const relaxedFilters = filters.filter(
           (f: any) => JSON.stringify(f).indexOf('listing_purpose') === -1
@@ -337,8 +385,8 @@ export async function POST(req: NextRequest) {
 
     const response: any = {
       results,
-      total,
-      totalRelation,
+      total: exactTotal,
+      totalRelation: exactRelation,
       nextCursor: hits.length === pageSize && hits.length > 0 ? hits[hits.length - 1].sort : null,
       aggregations: { facets: (esResponse as any).aggregations || {} },
       withoutPurposeTotal,
