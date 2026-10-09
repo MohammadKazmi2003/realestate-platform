@@ -1,5 +1,7 @@
 {
-  "index_patterns": ["projects_v*"],
+  "index_patterns": [
+    "projects_v*"
+  ],
   "priority": 100,
   "template": {
     "settings": {
@@ -17,23 +19,44 @@
             "type": "edge_ngram",
             "min_gram": 2,
             "max_gram": 20
+          },
+          "english_stemmer": {
+            "type": "stemmer",
+            "language": "english"
           }
         },
         "analyzer": {
-          "project_search_analyzer": {
-            "type": "custom",
-            "tokenizer": "standard",
-            "filter": ["lowercase", "synonym_filter", "english_stemmer"]
-          },
           "autocomplete_analyzer": {
             "type": "custom",
             "tokenizer": "standard",
-            "filter": ["lowercase", "edge_ngram_filter"]
+            "filter": [
+              "lowercase",
+              "edge_ngram_filter"
+            ]
           },
           "autocomplete_search_analyzer": {
             "type": "custom",
             "tokenizer": "standard",
-            "filter": ["lowercase"]
+            "filter": [
+              "lowercase"
+            ]
+          },
+          "project_index_analyzer": {
+            "type": "custom",
+            "tokenizer": "standard",
+            "filter": [
+              "lowercase",
+              "english_stemmer"
+            ]
+          },
+          "project_search_analyzer": {
+            "type": "custom",
+            "tokenizer": "standard",
+            "filter": [
+              "lowercase",
+              "synonym_filter",
+              "english_stemmer"
+            ]
           }
         }
       }
@@ -41,48 +64,89 @@
     "mappings": {
       "dynamic": false,
       "properties": {
-        "id": { "type": "keyword" },
+        "id": {
+          "type": "keyword"
+        },
         "name": {
           "type": "text",
-          "analyzer": "project_search_analyzer",
-          "fields": {
-            "keyword": { "type": "keyword" },
-            "autocomplete": {
-              "type": "text",
-              "analyzer": "autocomplete_analyzer",
-              "search_analyzer": "autocomplete_search_analyzer"
-            }
-          }
+          "analyzer": "project_index_analyzer",
+          "search_analyzer": "project_search_analyzer"
         },
-        "slug": { "type": "keyword" },
-        "description": { "type": "text", "analyzer": "project_search_analyzer" },
+        "slug": {
+          "type": "keyword"
+        },
+        "description": {
+          "type": "text",
+          "analyzer": "project_index_analyzer",
+          "search_analyzer": "project_search_analyzer"
+        },
         "developer_name": {
           "type": "text",
-          "analyzer": "project_search_analyzer",
-          "fields": { "keyword": { "type": "keyword" } }
+          "analyzer": "project_index_analyzer",
+          "search_analyzer": "project_search_analyzer"
         },
-        "low_price": { "type": "scaled_float", "scaling_factor": 100 },
-        "high_price": { "type": "scaled_float", "scaling_factor": 100 },
-        "construction_phase": { "type": "keyword" },
-        "delivery_date": { "type": "date" },
+        "low_price": {
+          "type": "scaled_float",
+          "scaling_factor": 100
+        },
+        "high_price": {
+          "type": "scaled_float",
+          "scaling_factor": 100
+        },
+        "construction_phase": {
+          "type": "keyword"
+        },
+        "delivery_date": {
+          "type": "date"
+        },
         "location_text": {
           "type": "text",
-          "analyzer": "project_search_analyzer",
-          "fields": { "keyword": { "type": "keyword" } }
+          "analyzer": "project_index_analyzer",
+          "search_analyzer": "project_search_analyzer"
         },
-        "location": { "type": "geo_point" },
-        "amenities": { "type": "keyword" },
-        "image_url": { "type": "keyword", "index": false },
-        "all_images": { "type": "keyword", "index": false },
-        "bedrooms_list": { "type": "integer" },
-        "unit_count": { "type": "integer" },
-        "payment_plan_summary": { "type": "keyword", "index": false },
-        "construction_progress_percent": { "type": "integer" },
-        "sort_price": { "type": "scaled_float", "scaling_factor": 100 },
-        "entity_type": { "type": "keyword" },
-        "status": { "type": "keyword" },
-        "created_at": { "type": "date" },
-        "suggest": { "type": "completion" }
+        "location": {
+          "type": "geo_point"
+        },
+        "amenities": {
+          "type": "keyword"
+        },
+        "image_url": {
+          "type": "keyword",
+          "index": false
+        },
+        "all_images": {
+          "type": "keyword",
+          "index": false
+        },
+        "bedrooms_list": {
+          "type": "integer"
+        },
+        "unit_count": {
+          "type": "integer"
+        },
+        "payment_plan_summary": {
+          "type": "keyword",
+          "index": false
+        },
+        "construction_progress_percent": {
+          "type": "integer"
+        },
+        "sort_price": {
+          "type": "scaled_float",
+          "scaling_factor": 100
+        },
+        "entity_type": {
+          "type": "keyword"
+        },
+        "status": {
+          "type": "keyword"
+        },
+        "created_at": {
+          "type": "date"
+        },
+        "suggest": {
+          "type": "completion"
+        }
       }
     }
   }

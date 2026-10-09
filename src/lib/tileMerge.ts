@@ -49,6 +49,11 @@ function sortValue(m: TileMarker, sort?: string): number {
   if (sort === 'price_asc' || sort === 'price_desc') return (m as any).price || 0;
   if (sort === 'newest' || sort === 'popular') {
     // popular has no deterministic tile ordering — documented newest fallback.
+    // `_createdMs` is the internal rank key the mappers emit. Mapped markers
+    // never carried `created_at`, so reading that instead silently ranked every
+    // marker equal and fell through to the id tiebreak.
+    const cm = (m as any)._createdMs;
+    if (typeof cm === 'number' && Number.isFinite(cm)) return cm;
     const t = (m as any).created_at ? Date.parse((m as any).created_at) : NaN;
     return Number.isFinite(t) ? t : 0;
   }
@@ -66,8 +71,8 @@ export function strideToCap(markers: TileMarker[], cap = 500, sort?: string): Ti
   const dir = sort === 'price_asc' ? 1 : -1;
   const sorted = [...markers].sort((a, b) => {
     if (sort === 'newest' || sort === 'popular') {
-      const ta = (a as any).created_at ? Date.parse((a as any).created_at) : 0;
-      const tb = (b as any).created_at ? Date.parse((b as any).created_at) : 0;
+      const ta = (a as any)._createdMs ?? ((a as any).created_at ? Date.parse((a as any).created_at) : 0);
+      const tb = (b as any)._createdMs ?? ((b as any).created_at ? Date.parse((b as any).created_at) : 0);
       return (tb - ta) || String((a as any).id).localeCompare(String((b as any).id));
     }
     const va = sortValue(a, sort);
@@ -96,4 +101,38 @@ export function mergeTileMarkers(
     if (t && Array.isArray(t.markers)) all.push(...t.markers);
   }
   return strideToCap(clipToViewport(dedupeMarkers(all), viewport), cap, sort);
+}
+
+// Invariant 1: no uncached query on a warm path.
+//
+// The grid returns ONE rep per occupied cell plus that cell's doc_count. When
+// every occupied cell holds exactly one doc, the reps ARE the complete matching
+// population — so the sort-aware top-K is already exact and the extra ES fill
+// query is pure waste. This is the common case for spread-out inventory, so the
+// guard removes an uncached ES query from every request where it applies.
+//
+// Returns true only when cells are non-empty AND every count <= 1.
+export function cellsAreUnclustered(
+  cells: { key: string; count: number }[] | null | undefined
+): boolean {
+  if (!cells || cells.length === 0) return false;
+  for (const c of cells) if ((c?.count || 0) > 1) return false;
+  return true;
+}
+
+// Internal marker keys (underscore-prefixed) exist so the server can rank and
+// density-label before responding. They must not reach the wire: the marker
+// payload is cached verbatim, so leaking them would bloat every cache entry
+// and every response for a field no client reads.
+export function stripInternalMarkerFields(markers: any[] | null | undefined): any[] {
+  if (!Array.isArray(markers)) return markers as any;
+  for (const m of markers) {
+    if (m && typeof m === 'object') {
+      delete (m as any)._createdMs;
+      // _cellKey is server-only cell provenance; _cellCount IS client-facing
+      // (heat colour + density badges), so it stays.
+      delete (m as any)._cellKey;
+    }
+  }
+  return markers;
 }

@@ -90,6 +90,13 @@ export async function isEsAvailable(): Promise<boolean> {
   return esAvailable;
 }
 
+// Lightweight unified tile index: geo + filter + sort fields plus stored-only
+// preview fields, no analyzers/suggest. Tile aggs query it with ONE search per
+// tile instead of splitting properties/projects (halves scope=both fan-out).
+// Text (multi_match) queries route to the legacy indices instead — see
+// esTileMarkers.queryTileMarkersForBounds.
+export const TILES_INDEX_ALIAS = 'listings_tile';
+
 export const ES_INDEX_ALIAS = 'properties_search';
 export const ES_WRITE_ALIAS = 'properties_write';
 export const PROJECTS_INDEX_ALIAS = 'projects_search';

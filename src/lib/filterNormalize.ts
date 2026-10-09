@@ -13,7 +13,7 @@
 // configure them per country without code changes.
 
 import { tenant } from './tenant';
-import { buildFilterHash, buildFilterHash64 } from './mapTiles';
+import { buildFilterHash64 } from './mapTiles';
 import {
   getPriceScale,
   purposeFromListingPurpose,
@@ -156,7 +156,11 @@ function normPolygon(
   precision: number,
   maxPoints: number
 ): { lat: number; lng: number }[] | undefined {
-  if (!points || points.length < 3) return undefined;
+  // Malformed input must degrade to "no boundary", never throw: a client that
+  // sends a single ring where rings[][] was expected would otherwise 500 the
+  // whole request instead of just ignoring the boundary.
+  if (!Array.isArray(points) || points.length < 3) return undefined;
+  if (!points.every((pt) => pt && typeof pt.lat === 'number' && typeof pt.lng === 'number')) return undefined;
   let pts = points.map((p) => ({ lat: cleanFloat(roundNum(p.lat, precision)), lng: cleanFloat(roundNum(p.lng, precision)) }));
   if (pts.length > maxPoints) {
     const stride = pts.length / maxPoints;
@@ -184,8 +188,21 @@ function normPolygons(
   precision: number,
   maxPoints: number
 ): { lat: number; lng: number }[][] | undefined {
-  if (!rings || rings.length === 0) return undefined;
-  const cleaned = rings
+  if (!Array.isArray(rings) || rings.length === 0) return undefined;
+  // Drop anything that is not itself a ring array. Sending a flat point list
+  // (instead of rings[][]) is the common client mistake and used to throw
+  // `ring.map is not a function` -> 500 for the entire request.
+  const allArrays = rings.every((r) => Array.isArray(r));
+  if (!allArrays) {
+    // A flat ring (points, not rings) is the other common mistake — treat it as
+    // a single ring rather than rejecting the whole boundary.
+    return normPolygon(rings as unknown as { lat: number; lng: number }[], precision, maxPoints)
+      ? [normPolygon(rings as unknown as { lat: number; lng: number }[], precision, maxPoints)!]
+      : undefined;
+  }
+  const onlyRings = rings as { lat: number; lng: number }[][];
+  if (onlyRings.length === 0) return undefined;
+  const cleaned = onlyRings
     .map((ring) =>
       (ring || [])
         .map((p) => ({ lat: cleanFloat(roundNum(p.lat, precision)), lng: cleanFloat(roundNum(p.lng, precision)) }))
@@ -371,12 +388,17 @@ export interface PreparedMapQuery {
 }
 
 // Single entry point: clamp → dust-trim → normalize → keys.
-// Callers query ES with the EXACT `bounds`+`filters` and cache markers/list
-// separately under md:v4. The key embeds the exact queried bounds, so a cache
-// hit always describes precisely the viewport it was fetched for — stale,
-// misplaced, or missing pins are impossible by construction. Sharing comes
-// from filter normalization (buckets, sorted arrays, cleaned text) and
-// identical revisits, never from reusing one viewport's data for another.
+//
+// AD1: `rawBounds` must be the COVERING-TILE UNION (see coveringTileUnionBounds),
+// not the raw viewport. Two pans resolving to the same tile set then hash to the
+// same marker/list key AND run the same geo filter, so cache entries are shared
+// across users instead of minted per pan. The union is a superset of the
+// viewport (AD5 — a hit can never hide a matching listing).
+//
+// Keys are 64-bit hashed (was 32-bit): key count grows with traffic, and a 32-bit
+// birthday collision would serve one viewport's payload under another's key —
+// a silent correctness failure at exactly the scale this targets. md:v5 prefix
+// marks the semantic change so pre-rollout entries are never reused.
 export function prepareMapQuery(
   rawBounds: MapBounds,
   rawFilters: RawMapFilters
@@ -387,8 +409,8 @@ export function prepareMapQuery(
   // markerKey carries the sort bucket suffix: tile reps are sort-ordered and
   // the legacy sample is seeded per key, so a sort change must miss cache.
   // Pagination stays stripped (same pins on every page).
-  const markerKey = `md:v4:m:${rb}:${buildFilterHash(orderedForHash(stripForMarkers(filters)))}:${sortBucketForKey(filters.sort)}`;
-  const listKey = `md:v4:l:${rb}:${buildFilterHash(orderedForHash(filters))}`;
+  const markerKey = `md:v5:m:${rb}:${buildFilterHash64(orderedForHash(stripForMarkers(filters)) as Record<string, any>)}:${sortBucketForKey(filters.sort)}`;
+  const listKey = `md:v5:l:${rb}:${buildFilterHash64(orderedForHash(filters) as Record<string, any>)}`;
   return { bounds, filters, markerKey, listKey };
 }
 

@@ -279,6 +279,18 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
     commonFilters.push({ bool: { must_not: { term: { entity_type: 'project' } } } });
   }
 
+  // Single scope must constrain entity_type EXPLICITLY. It used to be implied
+  // by picking one index per scope, but tile queries now hit the unified
+  // listings_tile index which holds both kinds — without this, scope=properties
+  // silently returned project markers (caught by scope test in scale:e2e).
+  // Redundant on the legacy split indices (a cheap filtered term) and required
+  // on the unified one, so the population stays correct for either path.
+  if (scope === 'properties') {
+    commonFilters.push({ term: { entity_type: 'property' } });
+  } else if (scope === 'projects') {
+    commonFilters.push({ term: { entity_type: 'project' } });
+  }
+
   const filters: any[] = [...commonFilters];
   if (scope === 'both' && propertyFilters.length > 0) {
     filters.push({
@@ -385,9 +397,9 @@ const MARKER_SOURCE_FIELDS = [
   'image_url', 'primary_image', 'bhk_type', 'bathrooms', 'balconies',
   'furnishing_status', 'listing_purpose', 'property_type',
   'area_sqft', 'area_unit', 'location_text', 'created_at',
-  'developer_name', 'project_name',
+  'developer_name',
   'construction_phase', 'construction_progress_percent', 'delivery_date',
-  'amenities', 'amenities_total', 'bedrooms_list', 'unit_count',
+  'amenities', 'amenities_total', 'bedrooms_list',
   'payment_plan_summary', 'image_count',
 ];
 
@@ -585,15 +597,15 @@ export async function queryESMapMarkers(params: any) {
         area_unit: src.area_unit || null,
         location_text: src.location_text || null,
         is_new: Number.isFinite(created) ? created >= newCutoff : false,
+        // Internal rank key for newest-sort strides — stripped before respond.
+        _createdMs: Number.isFinite(created) ? created : null,
         developer_name: src.developer_name || null,
-        project_name: src.project_name || null,
         construction_phase: src.construction_phase || null,
         construction_progress_percent: src.construction_progress_percent ?? null,
         delivery_date: src.delivery_date || null,
         amenities: fullAmenities.slice(0, 6),
         amenities_total: fullAmenities.length,
         bedrooms_list: Array.isArray(src.bedrooms_list) ? src.bedrooms_list : [],
-        unit_count: src.unit_count ?? null,
         payment_plan_summary: src.payment_plan_summary || null,
         image_count: typeof src.image_count === 'number' ? src.image_count : null,
       };

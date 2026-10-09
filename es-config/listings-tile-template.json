@@ -1,0 +1,148 @@
+{
+  "index_patterns": [
+    "listings_tile*"
+  ],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "refresh_interval": "30s",
+      "mapping": {
+        "total_fields": {
+          "limit": 60
+        }
+      }
+    },
+    "mappings": {
+      "dynamic": false,
+      "_source": {
+        "enabled": true
+      },
+      "properties": {
+        "id": {
+          "type": "keyword"
+        },
+        "entity_type": {
+          "type": "keyword"
+        },
+        "status": {
+          "type": "keyword"
+        },
+        "property_type": {
+          "type": "keyword"
+        },
+        "bhk_type": {
+          "type": "keyword"
+        },
+        "listing_purpose": {
+          "type": "keyword"
+        },
+        "amenities": {
+          "type": "keyword"
+        },
+        "furnishings": {
+          "type": "keyword"
+        },
+        "price": {
+          "type": "scaled_float",
+          "scaling_factor": 100
+        },
+        "sort_price": {
+          "type": "scaled_float",
+          "scaling_factor": 100
+        },
+        "low_price": {
+          "type": "scaled_float",
+          "scaling_factor": 100
+        },
+        "bedrooms": {
+          "type": "integer"
+        },
+        "bathrooms": {
+          "type": "integer"
+        },
+        "bedrooms_list": {
+          "type": "integer"
+        },
+        "area_sqft": {
+          "type": "float"
+        },
+        "created_at": {
+          "type": "date"
+        },
+        "location": {
+          "type": "geo_point"
+        },
+        "title": {
+          "type": "keyword",
+          "index": false
+        },
+        "name": {
+          "type": "keyword",
+          "index": false
+        },
+        "image_url": {
+          "type": "keyword",
+          "index": false
+        },
+        "primary_image": {
+          "type": "keyword",
+          "index": false
+        },
+        "location_text": {
+          "type": "keyword",
+          "index": false
+        },
+        "developer_name": {
+          "type": "keyword",
+          "index": false
+        },
+        "high_price": {
+          "type": "scaled_float",
+          "scaling_factor": 100,
+          "index": false
+        },
+        "balconies": {
+          "type": "integer",
+          "index": false
+        },
+        "furnishing_status": {
+          "type": "keyword",
+          "index": false
+        },
+        "area_unit": {
+          "type": "keyword",
+          "index": false
+        },
+        "construction_phase": {
+          "type": "keyword",
+          "index": false
+        },
+        "construction_progress_percent": {
+          "type": "integer",
+          "index": false
+        },
+        "delivery_date": {
+          "type": "date",
+          "index": false
+        },
+        "amenities_total": {
+          "type": "integer",
+          "index": false
+        },
+        "payment_plan_summary": {
+          "type": "keyword",
+          "index": false
+        },
+        "image_count": {
+          "type": "integer",
+          "index": false
+        }
+      },
+      "_meta": {
+        "searchable": "INDEXED: exactly the fields buildFilters() and sortForTopMetrics() actually query. Every one of these must be searchable/sortable \u2014 a terms filter on an index:false field is a hard ES error, not an empty result. Deliberately NO text-analyzed fields: multi_match clauses (must[]) are text-only, so text queries are routed to the legacy indices at query time \u2014 that is what keeps this index free of the synonym/stemmer/edge_ngram analyzer chain and the completion suggester.",
+        "stored": "STORED-ONLY: hover/click preview payload (Invariant 3 \u2014 fetch-free marker cards). index:false costs fetch bytes for top_hits only, zero query CPU, zero analyzer memory."
+      }
+    }
+  }
+}

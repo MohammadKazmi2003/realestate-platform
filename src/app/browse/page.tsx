@@ -1,6 +1,7 @@
 'use client';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { coveringTileUnionBounds } from '@/lib/mapTiles';
 import maplibregl, { LngLatBounds } from 'maplibre-gl';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
@@ -245,6 +246,27 @@ function perpendicularDistance(p: { lat: number; lng: number }, a: { lat: number
   const closestX = a.lng + ux * proj;
   const closestY = a.lat + uy * proj;
   return Math.sqrt((p.lng - closestX) ** 2 + (p.lat - closestY) ** 2);
+}
+
+
+/**
+ * Canonicalise map request bounds to the covering-tile union.
+ *
+ * The server already answers every map/pills request from the tile union, not
+ * the raw viewport — so two users looking at the same tiles get byte-identical
+ * payloads. But with exact bounds in the URL a CDN treats those as two
+ * different resources and caches them separately, which is exactly the
+ * hit-rate problem the tile-union Redis keys were introduced to solve. Snapping
+ * the URL to the same unit the server caches under is what lets the edge share
+ * a response across users. Pure math — safe in a client component.
+ */
+function canonicalTileBounds(
+  b: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+  zoom: number
+) {
+  const u = coveringTileUnionBounds(b, Number(zoom) || 10);
+  const f = (v: number) => Number(v).toFixed(6);
+  return { minLat: f(u.minLat), maxLat: f(u.maxLat), minLng: f(u.minLng), maxLng: f(u.maxLng) };
 }
 
 export default function BrowsePage() {
@@ -697,12 +719,46 @@ export default function BrowsePage() {
           combinedParams.polygons = params.polygons;
         }
 
-        const res = await fetch('/api/map-data', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(combinedParams),
-          signal,
-        });
+        // Prefer GET for the fresh load: POST can never be cached by a CDN, so
+        // warm pans otherwise terminate at the origin. GET is URL-identical for
+        // the same logical query, so the edge absorbs repeated viewports.
+        // Boundaries and cursors stay on POST (rejected by the GET guard rather
+        // than silently dropped — a cached response must never ignore a filter).
+        let res: Response;
+        if (combinedParams.polygons || combinedParams.cursor) {
+          res = await fetch('/api/map-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(combinedParams),
+            signal,
+          });
+        } else {
+          const qp = new URLSearchParams();
+          const b = combinedParams.bounds;
+          const z = combinedParams.zoom ?? 10;
+          if (b) {
+            // Tile-union bounds, not exact viewport: identical URL for anyone
+            // covering the same tiles, so the CDN can reuse the response.
+            const c = canonicalTileBounds(b, z);
+            qp.set('minLat', c.minLat);
+            qp.set('maxLat', c.maxLat);
+            qp.set('minLng', c.minLng);
+            qp.set('maxLng', c.maxLng);
+          }
+          qp.set('zoom', String(z));
+          qp.set('scope', scope);
+          qp.set('sort', sortByRef.current);
+          qp.set('pageSize', String(combinedParams.pageSize ?? 24));
+          for (const k of ['query', 'listingPurpose', 'bhkType', 'propertyType'] as const) {
+            const v = (combinedParams as any)[k];
+            if (v != null && v !== '') qp.set(k, String(v));
+          }
+          for (const k of ['minPrice', 'maxPrice'] as const) {
+            const v = (combinedParams as any)[k];
+            if (v != null && v !== '') qp.set(k, String(v));
+          }
+          res = await fetch(`/api/map-data?${qp.toString()}`, { signal });
+        }
         if (fetchId !== fetchIdRef.current) return;
         if (!res.ok) {
           setProperties([]);
@@ -778,6 +834,38 @@ export default function BrowsePage() {
           setWithoutPurposeTotal(
             typeof response.withoutPurposeTotal === 'number' ? response.withoutPurposeTotal : null
           );
+
+          // AD4: the full-match by_project rollup visits every matching doc, so
+          // LAZY_PILLS keeps it OFF the list query (response.projectGroups is
+          // therefore empty by design). Pills load here from their own endpoint
+          // with its own long-TTL cache — non-blocking, so the map/list paint
+          // first. Epoch-guarded: a stale response must not overwrite a newer
+          // pan's pills.
+          if (combinedParams.bounds) {
+            const epoch = fetchId;
+            const cb = canonicalTileBounds(combinedParams.bounds, currentZoom);
+            const gps = new URLSearchParams({
+              minLat: cb.minLat,
+              maxLat: cb.maxLat,
+              minLng: cb.minLng,
+              maxLng: cb.maxLng,
+              zoom: String(currentZoom),
+              scope,
+              sort: sortByRef.current,
+            });
+            if (combinedParams.query) gps.set('query', combinedParams.query);
+            if (combinedParams.listingPurpose) gps.set('listingPurpose', combinedParams.listingPurpose);
+            if (combinedParams.minPrice != null) gps.set('minPrice', String(combinedParams.minPrice));
+            if (combinedParams.maxPrice != null) gps.set('maxPrice', String(combinedParams.maxPrice));
+            if (combinedParams.bhkType) gps.set('bhkType', combinedParams.bhkType);
+            if (combinedParams.propertyType) gps.set('propertyType', combinedParams.propertyType);
+            fetch(`/api/project-groups?${gps.toString()}`, { signal })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((j) => {
+                if (j && epoch === fetchIdRef.current) setProjectGroups(j.projectGroups || []);
+              })
+              .catch(() => { /* pills are decorative; never block on them */ });
+          }
 
           // The location fetch has completed with the correct (geocoded)
           // bounds, so the post-fitBounds moveend can now behave like a normal

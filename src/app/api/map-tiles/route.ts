@@ -3,11 +3,17 @@ import { isEsAvailable } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet, singleflightCompute } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { checkMapRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
-import { prepareTileQuery, normalizeFilters } from '@/lib/filterNormalize';
-import { viewportCoveringTiles, tileToBounds, redisTTLForSort, cdnSMaxAgeForSort } from '@/lib/mapTiles';
+import { prepareTileQuery, normalizeFilters, sortBucketForKey } from '@/lib/filterNormalize';
+import {
+  viewportCoveringTiles,
+  coveringTileUnionBounds,
+  tileToBounds,
+  redisTTLForSort,
+  cdnSMaxAgeForSort,
+} from '@/lib/mapTiles';
 import { buildFiltersForTiles } from '@/lib/esTileFilters';
 import { queryTileMarkersForBounds } from '@/lib/esTileMarkers';
-import { mergeTileMarkers } from '@/lib/tileMerge';
+import { mergeTileMarkers, cellsAreUnclustered, stripInternalMarkerFields } from '@/lib/tileMerge';
 import { flags } from '@/lib/flags';
 import { mapWithConcurrency } from '@/lib/concurrency';
 
@@ -29,18 +35,45 @@ export async function POST(req: NextRequest) {
     // Clamp via shared normalizer (widen-only).
     const norm = normalizeFilters({ scope, sort, ...rest } as any);
     void norm;
-    const tiles = viewportCoveringTiles(
-      {
-        minLat: Math.max(-85.0511, Math.min(85.0511, minLat)),
-        maxLat: Math.max(-85.0511, Math.min(85.0511, maxLat)),
-        minLng: Math.max(-180, Math.min(180, minLng)),
-        maxLng: Math.max(-180, Math.min(180, maxLng)),
-      },
-      Number(zoom) || 10
-    );
+    // Clamp once and reuse for BOTH tile selection and the union key, so a
+    // response can never be cached under a different extent than it was read at.
+    const viewportClamped = {
+      minLat: Math.max(-85.0511, Math.min(85.0511, Number(minLat))),
+      maxLat: Math.max(-85.0511, Math.min(85.0511, Number(maxLat))),
+      minLng: Math.max(-180, Math.min(180, Number(minLng))),
+      maxLng: Math.max(-180, Math.min(180, Number(maxLng))),
+    };
+    if (viewportClamped.minLng > viewportClamped.maxLng) {
+      viewportClamped.minLng = -180;
+      viewportClamped.maxLng = 180;
+    }
+    const tiles = viewportCoveringTiles(viewportClamped, Number(zoom) || 10);
     const sortStr = String(sort || 'newest');
     const sMax = cdnSMaxAgeForSort(sortStr);
     const ttl = redisTTLForSort(sortStr);
+
+    // AD1/Invariant 1: cache the merged viewport response under the COVERING-TILE
+    // UNION, not the raw viewport. Any pan resolving to the same z/x/y set is a
+    // shared key, so warm pans skip the quantile lookup, every tile read, the
+    // merge AND the fill — zero ES on the common path. Exact bounds still clamp
+    // the tiles fetched; only the reuse scope is widened (superset, AD5-safe).
+    const union = coveringTileUnionBounds(viewportClamped, Number(zoom) || 10);
+    const unionRb = `${[union.minLat, union.maxLat, union.minLng, union.maxLng]
+      .map((v) => Number(v).toFixed(6))
+      .join('/')}`;
+    const unionHash = prepareTileQuery(tiles[0] || { z: 0, x: 0, y: 0 }, { scope, sort: sortStr, ...rest } as any)
+      .filterHash;
+    const viewKey = `md:v5:v:${unionRb}:${unionHash}:${sortBucketForKey(sortStr)}`;
+    const viewCached = await cacheGet<any>(viewKey);
+    if (viewCached && Array.isArray(viewCached.markers)) {
+      return NextResponse.json(viewCached, {
+        headers: {
+          'Cache-Control': `public, s-maxage=${sMax}, stale-while-revalidate=60`,
+          'X-ES-Took': '0',
+          'X-Cache': 'HIT',
+        },
+      });
+    }
 
     // Runtime quantiles for sort-aware tile narrowing (fallback = no-range).
     // Zoom gate mirrors map-data: overview zooms concentrate, street zooms
@@ -129,7 +162,6 @@ export async function POST(req: NextRequest) {
               scope: String(scope),
               sort: sortStr,
               zoom: Number(zoom) || 10,
-              withPercentiles: flags.quantileFilter,
               timeoutMs: 4000,
             }).catch((e) => {
               logger.warn('tile agg failed', e);
@@ -146,22 +178,34 @@ export async function POST(req: NextRequest) {
         }
       });
 
-    let merged = mergeTileMarkers(tileResults, { minLat, maxLat, minLng, maxLng }, sortStr, 500);
+    let merged = mergeTileMarkers(tileResults, union, sortStr, 500);
     // Same contract as map-data: narrowed population ≤500 -> exact sort-aware
     // top-K; >500 -> hybrid fill toward ~500. Fill reps are clipped to the
     // viewport (appended post-merge, bypassing mergeTileMarkers' clip).
+    let fillSkipped = false;
     try {
       const { clipToViewport } = await import('@/lib/tileMerge');
-      const clipFill = (markers: any[]) => clipToViewport(markers, { minLat, maxLat, minLng, maxLng });
+      // Clip/merge to the UNION (not the raw viewport): the response is cached
+      // under the union key, so it must be correct for the whole union. The map
+      // renders a little beyond the viewport — which also removes dot pop-in
+      // when the user pans inside the same tile set.
+      const clipFill = (markers: any[]) => clipToViewport(markers, union);
       let tileDocTotal = 0;
+      const allTileCells: any[] = [];
       for (const tr of tileResults as any[]) {
-        for (const c of ((tr as any).cells || [])) tileDocTotal += c.count || 0;
+        for (const c of ((tr as any).cells || [])) {
+          tileDocTotal += c.count || 0;
+          allTileCells.push(c);
+        }
       }
       const { buildFiltersForTiles: bff } = await import('@/lib/esTileFilters');
-      const bf = bff({ scope, sort: sortStr, ...rest, bounds: { minLat, maxLat, minLng, maxLng } } as any, String(scope));
+      const bf = bff({ scope, sort: sortStr, ...rest, bounds: union } as any, String(scope));
       const fAll = quantileRange ? [...bf.filters, quantileRange] : bf.filters;
       const { querySortFillForBounds, fillMarkerDeficit } = await import('@/lib/esTileMarkers');
-      if (tileDocTotal > 0 && tileDocTotal <= 500) {
+      // Invariant 1: unclustered cells mean the reps ARE the exact population.
+      if (cellsAreUnclustered(allTileCells) && merged.length >= Math.min(500, tileDocTotal)) {
+        fillSkipped = true;
+      } else if (tileDocTotal > 0 && tileDocTotal <= 500) {
         const fr = await querySortFillForBounds({
           must: bf.must,
           filters: fAll,
@@ -187,15 +231,39 @@ export async function POST(req: NextRequest) {
       }
     } catch { /* best-effort */ }
     const ms = Date.now() - t0;
-    logger.info('map-tiles served', { tiles: tiles.length, markers: merged.length, cells: allCells.length, ms, zoom, scope, sort: sortStr });
+    // Strip server-only keys before the payload is cached and served — the
+    // response is stored verbatim under the tile-union key.
+    const payload = { markers: stripInternalMarkerFields(merged), cells: allCells, zoom, tiles: tiles.map((t) => `${t.z}/${t.x}/${t.y}`) };
+    // Never cache a failure or an empty viewport (Invariant 4) — an empty
+    // response may just be a transient ES miss, and caching it would pin the
+    // emptiness for the whole TTL.
+    if (viewKey && merged.length > 0) await cacheSet(viewKey, payload, ttl);
+    logger.info('map-tiles served', {
+      tiles: tiles.length, markers: merged.length, cells: allCells.length,
+      ms, zoom, scope, sort: sortStr, fillSkipped,
+    });
     return NextResponse.json(
-      { markers: merged, cells: allCells, zoom, tiles: tiles.map((t) => `${t.z}/${t.x}/${t.y}`) },
+      payload,
       { headers: { 'Cache-Control': `public, s-maxage=${sMax}, stale-while-revalidate=60`, 'X-ES-Took': `${ms}` } }
     );
   } catch (e: any) {
     logger.error('map-tiles error', e?.message || e);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
+}
+
+/**
+ * Next.js stamps `Vary: rsc, next-router-state-tree, next-router-prefetch,
+ * next-router-segment-prefetch` on every route handler. Those exist for React
+ * Server Components negotiation — an API JSON body never varies on them (verified
+ * by hashing the response with and without the headers). A CDN keyed on them
+ * stores one entry per RSC header combination that no client ever sends, so the
+ * edge cache never shares. Normalise to the header that actually matters.
+ */
+function edgeCacheable(res: Response): Response {
+  const headers = new Headers(res.headers);
+  headers.set('Vary', 'Accept-Encoding');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 // Scale-ready CDN path: GET is cacheable by stock CDNs (POST is not).
@@ -210,28 +278,51 @@ export async function GET(req: NextRequest) {
     const sp = req.nextUrl.searchParams;
     const num = (k: string) => {
       const v = sp.get(k);
-      return v == null ? undefined : Number(v);
+      return v == null || v === '' ? undefined : Number(v);
     };
     const bounds = { minLat: num('minLat'), maxLat: num('maxLat'), minLng: num('minLng'), maxLng: num('maxLng') };
     if (![bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng].every(Number.isFinite)) {
       return NextResponse.json({ error: 'bounds (minLat,maxLat,minLng,maxLng) required' }, { status: 400 });
     }
+    // F10: this response is publicly CDN-cacheable, so a GET that silently
+    // DROPS a filter would cache and serve the unfiltered population for its
+    // whole s-maxage. Boundaries can't be encoded safely in a URL (unbounded
+    // length), so reject them instead of quietly ignoring them.
+    if (sp.has('polygon') || sp.has('polygons')) {
+      return NextResponse.json(
+        { error: 'polygon filters require POST /api/map-tiles' },
+        { status: 400 }
+      );
+    }
+    // Forward EVERY other param so GET and POST are semantically identical —
+    // dropping params was the bug, not a design choice. Comma-separated values
+    // become arrays for the multi-valued filter fields.
+    const ARRAY_FIELDS = ['amenities', 'furnishings'];
+    const body: Record<string, unknown> = {
+      bounds,
+      zoom: num('zoom') ?? 10,
+      scope: sp.get('scope') || 'both',
+      sort: sp.get('sort') || 'newest',
+    };
+    for (const [k, v] of Array.from(sp.entries())) {
+      if (['minLat', 'maxLat', 'minLng', 'maxLng', 'zoom', 'scope', 'sort'].includes(k)) continue;
+      if (v === '') continue;
+      body[k] = ARRAY_FIELDS.includes(k)
+        ? v.split(',').map((x: string) => x.trim()).filter((x: string) => x.length > 0)
+        : v;
+    }
     const forward = new Request(req.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(req.headers.get('x-forwarded-for') ? { 'x-forwarded-for': req.headers.get('x-forwarded-for') as string } : {}) },
-      body: JSON.stringify({
-        bounds,
-        zoom: num('zoom') ?? 10,
-        scope: sp.get('scope') || 'both',
-        sort: sp.get('sort') || 'newest',
-        ...(sp.get('query') ? { query: sp.get('query') } : {}),
-        ...(sp.get('listingPurpose') ? { listingPurpose: sp.get('listingPurpose') } : {}),
-        ...(sp.get('minPrice') ? { minPrice: num('minPrice') } : {}),
-        ...(sp.get('maxPrice') ? { maxPrice: num('maxPrice') } : {}),
-      }),
+      headers: {
+        'content-type': 'application/json',
+        ...(req.headers.get('x-forwarded-for')
+          ? { 'x-forwarded-for': req.headers.get('x-forwarded-for') as string }
+          : {}),
+      },
+      body: JSON.stringify(body),
     }) as NextRequest;
     // Reuse POST path (single implementation) — CDN caches this GET URL.
-    return POST(forward as NextRequest);
+    return edgeCacheable(await POST(forward as NextRequest));
   } catch (e: any) {
     logger.error('map-tiles GET error', e?.message || e);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

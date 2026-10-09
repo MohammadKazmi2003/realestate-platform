@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isEsAvailable, recordEsSuccess } from '@/lib/elasticsearch';
 import { queryESListings, queryESMapMarkers } from '@/lib/esQueryBuilder';
-import { queryTileMarkersForBounds } from '@/lib/esTileMarkers';
-import { mergeTileMarkers } from '@/lib/tileMerge';
-import { cacheGet, cacheSet } from '@/lib/redis';
+import { cellsAreUnclustered, stripInternalMarkerFields } from '@/lib/tileMerge';
+import { cacheGet, singleflightCompute } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { checkMapRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { prepareMapQuery, prepareTileQuery } from '@/lib/filterNormalize';
-import { viewportCoveringTiles, tileToBounds, redisTTLForSort, cdnSMaxAgeForSort } from '@/lib/mapTiles';
+import {
+  viewportCoveringTiles,
+  coveringTileUnionBounds,
+  redisTTLForSort,
+  cdnSMaxAgeForSort,
+} from '@/lib/mapTiles';
 import { flags } from '@/lib/flags';
 import { mapWithConcurrency } from '@/lib/concurrency';
 
@@ -16,19 +20,10 @@ function cacheHeadersForSort(sort?: string) {
   return { 'Cache-Control': `public, s-maxage=${sMax}, stale-while-revalidate=60` };
 }
 
-// Request coalescing: deduplicate identical in-flight ES queries. Keyed by
-// cache-entry key (markers and list coalesce independently).
-const pendingRequests = new Map<string, Promise<any>>();
-
-async function singleflight<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const existing = pendingRequests.get(key);
-  if (existing) return existing as Promise<T>;
-  const promise = fn().finally(() => {
-    if (pendingRequests.get(key) === promise) pendingRequests.delete(key);
-  });
-  pendingRequests.set(key, promise);
-  return promise;
-}
+// AD8: no required in-process state. Request coalescing is handled by
+// singleflightCompute (in-process L1 map + Redis SET NX L2), so N instances
+// share one dedup instead of each running its own — an instance-local Map is
+// invisible to every other pod and multiplies backend load exactly at peak.
 
 export async function POST(req: NextRequest) {
   try {
@@ -58,13 +53,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid bounds' }, { status: 400 });
     }
 
-    // Normalize once: snapped filters + dust-trimmed EXACT bounds feed BOTH
-    // the ES queries and the cache keys, so list, badge, and map dots always
-    // describe the exact same filtered population for the exact viewport.
-    // Markers (md:v4:m) strip sort/pagination; the list (md:v4:l) keeps them.
-    // P2+: tile keys md:v5:t:z/x/y:filterHash:sortHash written alongside (reversible).
+    // AD1: the cacheable/shared unit is the COVERING-TILE UNION, not the raw
+    // viewport. Every pan that resolves to the same z/x/y set hashes to the
+    // SAME marker/list key and runs the SAME geo filter — so cache entries are
+    // reused across users instead of minted one per pan. The union is a
+    // superset of the viewport (AD5), so a hit can never hide a listing.
+    // Keys are 64-bit hashed under md:v5:*. Filters are normalized once and
+    // feed both the ES query and the hash (never hash-only).
+    const viewportClamped = {
+      minLat: Math.max(-85.0511, Math.min(85.0511, Number(minLat))),
+      maxLat: Math.max(-85.0511, Math.min(85.0511, Number(maxLat))),
+      minLng: Math.max(-180, Math.min(180, Number(minLng))),
+      maxLng: Math.max(-180, Math.min(180, Number(maxLng))),
+    };
+    if (viewportClamped.minLng > viewportClamped.maxLng) {
+      viewportClamped.minLng = -180;
+      viewportClamped.maxLng = 180;
+    }
+    const unionBounds = coveringTileUnionBounds(viewportClamped, Number(zoom) || 10);
     const { bounds, filters, markerKey, listKey } = prepareMapQuery(
-      { minLat, maxLat, minLng, maxLng },
+      unionBounds,
       {
         query, location, minPrice, maxPrice, propertyType, bhkType,
         minBedrooms, maxBedrooms,
@@ -217,23 +225,31 @@ export async function POST(req: NextRequest) {
 
     const listStart = Date.now();
     const markerStart = Date.now();
+    // Whether THIS marker computation was served by the tile path — recorded
+    // outside the compute closure so the cached payload stays clean and the
+    // in-flight copy can still be tagged (Invariant 3: never persist internals).
+    let tileServedByCompute = false;
     const [searchResult, markers] = await Promise.all([
-      singleflight(listKey, async () => {
-        const cached = await cacheGet<any>(listKey);
-        if (cached) { listCacheHit = true; return cached; }
-        // P6: msearch path shares filter-cache lookup (singleflight already coalesces);
-        // keep Promise.all for now — msearch batching is transport optimization.
+      // AD8: coalesce across INSTANCES, not just this process. The list key is
+      // shared by every user at the same tile union + filters, so N pods each
+      // running their own ES query is exactly the redundant work AD2 forbids.
+      // singleflightCompute does cache-hit → in-process dedup → Redis SET NX,
+      // and caches the winner's result (never an error/null, Invariant 4).
+      singleflightCompute<any>(listKey, listTTL, async () => {
         const result = await queryESListings({ ...esParams, cursor, pageSize, sort: sortStr, scope }).catch((err) => {
           logger.warn('ES listing query failed', err);
           return null;
         });
-        // NEVER cache error responses. Tiered TTL: newest fresh, price stable.
-        if (result) await cacheSet(listKey, result, listTTL);
         return result;
+      }).then((r) => {
+        if (r.status === 'hit') listCacheHit = true;
+        return r.value;
       }),
-      singleflight(markerKey, async () => {
-        const cached = await cacheGet<any>(markerKey);
-        if (cached) { markerCacheHit = true; return cached; }
+      // AD8: markers are the most-shared payload on the site — every user at the
+      // same tile union + filters wants the same 500 dots. Coalesce across pods
+      // via Redis so N instances don't each run the tile fan-out.
+      singleflightCompute<any>(markerKey, markerTTL, async () => {
+        tileServedByCompute = false;
         // P4 cutover: try tile MAP first, fallback to legacy random_score.
         if (flags.mapTilesV1 && tileEntries.length > 0) {
           try {
@@ -243,9 +259,7 @@ export async function POST(req: NextRequest) {
               tileEntries,
               Math.max(1, Math.min(8, Number(process.env.TILE_CONCURRENCY) || 6)),
               async (te) =>
-                singleflight(te.tileKey, async () => {
-                  const tcached = await cacheGet<any>(te.tileKey);
-                  if (tcached) return tcached;
+                singleflightCompute<any>(te.tileKey, markerTTL, async () => {
                   // Dynamic import to avoid pulling ES client on cache-hit-only paths.
                   const { queryTileMarkersForBounds: qtm } = await import('@/lib/esTileMarkers');
                   const { tileToBounds: t2b } = await import('@/lib/mapTiles');
@@ -266,13 +280,12 @@ export async function POST(req: NextRequest) {
                     scope: String(scope || 'both'),
                     sort: sortStr,
                     zoom: Number(zoom) || 10,
-                    withPercentiles: flags.quantileFilter,
-                    timeoutMs: 4000,
+                          timeoutMs: 4000,
                   }).catch(() => null);
-                  const payload = r ? { markers: r.markers, cells: r.cells, took: r.took } : null;
-                  if (payload) await cacheSet(te.tileKey, payload, markerTTL);
-                  return payload;
-                }).then((payload: any) => {
+                  // singleflightCompute caches non-null payloads itself and
+                  // never caches an error/empty result (Invariant 4).
+                  return r ? { markers: r.markers, cells: r.cells, took: r.took } : null;
+                }).then(({ value: payload }: any) => {
                   if (payload && Array.isArray(payload.markers)) tileResults.push(payload);
                 })
             );
@@ -302,10 +315,21 @@ export async function POST(req: NextRequest) {
               let merged = mtm(tileResults, bounds, sortStr, 500);
               // Effective (possibly quantile-narrowed) population from tile cells.
               let tileDocTotal = 0;
+              const allTileCells: any[] = [];
               for (const tr of tileResults as any[]) {
-                for (const c of (tr.cells || [])) tileDocTotal += c.count || 0;
+                for (const c of (tr.cells || [])) {
+                  tileDocTotal += c.count || 0;
+                  allTileCells.push(c);
+                }
               }
-              if (tileDocTotal > 0 && tileDocTotal <= 500) {
+              // Invariant 1: when no cell holds more than one doc, the tile reps
+              // already ARE the whole population — the top-K is exact, so the
+              // fill query would be a pure extra ES round trip on every request.
+              const repsExact =
+                cellsAreUnclustered(allTileCells) && merged.length >= Math.min(500, tileDocTotal);
+              if (repsExact) {
+                // skip fill: reps are the exact (<=500) population
+              } else if (tileDocTotal > 0 && tileDocTotal <= 500) {
                 // Narrowed population fits: exact sort-aware top-K (replaces the
                 // old sort-blind legacy random sample, which could show any 500).
                 try {
@@ -342,8 +366,7 @@ export async function POST(req: NextRequest) {
                 } catch { /* fill is best-effort; tile reps still served */ }
               }
               if (merged.length > 0) {
-                // Write legacy key too (dual-write keeps instant rollback warm).
-                await cacheSet(markerKey, merged, markerTTL);
+                // singleflightCompute writes markerKey itself (clean, no _tileServed).
                 // P3 shadow: compare vs legacy in background (log-only).
                 if (flags.tileShadow && Math.random() * 100 < Math.min(flags.tileShadowPct, 10)) {
                   queryESMapMarkers(esParams).then((legacy: any) => {
@@ -351,8 +374,10 @@ export async function POST(req: NextRequest) {
                     logger.info('tile shadow compare', { tileCount: merged.length, legacyCount: legacy?.length || 0, overlap, zoom, scope });
                   }).catch(() => {});
                 }
-                (merged as any)._tileServed = true;
-                return merged;
+                tileServedByCompute = true;
+                // Strip BEFORE returning: singleflightCompute caches this value
+                // verbatim, so internal rank keys must never enter the cache.
+                return stripInternalMarkerFields(merged);
               }
               // tileDocTotal==0 with tileResults present (all mapping failures):
               // fall through to legacy below.
@@ -365,7 +390,7 @@ export async function POST(req: NextRequest) {
           logger.warn('ES map marker query failed', err);
           return null;
         });
-        if (result) await cacheSet(markerKey, result, markerTTL);
+        // singleflightCompute caches the result (never null/errors — Invariant 4).
         // P3 shadow (legacy-served path): run tile agg log-only for tuning.
         if (flags.tileShadow && result && Math.random() * 100 < Math.min(flags.tileShadowPct, 10)) {
           (async () => {
@@ -378,7 +403,13 @@ export async function POST(req: NextRequest) {
             } catch { /* log-only */ }
           })();
         }
-        return result;
+        // Strip internal keys before singleflightCompute caches this payload.
+        return stripInternalMarkerFields(result);
+      }).then((r) => {
+        if (r.status === 'hit') markerCacheHit = true;
+        const v = r.value;
+        if (v && tileServedByCompute) (v as any)._tileServed = true;
+        return v;
       }),
     ]);
     const listMs = Date.now() - listStart;
@@ -450,7 +481,90 @@ export async function POST(req: NextRequest) {
     if (req.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       return NextResponse.json({ error: 'aborted' }, { status: 499 });
     }
-    logger.error('Map data API error', error);
+    // JSON.stringify(Error) === '{}' — log the message and stack explicitly or
+    // every failure surfaces as an empty object and hides the real cause.
+    logger.error('Map data API error', {
+      name: (error as any)?.name,
+      message: (error as any)?.message,
+      stack: (error as any)?.stack?.split('\n').slice(0, 6).join(' | '),
+      cause: (error as any)?.cause,
+    });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+/**
+ * Next.js stamps `Vary: rsc, next-router-state-tree, next-router-prefetch,
+ * next-router-segment-prefetch` on every route handler. Those exist for React
+ * Server Components negotiation — an API JSON body never varies on them (verified
+ * by hashing the response with and without the headers). A CDN keyed on them
+ * stores one entry per RSC header combination that no client ever sends, so the
+ * edge cache never shares. Normalise to the header that actually matters.
+ */
+function edgeCacheable(res: Response): Response {
+  const headers = new Headers(res.headers);
+  headers.set('Vary', 'Accept-Encoding');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+// Scale-ready edge absorption (Scaling Playbook step 4): the POST handler is the
+// single implementation; this GET wrapper exists so a stock CDN can cache it.
+// POST is never cached by a CDN, which is why warm pans were hitting the origin.
+//
+// Only the common filter set travels in the URL — boundaries (polygon/polygons)
+// are rejected here rather than silently dropped, because a cached response that
+// ignored a filter would serve the wrong population for the whole s-maxage.
+export async function GET(req: NextRequest) {
+  try {
+    const identifier = getRateLimitIdentifier(req);
+    const { allowed } = await checkMapRateLimit(identifier);
+    if (!allowed) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+
+    const sp = req.nextUrl.searchParams;
+    const num = (k: string) => {
+      const v = sp.get(k);
+      return v == null || v === '' ? undefined : Number(v);
+    };
+    const bounds = { minLat: num('minLat'), maxLat: num('maxLat'), minLng: num('minLng'), maxLng: num('maxLng') };
+    if (![bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng].every(Number.isFinite)) {
+      return NextResponse.json({ error: 'bounds (minLat,maxLat,minLng,maxLng) required' }, { status: 400 });
+    }
+    if (sp.has('polygon') || sp.has('polygons') || sp.has('cursor')) {
+      return NextResponse.json(
+        { error: 'polygon and cursor filters require POST /api/map-data' },
+        { status: 400 }
+      );
+    }
+
+    const ARRAY_FIELDS = ['amenities', 'furnishings'];
+    const body: Record<string, unknown> = {
+      bounds,
+      zoom: num('zoom') ?? 10,
+      scope: sp.get('scope') || 'both',
+      sort: sp.get('sort') || 'newest',
+      pageSize: num('pageSize') ?? 24,
+    };
+    for (const [k, v] of Array.from(sp.entries())) {
+      if (['minLat', 'maxLat', 'minLng', 'maxLng', 'zoom', 'scope', 'sort', 'pageSize'].includes(k)) continue;
+      if (v === '') continue;
+      body[k] = ARRAY_FIELDS.includes(k)
+        ? v.split(',').map((x: string) => x.trim()).filter((x: string) => x.length > 0)
+        : v;
+    }
+
+    const forward = new Request(req.url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(req.headers.get('x-forwarded-for')
+          ? { 'x-forwarded-for': req.headers.get('x-forwarded-for') as string }
+          : {}),
+      },
+      body: JSON.stringify(body),
+    }) as NextRequest;
+    return edgeCacheable(await POST(forward as NextRequest));
+  } catch (e: any) {
+    logger.error('map-data GET error', e?.message || e);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

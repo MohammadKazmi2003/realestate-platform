@@ -69,13 +69,16 @@ async function applyIndexTemplate() {
     return;
   }
   try {
-    const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
+    // The file is {index_patterns, priority, template} — pass `template`
+    // through as the inner template only. Sending the whole file as `template`
+    // nests it twice and ES rejects it, which is why this had never applied.
+    const tpl = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
     await es.indices.putIndexTemplate({
       name: 'properties_template',
       body: {
-        index_patterns: ['properties_v*'],
-        priority: 100,
-        template,
+        index_patterns: tpl.index_patterns || ['properties_v*'],
+        priority: tpl.priority ?? 100,
+        template: tpl.template || tpl,
       },
     });
     console.log('Index template applied successfully.');
@@ -97,14 +100,18 @@ async function createIndex() {
   // (docs index with routing=1° region; queries already send routing).
   const numShards = Math.max(1, Number(process.env.ES_SHARDS) || 1);
   const numReplicas = Math.max(0, Number(process.env.ES_REPLICAS ?? 1) || 0);
-  const mappingsPath = path.join(__dirname, '..', 'es-config', 'index-mappings.json');
+  // Single source of truth: create the index from the SAME template file
+  // putIndexTemplate applies. Two copies had already drifted (replicas 0 vs 1
+  // and a different suggest analyzer), so an index created here could disagree
+  // with one created from the template.
+  const mappingsPath = path.join(__dirname, '..', 'es-config', 'index-template.json');
   let body = {
     settings: { number_of_shards: numShards, number_of_replicas: numReplicas },
   };
 
   if (fs.existsSync(mappingsPath)) {
-    const mappings = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
-    body = mappings;
+    const raw = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
+    body = raw.template || raw;
     // Env override wins so adding shards/replicas needs no file edit.
     body.settings = {
       ...(body.settings || {}),

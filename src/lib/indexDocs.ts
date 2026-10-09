@@ -3,6 +3,7 @@ import {
   getElasticsearchClient,
   ES_INDEX_ALIAS,
   PROJECTS_INDEX_ALIAS,
+  TILES_INDEX_ALIAS,
 } from './elasticsearch';
 import { cacheDelete } from './redis';
 
@@ -241,6 +242,9 @@ export async function indexOne(entity: IndexEntity, id: string): Promise<'indexe
     return 'deleted';
   }
   await es.index({ index: aliasFor(entity), id, document: doc, refresh: true });
+  // Dual-write the lightweight tile projection (best-effort; never blocks the
+  // primary write). Only the BullMQ/webhook path through indexOne writes here.
+  await writeTileDoc(entity, id, doc);
   await invalidateListingCaches(id);
   return 'indexed';
 }
@@ -254,9 +258,87 @@ export async function deleteOne(entity: IndexEntity, id: string): Promise<void> 
     const status = (err as { statusCode?: number })?.statusCode;
     if (status !== 404) throw err;
   }
+  await writeTileDoc(entity, id, null);
   await invalidateListingCaches(id);
 }
 
 async function invalidateListingCaches(id: string): Promise<void> {
   await Promise.all([cacheDelete(`l:v3:${id}`), cacheDelete(`property:${id}`)]);
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight tile projection (listings_tile index)
+// ---------------------------------------------------------------------------
+// The tile index carries ONLY the fields tile queries search plus the preview
+// fields markers return. Anything absent from this projection is absent from
+// _source too, which is what would silently break the fetch-free hover/click
+// contract (Invariant 3) — so the allowlist is exported and asserted against
+// TILE_TOP_METRICS_FIELDS by tileIndexMapping.test.ts.
+
+/** Searchable/sortable surface: mirrors buildFilters() + sortForTopMetrics(). */
+export const TILE_DOC_INDEXED_FIELDS = [
+  'id', 'entity_type', 'status',
+  'property_type', 'bhk_type', 'listing_purpose',
+  'amenities', 'furnishings',
+  'price', 'sort_price', 'low_price',
+  'bedrooms', 'bathrooms', 'bedrooms_list', 'area_sqft',
+  'created_at', 'location',
+] as const;
+
+/** Stored-only preview payload (index:false in the mapping, present in _source). */
+export const TILE_DOC_STORED_FIELDS = [
+  'title', 'name', 'image_url', 'primary_image', 'location_text',
+  'developer_name',
+  'high_price', 'balconies', 'furnishing_status', 'area_unit',
+  'construction_phase', 'construction_progress_percent', 'delivery_date',
+  'amenities_total', 'payment_plan_summary', 'image_count',
+] as const;
+
+/** Every field the tile index stores. */
+export const TILE_DOC_FIELDS: readonly string[] = [...TILE_DOC_INDEXED_FIELDS, ...TILE_DOC_STORED_FIELDS];
+
+/**
+ * Project an already-built full document to the tile index shape.
+ * No extra DB round trip: indexOne already has `doc` in hand.
+ * Returns null when the row is gone or soft-deleted, so the caller deletes the
+ * tile doc instead of leaving a ghost (Invariant 8 — idempotent writes).
+ */
+export function projectTileDoc(full: AnyRow | null, entity: IndexEntity): AnyRow | null {
+  if (!full || full.status === 'deleted') return null;
+  const out: AnyRow = {};
+  for (const k of TILE_DOC_FIELDS) out[k] = full[k] ?? null;
+  // Projects have no `price`/`sort_price` of their own; tile sorting and range
+  // filters read the low end of the range, same as the legacy path.
+  if (entity === 'project') {
+    const low = full.low_price ?? 0;
+    out.price = low;
+    out.sort_price = low;
+  }
+  return out;
+}
+
+/** Fetch-and-project wrapper (backfill scripts, tests). */
+export async function buildTileDoc(entity: IndexEntity, id: string): Promise<AnyRow | null> {
+  const full = entity === 'project' ? await buildProjectDoc(id) : await buildPropertyDoc(id);
+  return projectTileDoc(full, entity);
+}
+
+/** Best-effort tile-index write. Never throws: the primary index is the source
+ *  of truth, and es:reconcile repairs any divergence (Invariant 8). */
+async function writeTileDoc(entity: IndexEntity, id: string, full: AnyRow | null): Promise<void> {
+  try {
+    const es = getElasticsearchClient();
+    const tileDoc = projectTileDoc(full, entity);
+    if (!tileDoc) {
+      await es.delete({ index: TILES_INDEX_ALIAS, id, refresh: false });
+      return;
+    }
+    await es.index({ index: TILES_INDEX_ALIAS, id, document: tileDoc, refresh: false });
+  } catch (err: unknown) {
+    const status = (err as { statusCode?: number })?.statusCode;
+    if (status === 404) return;
+    // Missing index (not yet created) or transient failure: log-and-continue.
+    // A tile write must never fail the primary indexing path.
+    console.warn('[tile-dual-write] skipped:', (err as Error)?.message);
+  }
 }

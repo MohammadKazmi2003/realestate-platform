@@ -5,21 +5,10 @@
 // concurrent requests coalesce via module singleflight, result cached 24h+jitter.
 // Nightly cron is optional prewarm only — never required.
 
-import { cacheGet, cacheSet } from '@/lib/redis';
+import { cacheGet, cacheSet, singleflightCompute } from '@/lib/redis';
 
-// Module-level coalescing for quantile computes (must live here, not in a
-// route module — otherwise each route file gets its own map).
-const quantileInflight = new Map<string, Promise<QuantileThresholds | null>>();
-
-async function quantileSingleflight(key: string, fn: () => Promise<QuantileThresholds | null>): Promise<QuantileThresholds | null> {
-  const existing = quantileInflight.get(key);
-  if (existing) return existing;
-  const promise = fn().finally(() => {
-    if (quantileInflight.get(key) === promise) quantileInflight.delete(key);
-  });
-  quantileInflight.set(key, promise);
-  return promise;
-}
+// Module-level quantile coalescing lives in singleflightCompute (redis.ts) so
+// it dedupes across instances, not per process (AD8).
 
 export interface QuantileThresholds {
   p50?: number;
@@ -135,7 +124,10 @@ export async function getOrComputeQuantileThresholds(
     const cached = await cacheGet<QuantileThresholds>(key);
     if (cached) return cached;
   } catch { /* miss -> compute below */ }
-  return quantileSingleflight(key, async () => {
+  // F11: coalesce ACROSS instances, not just this process — a module-local Map
+  // lets N pods each run one TDigest agg for the same new 1° region at cold
+  // start. skipCacheWrite keeps the caller's jittered anti-herd TTL below.
+  return singleflightCompute<QuantileThresholds>(key, 86400, async () => {
     try {
       // Coalesced losers may find the winner already cached.
       const raced = await cacheGet<QuantileThresholds>(key).catch(() => null);
@@ -170,7 +162,7 @@ export async function getOrComputeQuantileThresholds(
     } catch {
       return null;
     }
-  });
+  }, { skipCacheWrite: true }).then((r) => r.value);
 }
 
 // Build an additional range clause narrowing MAP agg to top quantile.
@@ -187,11 +179,18 @@ export function quantileRangeForSort(
   if (!q) return null;
   // Zoom gate lives in callers (map-data/map-tiles, z<10): street-level views
   // skip narrowing so small viewports never hide pins behind a top-decile cut.
+  // TDigest percentiles arrive as floats (e.g. 1781130111610.6). A date field
+  // mapped epoch_millis rejects a non-integer outright — ES throws
+  // "failed to parse date field" and the whole tile agg fails, which silently
+  // dropped newest-sort narrowing. Round for date/integer fields; scaled_float
+  // price fields accept the float as-is.
+  const snap = (v: number): number =>
+    q.field === 'created_at' || q.field === 'bedrooms' || q.field === 'bathrooms' ? Math.round(v) : v;
   if ((sort === 'price_desc' || sort === 'newest' || sort === 'beds' || sort === 'baths' || sort === 'sqft' || sort === 'lot') && typeof thresholds.p90 === 'number') {
-    return { range: { [q.field]: { gte: thresholds.p90 } } };
+    return { range: { [q.field]: { gte: snap(thresholds.p90) } } };
   }
   if (sort === 'price_asc' && typeof thresholds.p50 === 'number') {
-    return { range: { [q.field]: { lte: thresholds.p50 } } };
+    return { range: { [q.field]: { lte: snap(thresholds.p50) } } };
   }
   return null;
 }

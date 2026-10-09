@@ -50,6 +50,10 @@ export const flags = {
   get tileShardSize() { return Math.max(500, Math.min(5000, envNum('TILE_SHARD_SIZE', 1500))); },
   get tileMaxPrecisionLowZoom() { return Math.max(4, Math.min(12, envNum('TILE_MAX_PRECISION_LOW_ZOOM', 6))); },
   get tileMaxTiles() { return Math.max(4, Math.min(12, envNum('TILE_MAX_TILES', 8))); },
+  // Tasks 2-4: unified lightweight tile index (listings_tile). One search per
+  // tile instead of a properties+projects split; text queries still route to
+  // the legacy indices. Default ON, env-revertible (AD7).
+  get tileIndexV1() { return envOn('TILE_INDEX_V1', true); },
   // Scale-ready: geohash routing (forward-compatible; ignored until indices
   // are created with routing). ON means queries send `routing` param.
   get geoRouting() { return envOn('GEO_ROUTING', true); },

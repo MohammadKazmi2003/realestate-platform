@@ -41,13 +41,16 @@ async function applyIndexTemplate() {
     return;
   }
   try {
-    const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
+    // The file is {index_patterns, priority, template} — pass `template`
+    // through as the inner template only. Sending the whole file as `template`
+    // nests it twice and ES rejects it, which is why this had never applied.
+    const tpl = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
     await es.indices.putIndexTemplate({
       name: 'projects_template',
       body: {
-        index_patterns: ['projects_v*'],
-        priority: 100,
-        template,
+        index_patterns: tpl.index_patterns || ['projects_v*'],
+        priority: tpl.priority ?? 100,
+        template: tpl.template || tpl,
       },
     });
     console.log('Project index template applied successfully.');
@@ -66,13 +69,15 @@ async function createIndex() {
   // Scale-ready: same ES_SHARDS/ES_REPLICAS contract as properties indexer.
   const numShards = Math.max(1, Number(process.env.ES_SHARDS) || 1);
   const numReplicas = Math.max(0, Number(process.env.ES_REPLICAS ?? 1) || 0);
-  const mappingsPath = path.join(__dirname, '..', 'es-config', 'projects-mappings.json');
+  // Single source of truth: same template file putIndexTemplate applies.
+  const mappingsPath = path.join(__dirname, '..', 'es-config', 'projects-index-template.json');
   let body = {
     settings: { number_of_shards: numShards, number_of_replicas: numReplicas },
   };
 
   if (fs.existsSync(mappingsPath)) {
-    body = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(mappingsPath, 'utf-8'));
+    body = raw.template || raw;
     body.settings = {
       ...(body.settings || {}),
       number_of_shards: numShards,

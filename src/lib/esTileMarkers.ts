@@ -6,7 +6,7 @@
 // Adaptive precision (below) keeps clustered cities from collapsing into a
 // handful of coarse cells at low zoom.
 
-import { getElasticsearchClient, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS } from '@/lib/elasticsearch';
+import { getElasticsearchClient, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS, TILES_INDEX_ALIAS } from '@/lib/elasticsearch';
 import { precisionForZoom, maxPrecisionForZoom } from '@/lib/mapTiles';
 import { tileToBounds } from '@/lib/mapTiles';
 import { logger } from '@/lib/logger';
@@ -21,9 +21,9 @@ const TILE_TOP_METRICS_FIELDS = [
   'image_url', 'primary_image', 'bhk_type', 'bathrooms', 'balconies',
   'furnishing_status', 'listing_purpose', 'property_type',
   'area_sqft', 'area_unit', 'location_text', 'created_at',
-  'developer_name', 'project_name',
+  'developer_name',
   'construction_phase', 'construction_progress_percent', 'delivery_date',
-  'amenities', 'amenities_total', 'bedrooms_list', 'unit_count',
+  'amenities', 'amenities_total', 'bedrooms_list',
   'payment_plan_summary', 'image_count',
 ];
 
@@ -61,24 +61,6 @@ function sortForTopMetrics(sort: string, scope: string): any[] {
   return [{ created_at: { order: 'desc' } }, { id: { order: 'asc' } }];
 }
 
-function percentileFieldForSort(sort: string, scope: string): string | null {
-  if (sort === 'price_asc' || sort === 'price_desc') {
-    if (scope === 'projects') return 'low_price';
-    if (scope === 'both') return 'sort_price';
-    return 'price';
-  }
-  if (sort === 'newest') return 'created_at';
-  // Quantile narrowing only where the field exists across the queried scope(s).
-  // beds/baths/sqft exist on properties only — narrowing a both-scope query on
-  // them would silently drop all projects, so both/projects use plain per-cell
-  // top-1 (still sort-ordered). popular has no deterministic field at all.
-  if (scope !== 'properties') return null;
-  if (sort === 'beds') return 'bedrooms';
-  if (sort === 'baths') return 'bathrooms';
-  if (sort === 'sqft' || sort === 'lot') return 'area_sqft';
-  return null;
-}
-
 export interface TileAggParams {
   tileBounds: { minLat: number; maxLat: number; minLng: number; maxLng: number };
   must: any[];
@@ -86,7 +68,6 @@ export interface TileAggParams {
   scope: string;
   sort?: string;
   zoom: number;
-  withPercentiles?: boolean;
   // Adaptive-precision override. When omitted, precisionForZoom(zoom) is used.
   // The fetcher below raises precision while occupied cells stay sparse so
   // clustered data (whole cities in one coarse cell) still spreads into
@@ -213,15 +194,18 @@ function sourceToMarker(m: any, cellKey: string | null, docCount: number | null)
     area_unit: (m as any).area_unit || null,
     location_text: (m as any).location_text || null,
     is_new: Number.isFinite(created) ? created >= newCutoff : false,
+    // Internal sort key: tileMerge ranks `newest`/`popular` strides by this.
+    // It is stripped from the response before serialising (see stripInternalMarkerFields)
+    // — without it strideToCap silently ranked by id because mapped markers
+    // never carried `created_at`, so "top 500 by recency" was arbitrary.
+    _createdMs: Number.isFinite(created) ? created : null,
     developer_name: (m as any).developer_name || null,
-    project_name: (m as any).project_name || null,
     construction_phase: (m as any).construction_phase || null,
     construction_progress_percent: (m as any).construction_progress_percent ?? null,
     delivery_date: (m as any).delivery_date || null,
     amenities: fullAmenities.slice(0, 6),
     amenities_total: typeof (m as any).amenities_total === 'number' ? (m as any).amenities_total : fullAmenities.length,
     bedrooms_list: Array.isArray((m as any).bedrooms_list) ? (m as any).bedrooms_list : [],
-    unit_count: (m as any).unit_count ?? null,
     payment_plan_summary: (m as any).payment_plan_summary || null,
     image_count: typeof (m as any).image_count === 'number' ? (m as any).image_count : null,
     _cellKey: cellKey,
@@ -244,6 +228,30 @@ function mapHitToMarker(source: any): any | null {
   return sourceToMarker(source, null, null);
 }
 
+// Resolve which index(s) a tile-shaped query should hit.
+//
+// One index instead of two is the whole point of listings_tile: scope=both no
+// longer doubles every tile agg, and there is no cell-merge step. But the tile
+// index deliberately carries NO text-analyzed fields, and `must[]` is exactly
+// the multi_match clause set (esQueryBuilder.buildFilters pushes text there and
+// nothing else) — so a text query must fall back to the legacy indices, where
+// the analyzers live. Wrong choice is silent: multi_match over unmapped fields
+// matches nothing and returns an empty map instead of an error.
+export function resolveTileIndexes(must: unknown[], scope: string): { index: string | string[]; split: boolean } {
+  const legacy: string | string[] =
+    scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS]
+    : scope === 'projects' ? PROJECTS_INDEX_ALIAS
+    : ES_INDEX_ALIAS;
+  const legacyResult = { index: legacy, split: scope === 'both' };
+  try {
+    if (!flags.tileIndexV1) return legacyResult;
+  } catch {
+    if (process.env.TILE_INDEX_V1 === '0') return legacyResult;
+  }
+  if (Array.isArray(must) && must.length > 0) return legacyResult;
+  return { index: TILES_INDEX_ALIAS, split: false };
+}
+
 export async function queryTileMarkersForBounds(opts: {
   tileBounds: { minLat: number; maxLat: number; minLng: number; maxLng: number };
   must: any[];
@@ -251,19 +259,13 @@ export async function queryTileMarkersForBounds(opts: {
   scope: string;
   sort?: string;
   zoom: number;
-  withPercentiles?: boolean;
   timeoutMs?: number;
-}): Promise<{ markers: any[]; cells: { key: string; count: number }[]; took?: number; p90?: any; precisionUsed?: number }> {
+}): Promise<{ markers: any[]; cells: { key: string; count: number }[]; took?: number; precisionUsed?: number }> {
   const es: any = getElasticsearchClient();
-  const indexes =
-    opts.scope === 'both'
-      ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS]
-      : opts.scope === 'projects'
-        ? PROJECTS_INDEX_ALIAS
-        : ES_INDEX_ALIAS;
-  // Both: two sub-aggs (props + projects) merged by cell key to preserve mix
-  // without forced quota. Single scope: one agg.
-  const needsSplit = opts.scope === 'both';
+  // Unified tile index when possible: ONE search per attempt instead of two,
+  // and no cell-key merge. Falls back to the split legacy indices for text
+  // queries or when the flag is off (AD7).
+  const { index: indexes, split: needsSplit } = resolveTileIndexes(opts.must, opts.scope);
   // Scale-ready routing: coarse 1° region key. Ignored by ES until indices
   // are created with routing — safe to send now so adding shards later
   // prunes S→k without code change. World spans return [] → scatter.
@@ -285,7 +287,6 @@ export async function queryTileMarkersForBounds(opts: {
       scope: opts.scope,
       sort: opts.sort,
       zoom: opts.zoom,
-      withPercentiles: opts.withPercentiles,
       precision,
     });
     const res: any = await es.search({
@@ -312,7 +313,7 @@ export async function queryTileMarkersForBounds(opts: {
         const mk = mapTopMetricsToMarker(b.top, b.doc_count, b.key);
         if (mk) markers.push(mk);
       }
-      return { markers, cells, took: res?.took, p90: res?.aggregations?.p90 };
+      return { markers, cells, took: res?.took };
     }
 
   // Both: props + projects in parallel (same msearch-equivalent, Promise.all fallback).
@@ -381,7 +382,7 @@ export async function queryTileMarkersForBounds(opts: {
     // Sort cells by count desc for quota thinning downstream (stable).
     cells.sort((a, b) => b.count - a.count);
     const took = Math.max(propRes?.took || 0, projRes?.took || 0);
-    return { markers, cells, took, p90: propRes?.aggregations?.p90 || projRes?.aggregations?.p90 };
+    return { markers, cells, took };
   };
 
   // Adaptive precision: coarse grids collapse clustered cities into a handful
@@ -396,7 +397,12 @@ export async function queryTileMarkersForBounds(opts: {
   let attempts = 1;
   const attemptCap = maxPrecisionAttempts();
   const precisionCap = Math.min(MAX_GRID_PRECISION, maxPrecisionForZoom(opts.zoom));
+  // A cell count of 0 means the geo_bounding_box matched no documents at all.
+  // Raising precision only SUBDIVIDES the existing doc set, so it can never
+  // turn 0 docs into >0 — every extra round-trip here was provably wasted
+  // (measured: the overwhelming majority of refinements fired on empty tiles).
   while (
+    out.cells.length > 0 &&
     out.cells.length < MIN_OCCUPIED_CELLS &&
     precision < precisionCap &&
     attempts < attemptCap
@@ -440,12 +446,9 @@ export async function querySortFillForBounds(opts: {
   timeoutMs?: number;
 }): Promise<{ markers: any[]; took?: number }> {
   const es: any = getElasticsearchClient();
-  const indexes =
-    opts.scope === 'both'
-      ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS]
-      : opts.scope === 'projects'
-        ? PROJECTS_INDEX_ALIAS
-        : ES_INDEX_ALIAS;
+  // Fill must read the SAME population as the tile aggs it tops up, otherwise
+  // the merged viewport mixes two indexes that can drift apart.
+  const { index: indexes } = resolveTileIndexes(opts.must, opts.scope);
   const sort = opts.sort || 'newest';
   const res: any = await es.search({
     index: indexes,

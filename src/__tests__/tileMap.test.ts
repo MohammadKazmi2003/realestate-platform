@@ -133,3 +133,181 @@ describe('tileMerge — dedupe/clip/stride preserves contract', () => {
     expect(fillMarkerDeficit(tile as any, [] as any, 2000, 500).length).toBe(1);
   });
 });
+
+// --- AD1 / Invariant 1: tile-union keys,64-bit hashes, fill short-circuit ---
+import { coveringTileUnionBounds } from '@/lib/mapTiles';
+import { prepareMapQuery } from '@/lib/filterNormalize';
+import { cellsAreUnclustered } from '@/lib/tileMerge';
+
+describe('coveringTileUnionBounds — the shareable unit', () => {
+  const B = { minLat: 28.40, maxLat: 28.45, minLng: 77.00, maxLng: 77.05 };
+
+  it('pans inside one tile produce a byte-identical union (shared cache key)', () => {
+    const a = coveringTileUnionBounds(B, 11);
+    const b = coveringTileUnionBounds({ ...B, minLat: B.minLat + 0.001, maxLat: B.maxLat + 0.001 }, 11);
+    expect(a).toEqual(b);
+  });
+
+  it('union is a superset of the viewport (AD5 — a hit can never hide a listing)', () => {
+    const u = coveringTileUnionBounds(B, 11);
+    expect(u.minLat).toBeLessThanOrEqual(B.minLat);
+    expect(u.maxLat).toBeGreaterThanOrEqual(B.maxLat);
+    expect(u.minLng).toBeLessThanOrEqual(B.minLng);
+    expect(u.maxLng).toBeGreaterThanOrEqual(B.maxLng);
+  });
+
+  it('different zooms yield different unions (must not share)', () => {
+    expect(coveringTileUnionBounds(B, 9)).not.toEqual(coveringTileUnionBounds(B, 12));
+  });
+});
+
+describe('prepareMapQuery — 64-bit hash under md:v5', () => {
+  it('keys are md:v5 and use a64-bit hash (collision-safe at traffic scale)', () => {
+    const { markerKey, listKey } = prepareMapQuery(
+      { minLat: 28.4, maxLat: 28.45, minLng: 77, maxLng: 77.05 },
+      { scope: 'both', sort: 'newest' }
+    );
+    expect(markerKey.startsWith('md:v5:m:')).toBe(true);
+    expect(listKey.startsWith('md:v5:l:')).toBe(true);
+    //64-bit FNV returns base36 pairs of32-bit halves — longer than a32-bit hash.
+    const mHash = markerKey.split(':')[3];
+    expect(mHash!.length).toBeGreaterThan(6);
+  });
+
+  it('identical inputs produce identical keys (deterministic)', () => {
+    const b = { minLat: 28.4, maxLat: 28.45, minLng: 77, maxLng: 77.05 };
+    const f = { scope: 'both' as const, sort: 'newest' as const };
+    expect(prepareMapQuery(b, f)).toEqual(prepareMapQuery(b, f));
+  });
+
+  it('changing sort changes the marker key (tiles are sort-ordered)', () => {
+    const b = { minLat: 28.4, maxLat: 28.45, minLng: 77, maxLng: 77.05 };
+    const a = prepareMapQuery(b, { sort: 'newest' });
+    const c = prepareMapQuery(b, { sort: 'price_desc' });
+    expect(a.markerKey).not.toBe(c.markerKey);
+  });
+});
+
+describe('cellsAreUnclustered — Invariant 1 fill short-circuit', () => {
+  it('unclustered (every cell count 1) means reps are the exact population', () => {
+    expect(
+      cellsAreUnclustered([
+        { key: 'a', count: 1 },
+        { key: 'b', count: 1 },
+      ])
+    ).toBe(true);
+  });
+
+  it('any clustered cell means fill is still required', () => {
+    expect(
+      cellsAreUnclustered([
+        { key: 'a', count: 1 },
+        { key: 'b', count: 4 },
+      ])
+    ).toBe(false);
+  });
+
+  it('empty/missing cells never short-circuit (would skip a needed fill)', () => {
+    expect(cellsAreUnclustered([])).toBe(false);
+    expect(cellsAreUnclustered(null)).toBe(false);
+    expect(cellsAreUnclustered(undefined)).toBe(false);
+  });
+});
+
+describe('covering tiles always cover the viewport (AD5)', () => {
+  const spans = (u: { minLat: number; maxLat: number; minLng: number; maxLng: number }, b: typeof WORLD_B) =>
+    u.minLat <= b.minLat && u.maxLat >= b.maxLat && u.minLng <= b.minLng && u.maxLng >= b.maxLng;
+
+  const WORLD_B = { minLat: -60, maxLat: 70, minLng: -170, maxLng: 170 };
+
+  it('world viewport at low zoom: union is a superset (regression: stride broke this)', () => {
+    // Striding to the tile cap used to return only a row of tiles, so the union
+    // covered the north strip while the user asked for the world — a cache hit
+    // could then hide every listing outside that strip.
+    expect(spans(coveringTileUnionBounds(WORLD_B, 4), WORLD_B)).toBe(true);
+  });
+
+  it('world viewport stays bounded (fan-out must not blow up either)', () => {
+    const tiles = viewportCoveringTiles(WORLD_B, 4);
+    expect(tiles.length).toBeLessThanOrEqual(8);
+    expect(tiles.length).toBeGreaterThan(0);
+  });
+
+  it.each([[4], [6], [9], [11], [14]])('zoom %i: union spans the viewport', (z) => {
+    const b = { minLat: 18.9, maxLat: 19.3, minLng: 72.8, maxLng: 73.1 };
+    expect(spans(coveringTileUnionBounds(b, z), b)).toBe(true);
+  });
+});
+
+// Regression: TDigest returns floats; a date field mapped epoch_millis rejects
+// them outright, which made the newest-sort narrowing fail the whole tile agg.
+describe('quantile range snaps to the field type', () => {
+  it('created_at range is an integer (epoch_millis rejects floats)', async () => {
+    const { quantileRangeForSort } = await import('@/lib/quantiles');
+    const r = quantileRangeForSort({ p90: 1781130111610.6, updatedAt: '', version: 'v2' }, 'newest', 'both');
+    expect(r).toEqual({ range: { created_at: { gte: 1781130111611 } } });
+    expect(Number.isInteger(r.range.created_at.gte)).toBe(true);
+  });
+
+  it('integer sort fields snap too', async () => {
+    const { quantileRangeForSort } = await import('@/lib/quantiles');
+    const r = quantileRangeForSort({ p90: 3.7, updatedAt: '', version: 'v2' }, 'beds', 'properties');
+    expect(Number.isInteger(r.range.bedrooms.gte)).toBe(true);
+  });
+
+  it('scaled_float price keeps full precision', async () => {
+    const { quantileRangeForSort } = await import('@/lib/quantiles');
+    const r = quantileRangeForSort({ p90: 12345678.91, updatedAt: '', version: 'v2' }, 'price_desc', 'both');
+    expect(r.range.sort_price.gte).toBe(12345678.91);
+  });
+});
+
+// Objective 3: markers carry only what identifies/positions them + preview.
+describe('marker payload hygiene', () => {
+  it('strips server-only keys, keeps the client-facing density badge', async () => {
+    const { stripInternalMarkerFields } = await import('@/lib/tileMerge');
+    const out = stripInternalMarkerFields([
+      { id: 'a', _createdMs: 1700000000000, _cellKey: '10/1/2', _cellCount: 7, price: 1 },
+    ] as any);
+    expect(out[0]).not.toHaveProperty('_createdMs');
+    expect(out[0]).not.toHaveProperty('_cellKey');
+    expect((out[0] as any)._cellCount).toBe(7); // heat colour + badges need it
+    expect((out[0] as any).price).toBe(1);
+  });
+
+  it('tolerates null/undefined (never throws on an empty path)', async () => {
+    const { stripInternalMarkerFields } = await import('@/lib/tileMerge');
+    expect(stripInternalMarkerFields(null as any)).toBeNull();
+    expect(stripInternalMarkerFields(undefined as any)).toBeUndefined();
+  });
+
+  it('newest stride ranks by _createdMs, not by id (regression)', async () => {
+    const { strideToCap } = await import('@/lib/tileMerge');
+    // Mapped markers historically carried neither `created_at` nor a rank key,
+    // so every sort value was equal and the tiebreak fell through to id order.
+    // cap must be < length or strideToCap short-circuits before ranking.
+    const markers = [
+      { id: 'a', _createdMs: 100 },
+      { id: 'b', _createdMs: 900 },
+      { id: 'c', _createdMs: 500 },
+    ];
+    const out = strideToCap(markers as any, 2, 'newest');
+    // Ranked newest-first then stride-sampled: b (900) then c (500).
+    // Id-order would have yielded a first.
+    expect(out.map((m: any) => m.id)).toEqual(['b', 'c']);
+  });
+
+  it('tile and legacy mappers emit the same internal rank key', () => {
+    const esq = require('fs').readFileSync('src/lib/esQueryBuilder.ts', 'utf8');
+    const tile = require('fs').readFileSync('src/lib/esTileMarkers.ts', 'utf8');
+    expect(esq).toContain('_createdMs:');
+    expect(tile).toContain('_createdMs:');
+    // neither mapper should still emit the fields the frontend never reads
+    for (const src of [esq, tile]) {
+      const block = src.match(/MARKER_SOURCE_FIELDS = \[|TILE_TOP_METRICS_FIELDS = \[/);
+      expect(block).not.toBeNull();
+    }
+    expect(esq).not.toMatch(/project_name: src\.project_name/);
+    expect(tile).not.toMatch(/project_name: \(m as any\)\.project_name/);
+  });
+});

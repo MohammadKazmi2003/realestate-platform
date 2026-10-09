@@ -90,7 +90,7 @@ export function viewportCoveringTiles(
     const y1 = latToY(bounds.minLat, z);
     const w = Math.abs(x1 - x0) + 1;
     const h = Math.abs(y1 - y0) + 1;
-    if (w * h <= cap || z <= 4) {
+    if (w * h <= cap) {
       const out: { z: number; x: number; y: number }[] = [];
       const xa = Math.min(x0, x1);
       const xb = Math.max(x0, x1);
@@ -101,14 +101,23 @@ export function viewportCoveringTiles(
           out.push({ z, x, y });
         }
       }
-      // Hard cap even at z=4 floor (world viewports): stride-sample to `cap`
-      // so per-user ES fan-out never exceeds cap regardless of viewport.
-      // Spread preserved deterministically; fill query tops density to 500.
-      if (out.length <= cap) return out;
-      const step = out.length / cap;
-      const sampled: { z: number; x: number; y: number }[] = [];
-      for (let k = 0; k < cap; k++) sampled.push(out[Math.floor(k * step)]);
-      return sampled;
+      return out;
+    }
+    // More tiles than the cap: descend to a COARSER tile instead of sampling.
+    // Striding kept the count bounded but broke coverage — the returned set no
+    // longer spanned the viewport, so a tile-union key derived from it was a
+    // subset of what the user asked for (AD5 violation: a cache hit could hide
+    // listings). Descending keeps coverage exact while still bounding fan-out,
+    // and at world scale it also means far fewer, far more reusable tiles.
+    if (z <= 1) {
+      // z=1 is 2 tiles wide — below that a single tile IS the requested extent.
+      const out: { z: number; x: number; y: number }[] = [];
+      for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
+        for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
+          out.push({ z, x, y });
+        }
+      }
+      return out;
     }
     z -= 1;
   }
@@ -118,15 +127,34 @@ export function tileKey(z: number, x: number, y: number): string {
   return `${z}/${x}/${y}`;
 }
 
-export function buildFilterHash(filters: Record<string, any>): string {
-  let hash = 0;
-  const str = JSON.stringify(filters);
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+// AD1: the cacheable unit is the COVERING TILE SET, not the raw viewport.
+//
+// Returns the bounding box of every tile that intersects `bounds`. Two pans
+// that resolve to the same z/x/y set produce a byte-identical union, so feeding
+// this into prepareMapQuery makes marker/list keys and geo filters identical
+// across users — the reuse exact-bounds keys can never achieve. Pans smaller
+// than a tile therefore share one cache entry instead of minting one per pan.
+//
+// Widening here is safe by AD5: the union is a superset of the viewport, so a
+// cache hit can never hide a listing that the exact viewport would have shown.
+export function coveringTileUnionBounds(
+  bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+  mapZoom: number
+): { minLat: number; maxLat: number; minLng: number; maxLng: number } {
+  const tiles = viewportCoveringTiles(bounds, mapZoom);
+  if (tiles.length === 0) return bounds;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  for (const t of tiles) {
+    const b = tileToBounds(t.z, t.x, t.y);
+    if (b.minLat < minLat) minLat = b.minLat;
+    if (b.maxLat > maxLat) maxLat = b.maxLat;
+    if (b.minLng < minLng) minLng = b.minLng;
+    if (b.maxLng > maxLng) maxLng = b.maxLng;
   }
-  return Math.abs(hash).toString(36);
+  return { minLat, maxLat, minLng, maxLng };
 }
 
 // 64-bit FNV-1a for tile rollout (avoids 32-bit birthday collisions at scale).

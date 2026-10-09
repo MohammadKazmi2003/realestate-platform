@@ -120,17 +120,42 @@ export async function releaseComputeLock(key: string): Promise<void> {
   }
 }
 
-// Coalesced compute: fast-path cache hit → winner computes + caches → losers
-// wait briefly then read winner's value. Guarantees at most ~1 ES computation
-// per key across N Next instances (vs N with in-process Maps only).
+// Coalesced compute with two levels of dedup (AD8: no required in-process state,
+// but an in-process map is a valid *optimization* layer on top):
+//
+//   L1 in-process  — same-pod duplicates never touch Redis for the lock.
+//   L2 Redis NX    — cross-pod dedup, so N instances share ONE computation.
+//
+// Invariant 6: the wait window MUST outlive the lock TTL, otherwise waiters
+// give up while the winner is still working and all recompute — costing MORE
+// backend work than having no lock at all, exactly when contention peaks.
+//
+// Invariant 4: only non-null results are ever cached. Callers that need their
+// own cache write semantics (e.g. TTL jitter) pass `skipCacheWrite`.
+const inflight = new Map<string, Promise<any>>();
+
+// Invariant 6, expressed as constants so it is testable as a VALUE instead of
+// by parsing source text. waitMs is derived from the lock TTL by construction,
+// so the two can never drift apart and reintroduce the "waiters abandon the
+// winner" failure mode.
+export const SINGLEFLIGHT_LOCK_TTL_MS = 8000;
+export const SINGLEFLIGHT_WAIT_MS = SINGLEFLIGHT_LOCK_TTL_MS + 1000;
+
 export async function singleflightCompute<T>(
   key: string,
   ttlSeconds: number,
   compute: () => Promise<T | null>,
-  opts?: { lockTtlMs?: number; waitMs?: number }
+  opts?: { lockTtlMs?: number; waitMs?: number; skipCacheWrite?: boolean }
 ): Promise<{ value: T | null; status: 'hit' | 'computed' | 'waited' | 'fallback' }> {
   const cached = await cacheGet<T>(key);
   if (cached) return { value: cached, status: 'hit' };
+
+  const existing = inflight.get(key);
+  if (existing) {
+    const v = (await existing.catch(() => null)) as T | null;
+    if (v) return { value: v, status: 'waited' };
+  }
+
   let enabled = true;
   try {
     const { flags } = await import('@/lib/flags');
@@ -138,29 +163,54 @@ export async function singleflightCompute<T>(
   } catch {
     enabled = process.env.DIST_SINGLEFLIGHT !== '0';
   }
-  if (!enabled) {
-    const v = await compute().catch(() => null);
-    if (v) await cacheSet(key, v, ttlSeconds);
-    return { value: v, status: 'fallback' };
-  }
-  const lockTtlMs = opts?.lockTtlMs ?? 8000;
-  const waitMs = opts?.waitMs ?? 9000;
-  const won = await tryAcquireComputeLock(key, lockTtlMs);
-  if (won) {
-    try {
+
+  const write = async (v: T | null) => {
+    if (v && !opts?.skipCacheWrite) await cacheSet(key, v, ttlSeconds);
+  };
+
+  const run = async (): Promise<{ value: T | null; status: any }> => {
+    if (!enabled) {
       const v = await compute().catch(() => null);
-      if (v) await cacheSet(key, v, ttlSeconds);
-      return { value: v, status: 'computed' };
-    } finally {
-      await releaseComputeLock(key);
+      await write(v);
+      return { value: v, status: 'fallback' };
     }
+    const lockTtlMs = opts?.lockTtlMs ?? SINGLEFLIGHT_LOCK_TTL_MS;
+    const waitMs = opts?.waitMs ?? SINGLEFLIGHT_WAIT_MS; // Invariant 6
+    const won = await tryAcquireComputeLock(key, lockTtlMs);
+    if (won) {
+      try {
+        const v = await compute().catch(() => null);
+        await write(v);
+        return { value: v, status: 'computed' };
+      } finally {
+        await releaseComputeLock(key);
+      }
+    }
+    // Loser: wait for the winner's write. If the lock vanished without a write,
+    // stop early rather than burning the whole window.
+    const start = Date.now();
+    while (Date.now() - start < waitMs) {
+      await new Promise((r) => setTimeout(r, 100));
+      const v = await cacheGet<T>(key);
+      if (v) return { value: v, status: 'waited' };
+      if (!(await lockHeld(key))) break;
+    }
+    const v = await compute().catch(() => null);
+    await write(v);
+    return { value: v, status: 'fallback' };
+  };
+
+  const p = run().finally(() => {
+    if (inflight.get(key) === p) inflight.delete(key);
+  });
+  inflight.set(key, p);
+  return (await p.catch(() => ({ value: null, status: 'fallback' }))) as any;
+}
+
+async function lockHeld(key: string): Promise<boolean> {
+  try {
+    return (await getRedisClient().exists(`lock:${key}`)) > 0;
+  } catch {
+    return true;
   }
-  const start = Date.now();
-  while (Date.now() - start < waitMs) {
-    await new Promise((r) => setTimeout(r, 100));
-    const v = await cacheGet<T>(key);
-    if (v) return { value: v, status: 'waited' };
-  }
-  const v = await compute().catch(() => null);
-  return { value: v, status: 'fallback' };
 }
