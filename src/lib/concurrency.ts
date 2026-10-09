@@ -9,8 +9,9 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let i = 0;
+  const n = Math.max(1, Math.min(Number.isFinite(limit) ? Math.floor(limit) : 1, items.length));
   const workers = Array.from(
-    { length: Math.min(limit, items.length) },
+    { length: n },
     async () => {
       while (i < items.length) {
         const idx = i++;

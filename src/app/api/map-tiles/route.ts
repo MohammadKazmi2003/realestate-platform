@@ -9,22 +9,7 @@ import { buildFiltersForTiles } from '@/lib/esTileFilters';
 import { queryTileMarkersForBounds } from '@/lib/esTileMarkers';
 import { mergeTileMarkers } from '@/lib/tileMerge';
 import { flags } from '@/lib/flags';
-
-// Scale-ready: bounded tile concurrency so one pan can't open 12-24 ES
-// sockets at once. Adding Next/ES nodes then scales QPS instead of
-// amplifying per-request sockets. Env TILE_CONCURRENCY, default 6.
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length) as R[];
-  let i = 0;
-  const workers = new Array(Math.max(1, Math.min(limit, items.length))).fill(0).map(async () => {
-    while (i < items.length) {
-      const idx = i++;
-      out[idx] = await fn(items[idx]);
-    }
-  });
-  await Promise.all(workers);
-  return out;
-}
+import { mapWithConcurrency } from '@/lib/concurrency';
 
 // Additive P4 route: quantized tile MAP (size:0 grid), never exact-viewport.
 // Client fetches ALL covering tiles and merges/clips — never single center tile.
