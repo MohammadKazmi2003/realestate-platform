@@ -32,7 +32,7 @@ export const flags = {
   // P3: shadow grid query (log-only, never served).
   get tileShadow() { return envOn('TILE_SHADOW', true); },
   get tileShadowPct() {
-    const v = envNum('TILE_SHADOW_PCT', 100);
+    const v = envNum('TILE_SHADOW_PCT', 1);
     return Math.max(0, Math.min(100, v));
   },
   // P4: serve MAP from tiles (cutover). Legacy random_score kept as fallback.

@@ -9,6 +9,7 @@ import { checkMapRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { prepareMapQuery, prepareTileQuery } from '@/lib/filterNormalize';
 import { viewportCoveringTiles, tileToBounds, redisTTLForSort, cdnSMaxAgeForSort } from '@/lib/mapTiles';
 import { flags } from '@/lib/flags';
+import { mapWithConcurrency } from '@/lib/concurrency';
 
 function cacheHeadersForSort(sort?: string) {
   const sMax = cdnSMaxAgeForSort(sort);
@@ -238,8 +239,10 @@ export async function POST(req: NextRequest) {
           try {
             const tileResults: { markers: any[] }[] = [];
             // Bound fan-out: max 12 tiles already clamped in viewportCoveringTiles.
-            await Promise.all(
-              tileEntries.map((te) =>
+            await mapWithConcurrency(
+              tileEntries,
+              Math.max(1, Math.min(8, Number(process.env.TILE_CONCURRENCY) || 6)),
+              async (te) =>
                 singleflight(te.tileKey, async () => {
                   const tcached = await cacheGet<any>(te.tileKey);
                   if (tcached) return tcached;
@@ -272,7 +275,6 @@ export async function POST(req: NextRequest) {
                 }).then((payload: any) => {
                   if (payload && Array.isArray(payload.markers)) tileResults.push(payload);
                 })
-              )
             );
             if (tileResults.length > 0) {
               const { mergeTileMarkers: mtm, clipToViewport: clipVP } = await import('@/lib/tileMerge');
@@ -343,7 +345,7 @@ export async function POST(req: NextRequest) {
                 // Write legacy key too (dual-write keeps instant rollback warm).
                 await cacheSet(markerKey, merged, markerTTL);
                 // P3 shadow: compare vs legacy in background (log-only).
-                if (flags.tileShadow && Math.random() * 100 < flags.tileShadowPct) {
+                if (flags.tileShadow && Math.random() * 100 < Math.min(flags.tileShadowPct, 10)) {
                   queryESMapMarkers(esParams).then((legacy: any) => {
                     const overlap = legacy && merged ? merged.filter((m: any) => legacy.some((l: any) => l.id === m.id)).length : 0;
                     logger.info('tile shadow compare', { tileCount: merged.length, legacyCount: legacy?.length || 0, overlap, zoom, scope });

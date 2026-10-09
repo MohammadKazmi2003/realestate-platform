@@ -144,7 +144,7 @@ export async function singleflightCompute<T>(
     return { value: v, status: 'fallback' };
   }
   const lockTtlMs = opts?.lockTtlMs ?? 8000;
-  const waitMs = opts?.waitMs ?? 2500;
+  const waitMs = opts?.waitMs ?? 9000;
   const won = await tryAcquireComputeLock(key, lockTtlMs);
   if (won) {
     try {

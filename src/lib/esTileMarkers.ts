@@ -165,13 +165,6 @@ export function buildTileAggQuery(p: TileAggParams): any {
       },
     },
   };
-  const pField = p.withPercentiles ? percentileFieldForSort(sort, p.scope) : null;
-  if (pField && pField !== 'created_at') {
-    aggs.p90 = { percentiles: { field: pField, percents: [50, 90] } };
-  } else if (pField === 'created_at') {
-    // created_at percentiles are epoch_millis — cheap TDigest, powers newest tiers.
-    aggs.p90 = { percentiles: { field: pField, percents: [50, 90] } };
-  }
   return {
     size: 0,
     track_total_hits: false,
