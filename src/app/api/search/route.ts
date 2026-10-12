@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getElasticsearchClient, isEsAvailable, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS, recordEsSuccess, recordEsFailure } from '@/lib/elasticsearch';
+import { getElasticsearchClient, isEsAvailable, recordEsSuccess, recordEsFailure } from '@/lib/elasticsearch';
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { searchQuerySchema } from '@/lib/validation';
 import { logger } from '@/lib/logger';
 import { enqueueAnalytics } from '@/lib/events';
 import { normalizeBoundaryPolygons } from '@/lib/filterNormalize';
+import { buildFilters, getListingCountsFor, indexForScope } from '@/lib/esQueryBuilder';
 import { flags } from '@/lib/flags';
+import { attachTiming, makeServerTiming } from '@/lib/routeTiming';
 
 function roundBounds(b: any) {
   if (!b) return b;
@@ -19,8 +21,10 @@ function roundBounds(b: any) {
 }
 
 export async function POST(req: NextRequest) {
+  const timing = makeServerTiming();
   const identifier = getRateLimitIdentifier(req);
   const { allowed } = await checkSearchRateLimit(identifier);
+  timing.record('rl');
   if (!allowed) {
     return NextResponse.json({ error: 'Too many search requests. Please slow down.' }, { status: 429 });
   }
@@ -65,155 +69,31 @@ export async function POST(req: NextRequest) {
     const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), polygons: hasBoundary ? boundaryRings : null, pageSize, sort, scope, cursor: cursor ?? null })}`;
 
     const cached = await cacheGet(cacheKey);
+    timing.record('cache');
     if (cached) {
-      return NextResponse.json(cached);
+      return attachTiming(NextResponse.json(cached), timing);
     }
 
     const esUp = await isEsAvailable();
+    timing.record('ping');
     if (!esUp) {
       return NextResponse.json({ error: 'ES unavailable', message: 'Search engine temporarily down' }, { status: 503 });
     }
 
     const es = getElasticsearchClient();
-    const must: any[] = [];
-    const commonFilters: any[] = [];
-    const propertyFilters: any[] = [];
 
-    // With an exact boundary, geography filters and text only scores
-    // (small places often lack text tokens entirely — see esQueryBuilder).
-    const textClauses: any[] = [];
-    if (query) {
-      textClauses.push({
-        multi_match: {
-          query,
-          fields: scope === 'both'
-            ? ['title^3', 'name^3', 'description^2', 'location_text^2', 'project_name^2', 'developer_name^2']
-            : ['title^3', 'description^2', 'location_text^2', 'project_name^2', 'developer_name'],
-          type: 'best_fields',
-          fuzziness: 'AUTO',
-          operator: 'or',
-        },
-      });
-    }
-
-    if (location) {
-      textClauses.push({
-        multi_match: {
-          query: location,
-          fields: ['location_text^3', 'title^2', 'name^2', 'project_name^1'],
-          type: 'best_fields',
-          fuzziness: 'AUTO',
-        },
-      });
-    }
-    if (textClauses.length > 0) {
-      if (hasBoundary) {
-        must.push({ bool: { should: textClauses, minimum_should_match: 0 } });
-      } else {
-        must.push(...textClauses);
-      }
-    }
-
-    commonFilters.push({ term: { status: 'available' } });
-
-    if (minPrice || maxPrice) {
-      const range: any = {};
-      if (minPrice) range.gte = minPrice;
-      if (maxPrice) range.lte = maxPrice;
-      commonFilters.push({ range: { [scope === 'both' ? 'sort_price' : 'price']: range } });
-    }
-
-    if (propertyType) propertyFilters.push({ term: { property_type: propertyType } });
-    if (bhkType) propertyFilters.push({ term: { bhk_type: bhkType } });
-    const normalizedPurpose =
-      typeof listingPurpose === 'string' && listingPurpose.trim()
-        ? listingPurpose.trim().toLowerCase()
-        : undefined;
-    const isRentLikeIntent =
-      typeof listingPurpose === 'string' && /rent|lease|\bpg\b/i.test(listingPurpose);
-    if (normalizedPurpose === 'sell' || normalizedPurpose === 'sale') {
-      propertyFilters.push({ terms: { listing_purpose: ['Sell', 'Sale'] } });
-    } else if (normalizedPurpose) {
-      propertyFilters.push({ term: { listing_purpose: listingPurpose } });
-    }
-    if (normalizedAmenities.length > 0) propertyFilters.push({ terms: { amenities: normalizedAmenities } });
-    if (normalizedFurnishings.length > 0) propertyFilters.push({ terms: { furnishings: normalizedFurnishings } });
-
-    if (bathrooms != null) {
-      propertyFilters.push({ range: { bathrooms: { gte: bathrooms } } });
-    }
-
-    if (minArea || maxArea) {
-      const range: any = {};
-      if (minArea) range.gte = minArea;
-      if (maxArea) range.lte = maxArea;
-      propertyFilters.push({ range: { area_sqft: range } });
-    }
-
-    if (lat != null && lng != null) {
-      commonFilters.push({
-        geo_distance: {
-          distance: `${radiusKm || 50}km`,
-          location: { lat, lon: lng },
-        },
-      });
-    }
-
-    if (bounds) {
-      const { minLat, maxLat, minLng, maxLng } = bounds;
-      if (minLat != null && maxLat != null && minLng != null && maxLng != null) {
-        commonFilters.push({
-          geo_bounding_box: {
-            location: {
-              top_left: { lat: maxLat, lon: minLng },
-              bottom_right: { lat: minLat, lon: maxLng },
-            },
-          },
-        });
-      }
-    }
-
-    if (boundaryRings.length === 1) {
-      commonFilters.push({
-        geo_polygon: {
-          location: {
-            points: boundaryRings[0].map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })),
-          },
-        },
-      });
-    } else if (boundaryRings.length > 1) {
-      commonFilters.push({
-        bool: {
-          should: boundaryRings.map((ring: any[]) => ({
-            geo_polygon: {
-              location: { points: ring.map((p: { lat: number; lng: number }) => ({ lat: p.lat, lon: p.lng })) },
-            },
-          })),
-          minimum_should_match: 1,
-        },
-      });
-    }
-
-    // Rent-like intents exclude for-sale projects (single query, no app-side filter).
-    if (isRentLikeIntent) {
-      commonFilters.push({ bool: { must_not: { term: { entity_type: 'project' } } } });
-    }
-
-    const filters: any[] = [...commonFilters];
-
-    if (scope === 'both' && propertyFilters.length > 0) {
-      filters.push({
-        bool: {
-          should: [
-            { bool: { filter: propertyFilters } },
-            { bool: { must_not: { exists: { field: 'bhk_type' } } } },
-          ],
-          minimum_should_match: 1,
-        },
-      });
-    } else {
-      filters.push(...propertyFilters);
-    }
+    // AD3: the append path uses the SAME population builder as map-data page 1.
+    // The previous inline copy had drifted (no entity_type scope constraint,
+    // `price` instead of `low_price` for projects, minBedrooms ignored), so a
+    // Load-More page could paginate a different population than page 1.
+    const { must, filters } = buildFilters(
+      {
+        ...parsed.data,
+        polygon: undefined,
+        polygons: boundaryRings.length > 0 ? boundaryRings : undefined,
+      },
+      scope
+    );
 
     let sortClause: any[];
     if (scope === 'both') {
@@ -264,13 +144,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const nativeCounts = flags.nativeCounts;
+    const splitCounts = flags.splitCounts;
     const esQuery: any = {
-      index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
+      index: indexForScope(scope),
       size: pageSize,
-      // Exact badge totals come from filter→value_count siblings below (cheap
-      // counters riding the matching-doc pass — exact at every scale), so the
-      // legacy capped count is off. Reversible via flags.exactCountCounters.
-      track_total_hits: flags.exactCountCounters ? false : 10000,
+      // Split (default): the list query never counts — exact totals come from
+      // the cached size:0 count request below (2-3.5x faster at 1M; a top-k
+      // collector otherwise counts every match). Inline fallbacks as before.
+      track_total_hits: splitCounts ? false : (nativeCounts ? true : (flags.exactCountCounters ? false : 10000)),
       query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
       // Unique tiebreaker so search_after pagination can never return the
       // same doc on two pages (tied sorts otherwise overlap → duplicate keys).
@@ -280,9 +162,10 @@ export async function POST(req: NextRequest) {
 
     if (scope === 'both') {
       esQuery.aggs = {
-        // by_entity_type replaced by exact counters below when the flag is on
-        // (terms over all N matches on every page is pure overhead).
-        ...(flags.exactCountCounters ? {} : { by_entity_type: { terms: { field: 'entity_type', size: 2 } } }),
+        // Split: counts (incl. the split) come from the count request. Inline:
+        // cheapest exact split (one ordinal pass); the counter fallback skips
+        // it and derives the split from value_count siblings instead.
+        ...(splitCounts ? {} : nativeCounts || !flags.exactCountCounters ? { by_entity_type: { terms: { field: 'entity_type', size: 2 } } } : {}),
       };
     } else {
       esQuery.aggs = {
@@ -295,11 +178,10 @@ export async function POST(req: NextRequest) {
       };
     }
 
-    // Exact totals via filter→value_count siblings (same cheap-counter pattern
-    // as map-data LIST): one integer increment per already-visited matching
-    // doc — no heap, no fetch, no ordinals. Un-narrowed base filters on purpose
+    // Counter fallback only (SPLIT_COUNTS=0, NATIVE_COUNTS=0): exact totals via
+    // filter→value_count siblings. Un-narrowed base filters on purpose
     // (quantile ranges must never feed the badge count).
-    if (flags.exactCountCounters) {
+    if (!splitCounts && !nativeCounts && flags.exactCountCounters) {
       const scoped = (extra: any) => ({
         filter: {
           bool: {
@@ -324,7 +206,12 @@ export async function POST(req: NextRequest) {
       esQuery.search_after = cursor;
     }
 
-    const esResponse = await es.search(esQuery);
+    const tCompute = performance.now();
+    const [esResponse, counts] = await Promise.all([
+      es.search(esQuery),
+      splitCounts ? getListingCountsFor(must, filters, scope, sort) : Promise.resolve(null),
+    ]);
+    timing.record('compute', performance.now() - tCompute);
     recordEsSuccess();
     const hits = esResponse.hits.hits;
 
@@ -334,50 +221,56 @@ export async function POST(req: NextRequest) {
       _sort: hit.sort,
     }));
 
-    const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
-    const totalRelation = typeof esResponse.hits.total === 'object' ? (esResponse.hits.total as any).relation : undefined;
-
-    // Exact badge totals from the counter siblings when present (always eq).
-    // Falls back to the legacy capped/terms path when the flag is off.
-    const xTotal: number | undefined = (esResponse as any).aggregations?.exact_total?.total?.value;
-    const xProp: number | undefined = (esResponse as any).aggregations?.exact_property?.total?.value;
-    const xProj: number | undefined = (esResponse as any).aggregations?.exact_project?.total?.value;
-    const hasExact = typeof xTotal === 'number' && typeof xProp === 'number' && typeof xProj === 'number';
-    const exactTotal: number = hasExact ? (xTotal as number) : (typeof total === 'number' ? total : 0);
-    const exactRelation = hasExact ? 'eq' : totalRelation;
-
+    let exactTotal: number;
+    let exactRelation: string | undefined;
     let propertyTotal = 0;
     let projectTotal = 0;
-    if (scope === 'both') {
-      if (typeof xProp === 'number' && typeof xProj === 'number') {
-        propertyTotal = xProp;
-        projectTotal = xProj;
-      } else {
-        const entityAgg = (esResponse as any).aggregations?.by_entity_type?.buckets || [];
-        for (const bucket of entityAgg) {
-          if (bucket.key === 'property') propertyTotal = bucket.doc_count;
-          if (bucket.key === 'project') projectTotal = bucket.doc_count;
-        }
-      }
-    } else if (scope === 'projects') {
-      projectTotal = exactTotal;
+    if (splitCounts && counts) {
+      // Exact totals from the cached count request (relation 'eq' — uncapped).
+      exactTotal = counts.total;
+      exactRelation = counts.totalRelation;
+      propertyTotal = counts.propertyTotal;
+      projectTotal = counts.projectTotal;
     } else {
-      propertyTotal = exactTotal;
+      const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total;
+      const totalRelation = typeof esResponse.hits.total === 'object' ? (esResponse.hits.total as any).relation : undefined;
+
+      // Exact badge totals from the counter siblings when present (always eq).
+      // Falls back to the legacy capped/terms path when the flag is off.
+      const xTotal: number | undefined = (esResponse as any).aggregations?.exact_total?.total?.value;
+      const xProp: number | undefined = (esResponse as any).aggregations?.exact_property?.total?.value;
+      const xProj: number | undefined = (esResponse as any).aggregations?.exact_project?.total?.value;
+      const hasExact = typeof xTotal === 'number' && typeof xProp === 'number' && typeof xProj === 'number';
+      exactTotal = hasExact ? (xTotal as number) : typeof total === 'number' ? total : 0;
+      exactRelation = hasExact ? 'eq' : totalRelation;
+
+      if (scope === 'both') {
+        if (typeof xProp === 'number' && typeof xProj === 'number') {
+          propertyTotal = xProp;
+          projectTotal = xProj;
+        } else {
+          const entityAgg = (esResponse as any).aggregations?.by_entity_type?.buckets || [];
+          for (const bucket of entityAgg) {
+            if (bucket.key === 'property') propertyTotal = bucket.doc_count;
+            if (bucket.key === 'project') projectTotal = bucket.doc_count;
+          }
+        }
+      } else if (scope === 'projects') {
+        projectTotal = exactTotal;
+      } else {
+        propertyTotal = exactTotal;
+      }
     }
 
-    // Intent-aware empty state (mirrors esQueryBuilder.queryESListings):
-    // one cheap count without the purpose filter, only when total is 0.
+    // Intent-aware empty state (mirrors esQueryBuilder.queryESListings): one
+    // cheap count without the purpose filter, only when total is 0, riding the
+    // same cached/coalesced count path.
     let withoutPurposeTotal: number | null = null;
     if (exactTotal === 0 && typeof listingPurpose === 'string' && listingPurpose.trim()) {
       try {
-        const relaxedFilters = filters.filter(
-          (f: any) => JSON.stringify(f).indexOf('listing_purpose') === -1
-        );
-        const countRes: any = await es.count({
-          index: scope === 'both' ? [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS] : ES_INDEX_ALIAS,
-          query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: relaxedFilters } },
-        });
-        withoutPurposeTotal = typeof countRes.count === 'number' ? countRes.count : null;
+        const relaxed = buildFilters({ ...parsed.data, listingPurpose: undefined }, scope);
+        const relaxedCounts = await getListingCountsFor(relaxed.must, relaxed.filters, scope, sort);
+        withoutPurposeTotal = typeof relaxedCounts?.total === 'number' ? relaxedCounts.total : null;
       } catch {
         withoutPurposeTotal = null;
       }
@@ -397,7 +290,9 @@ export async function POST(req: NextRequest) {
       response.projectTotal = projectTotal;
     }
 
+    const tCacheWrite = performance.now();
     await cacheSet(cacheKey, response, 60);
+    timing.record('cacheWrite', performance.now() - tCacheWrite);
 
     logger.searchAnalytics(query || location || '', response.total, 0);
 
@@ -416,7 +311,10 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     }
 
-    return NextResponse.json(response);
+    const tSerialize = performance.now();
+    const res = NextResponse.json(response);
+    timing.record('serialize', performance.now() - tSerialize);
+    return attachTiming(res, timing);
   } catch (error: any) {
     logger.error('Search API error', error.message);
     recordEsFailure();

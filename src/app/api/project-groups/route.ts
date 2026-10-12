@@ -10,12 +10,13 @@ import { coveringTileUnionBounds } from '@/lib/mapTiles';
 // newly indexed project appears without waiting a full cache tier.
 const EMPTY_PILLS_TTL = 30;
 import { redisTTLForSort, cdnSMaxAgeForSort } from '@/lib/mapTiles';
+import { attachTiming, makeServerTiming, ServerTiming } from '@/lib/routeTiming';
 
 // Lazy pills: standalone by_project terms agg (size:0, no hits).
 // The list path skips by_project (flags.lazyPills) to save ~15-20% CPU at
 // 10M docs; clients fetch this separately with skeleton UI. Own long-TTL
 // cache key so adding Redis/ES infra scales pills independently.
-async function serveGroups(searchParams: URLSearchParams) {
+async function serveGroups(searchParams: URLSearchParams, timing: ServerTiming) {
   const get = (k: string) => searchParams.get(k);
   const num = (k: string) => {
     const v = get(k);
@@ -69,9 +70,11 @@ async function serveGroups(searchParams: URLSearchParams) {
   const key = listKey.replace('md:v5:l:', 'pg:v2:');
   const ttl = Math.max(redisTTLForSort(sortStr), 300);
   const esUp = await isEsAvailable();
-  if (!esUp) return NextResponse.json({ error: 'Search unavailable', projectGroups: [] }, { status: 503 });
+  timing.record('ping');
+  if (!esUp) return attachTiming(NextResponse.json({ error: 'Search unavailable', projectGroups: [] }, { status: 503 }), timing);
   // AD8/F8: coalesce across instances — a plain cacheGet/Set lets N pods each
   // run the full-population terms agg for the same new tile set.
+  const tCompute = performance.now();
   const { value, status } = await singleflightCompute<{ projectGroups: any[] }>(
     key,
     ttl,
@@ -94,13 +97,17 @@ async function serveGroups(searchParams: URLSearchParams) {
     },
     { lockTtlMs: 8000, waitMs: 9000, skipCacheWrite: true }
   );
-  if (!value) return NextResponse.json({ error: 'Search unavailable', projectGroups: [] }, { status: 503 });
-  return NextResponse.json(value, {
+  timing.record('compute', performance.now() - tCompute);
+  if (!value) return attachTiming(NextResponse.json({ error: 'Search unavailable', projectGroups: [] }, { status: 503 }), timing);
+  const tSerialize = performance.now();
+  const res = NextResponse.json(value, {
     headers: {
       'X-Cache': status === 'hit' ? 'HIT' : status === 'waited' ? 'WAIT' : 'MISS',
       'Cache-Control': `public, s-maxage=${cdnSMaxAgeForSort(sortStr)}, stale-while-revalidate=60`,
     },
   });
+  timing.record('serialize', performance.now() - tSerialize);
+  return attachTiming(res, timing);
 }
 
 /**
@@ -118,15 +125,19 @@ function edgeCacheable(res: Response): Response {
 }
 
 export async function GET(req: NextRequest) {
+  const timing = makeServerTiming();
   const identifier = getRateLimitIdentifier(req);
   const { allowed } = await checkMapRateLimit(identifier);
+  timing.record('rl');
   if (!allowed) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-  return edgeCacheable(await serveGroups(req.nextUrl.searchParams));
+  return edgeCacheable(await serveGroups(req.nextUrl.searchParams, timing));
 }
 
 export async function POST(req: NextRequest) {
+  const timing = makeServerTiming();
   const identifier = getRateLimitIdentifier(req);
   const { allowed } = await checkMapRateLimit(identifier);
+  timing.record('rl');
   if (!allowed) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   try {
     const body = await req.json();
@@ -141,7 +152,7 @@ export async function POST(req: NextRequest) {
       if (v == null) continue;
       sp.set(k, Array.isArray(v) ? v.join(',') : String(v));
     }
-    return serveGroups(sp);
+    return serveGroups(sp, timing);
   } catch (e: any) {
     logger.error('project-groups error', e?.message || e);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

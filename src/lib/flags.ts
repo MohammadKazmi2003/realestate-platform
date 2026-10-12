@@ -23,6 +23,22 @@ export const flags = {
   // P1: cap LIST exact totals to 10K (badge shows 10K+ when gte).
   get listCap10K() { return envOn('LIST_CAP_10K', true); },
   get listTrackCap() { return envNum('LIST_TRACK_CAP', 10000); },
+  // Counting strategy (measured 100k/1M, live ES profile): exact native counts
+  // — `track_total_hits: true` (an integer increment per already-visited match,
+  // ~free over the base pass) + `by_entity_type` terms for the property/project
+  // split (one ordinal pass). The previous filter→value_count counter siblings
+  // re-evaluate the full base filter per counter and measured ~2.6x slower
+  // (218ms vs 83ms at 1M all-matches). Off restores the counter/capped path.
+  get nativeCounts() { return envOn('NATIVE_COUNTS', true); },
+  // Split exact counts from the list fetch. Measured (1M corpus, live ES): the
+  // same exact count costs 52-63ms inline on the size:24 query (the top-k
+  // collector counts every match) but 0-10ms as a size:0 request (Lucene's
+  // sub-linear Weight.count path). The list query therefore runs
+  // track_total_hits:false and counts come from a cached, cross-instance
+  // coalesced size:0 request keyed by the filter population only (no cursor,
+  // sort, or pageSize), so every page and every sort reuses one count.
+  // Off restores inline counting (NATIVE_COUNTS path) exactly.
+  get splitCounts() { return envOn('SPLIT_COUNTS', true); },
   // P2: exact badge totals from filter→value_count counter siblings on LIST
   // (cheap counters riding the matching-doc pass — exact at every scale).
   // Off restores legacy track_total_hits + by_entity_type badge path.
@@ -62,6 +78,10 @@ export const flags = {
   get distSingleflight() { return envOn('DIST_SINGLEFLIGHT', true); },
   // Observability only.
   get obsOnly() { return envOn('OBS_ONLY', false); },
+  // Observability only: emit a Server-Timing header with per-phase wall
+  // durations (rate limit, cache, ping, quantile, list, markers, fill,
+  // serialize, total). Off by default — no header, no behavior change.
+  get routeTiming() { return envOn('ROUTE_TIMING', false); },
 };
 
 // Sort buckets — one cache entry per ordering that changes tile reps.

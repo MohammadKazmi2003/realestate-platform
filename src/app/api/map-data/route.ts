@@ -14,6 +14,7 @@ import {
 } from '@/lib/mapTiles';
 import { flags } from '@/lib/flags';
 import { mapWithConcurrency } from '@/lib/concurrency';
+import { attachTiming, makeServerTiming } from '@/lib/routeTiming';
 
 function cacheHeadersForSort(sort?: string) {
   const sMax = cdnSMaxAgeForSort(sort);
@@ -26,10 +27,12 @@ function cacheHeadersForSort(sort?: string) {
 // invisible to every other pod and multiplies backend load exactly at peak.
 
 export async function POST(req: NextRequest) {
+  const timing = makeServerTiming();
   try {
     // Map rate limiter (separate from search + autocomplete)
     const identifier = getRateLimitIdentifier(req);
     const { allowed } = await checkMapRateLimit(identifier);
+    timing.record('rl');
     if (!allowed) {
       return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
     }
@@ -112,11 +115,12 @@ export async function POST(req: NextRequest) {
       cacheGet<any>(listKey),
       cacheGet<any>(markerKey),
     ]);
+    timing.record('cache');
     listCacheHit = !!cachedList;
     markerCacheHit = !!cachedMarkers;
     if (cachedList && cachedMarkers) {
       logger.info('map-data cache hit', { listKey, markerKey, ms: Date.now() - t0, zoom, scope });
-      return NextResponse.json(
+      return attachTiming(NextResponse.json(
         {
           markers: cachedMarkers,
           results: cachedList.results,
@@ -136,12 +140,13 @@ export async function POST(req: NextRequest) {
             'X-ES-Took': '0',
           },
         }
-      );
+      ), timing);
     }
 
     const esAvailable = await isEsAvailable();
+    timing.record('ping');
     if (!esAvailable) {
-      return NextResponse.json(
+      return attachTiming(NextResponse.json(
         {
           error: 'Search services temporarily unavailable',
           results: [], markers: [], total: 0, totalRelation: undefined,
@@ -149,7 +154,7 @@ export async function POST(req: NextRequest) {
           projectGroups: [], zoom,
         },
         { status: 503 }
-      );
+      ), timing);
     }
 
     // Runtime quantiles for sort-aware tile narrowing (fallback = no-range).
@@ -162,6 +167,7 @@ export async function POST(req: NextRequest) {
     // hide 21 pins behind "show biggest only" — misleading at street level.
     let quantileRange: any | null = null;
     if (flags.quantileFilter && sortStr !== 'popular' && Number(zoom) < 10) {
+      const tQuantile = performance.now();
       try {
         const { getOrComputeQuantileThresholds, quantileRangeForSort: qRange, sortFieldForQuantile: qField } = await import('@/lib/quantiles');
         const qf = qField(sortStr, String(scope || 'both'));
@@ -218,6 +224,7 @@ export async function POST(req: NextRequest) {
           quantileRange = qRange(q, sortStr, String(scope || 'both'));
         }
       } catch { quantileRange = null; }
+      timing.record('quantile', performance.now() - tQuantile);
     }
 
     // P4 helper note: tile MAP uses queryTileMarkersForBounds per covering tile
@@ -229,6 +236,8 @@ export async function POST(req: NextRequest) {
     // outside the compute closure so the cached payload stays clean and the
     // in-flight copy can still be tagged (Invariant 3: never persist internals).
     let tileServedByCompute = false;
+    const tList = performance.now();
+    const tMarkers = performance.now();
     const [searchResult, markers] = await Promise.all([
       // AD8: coalesce across INSTANCES, not just this process. The list key is
       // shared by every user at the same tile union + filters, so N pods each
@@ -244,7 +253,7 @@ export async function POST(req: NextRequest) {
       }).then((r) => {
         if (r.status === 'hit') listCacheHit = true;
         return r.value;
-      }),
+      }).finally(() => timing.record('list', performance.now() - tList)),
       // AD8: markers are the most-shared payload on the site — every user at the
       // same tile union + filters wants the same 500 dots. Coalesce across pods
       // via Redis so N instances don't each run the tile fan-out.
@@ -333,6 +342,7 @@ export async function POST(req: NextRequest) {
                 // Narrowed population fits: exact sort-aware top-K (replaces the
                 // old sort-blind legacy random sample, which could show any 500).
                 try {
+                  const tFill = performance.now();
                   const fr = await (qfill as any)({
                     must: vMust,
                     filters: vFilters,
@@ -341,6 +351,7 @@ export async function POST(req: NextRequest) {
                     size: Math.min(500, tileDocTotal),
                     timeoutMs: 4000,
                   }).catch(() => null);
+                  timing.record('fill', performance.now() - tFill);
                   if (fr && Array.isArray(fr.markers) && fr.markers.length > 0) {
                     merged = (fmd as any)([], clipFill(fr.markers), tileDocTotal, 500);
                   }
@@ -351,6 +362,7 @@ export async function POST(req: NextRequest) {
                 try {
                   const want = Math.min(500, tileDocTotal) - merged.length;
                   if (want > 0) {
+                    const tFill = performance.now();
                     const fr = await (qfill as any)({
                       must: vMust,
                       filters: vFilters,
@@ -359,6 +371,7 @@ export async function POST(req: NextRequest) {
                       size: Math.min(500, want + 50),
                       timeoutMs: 4000,
                     }).catch(() => null);
+                    timing.record('fill', performance.now() - tFill);
                     if (fr && Array.isArray(fr.markers) && fr.markers.length > 0) {
                       merged = (fmd as any)(merged, clipFill(fr.markers), tileDocTotal, 500);
                     }
@@ -410,7 +423,7 @@ export async function POST(req: NextRequest) {
         const v = r.value;
         if (v && tileServedByCompute) (v as any)._tileServed = true;
         return v;
-      }),
+      }).finally(() => timing.record('markers', performance.now() - tMarkers)),
     ]);
     const listMs = Date.now() - listStart;
     const markerMs = Date.now() - markerStart;
@@ -419,7 +432,7 @@ export async function POST(req: NextRequest) {
     if (searchResult && markers) recordEsSuccess();
 
     if (!searchResult || !markers) {
-      return NextResponse.json(
+      return attachTiming(NextResponse.json(
         {
           error: 'Search services temporarily unavailable',
           results: [], markers: [], total: 0, totalRelation: undefined,
@@ -427,7 +440,7 @@ export async function POST(req: NextRequest) {
           projectGroups: [], zoom,
         },
         { status: 503 }
-      );
+      ), timing);
     }
 
     const totalMs = Date.now() - t0;
@@ -445,7 +458,8 @@ export async function POST(req: NextRequest) {
     // Strip internal flag before serializing (non-enumerable guard).
     if ((cleanMarkers as any)._tileServed) delete (cleanMarkers as any)._tileServed;
 
-    return NextResponse.json(
+    const tSerialize = performance.now();
+    const res = NextResponse.json(
       {
         // For map dots — up to 500 lightweight markers (id, lat, lon, price)
         markers: cleanMarkers,
@@ -475,6 +489,8 @@ export async function POST(req: NextRequest) {
         },
       }
     );
+    timing.record('serialize', performance.now() - tSerialize);
+    return attachTiming(res, timing);
   } catch (error: any) {
     // Client aborts are routine here (cancel-on-new + 400ms pan debounce):
     // don't log them as errors, just acknowledge the disconnect.

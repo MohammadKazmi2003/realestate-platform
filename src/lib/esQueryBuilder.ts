@@ -1,5 +1,7 @@
 import { getElasticsearchClient, ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS } from '@/lib/elasticsearch';
 import { flags } from '@/lib/flags';
+import { buildFilterHash64, redisTTLForSort } from '@/lib/mapTiles';
+import { singleflightCompute } from '@/lib/redis';
 
 function sanitize(s: string | undefined, maxLen = 200): string | undefined {
   if (!s) return s;
@@ -106,7 +108,7 @@ export function hashSeed(s: string): number {
 }
 
 // Which alias/aliases to query for a given scope.
-function indexForScope(scope: string) {
+export function indexForScope(scope: string) {
   if (scope === 'both') return [ES_INDEX_ALIAS, PROJECTS_INDEX_ALIAS];
   if (scope === 'projects') return PROJECTS_INDEX_ALIAS;
   return ES_INDEX_ALIAS;
@@ -310,10 +312,10 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
 }
 
 function buildAggregations(scope: string, noEntityCounts = false) {
-  // Entity-type counts for the scope badge (properties vs projects).
-  // NOTE: when exactCountCounters is on, totals come from the cheap
-  // filter→value_count siblings on the fill/LIST query instead — this terms
-  // agg is skipped (it visits all N matches on every pan).
+  // Entity-type counts for the scope badge (properties vs projects). With
+  // native counts (default) this is the cheapest exact split — one ordinal
+  // pass on a 2-value keyword — so it is INCLUDED on the list path. Only the
+  // counter fallback skips it (it derives the split from value_count siblings).
   const aggs: any = {};
   if (scope === 'both' && !noEntityCounts) {
     aggs.by_entity_type = { terms: { field: 'entity_type', size: 5 } };
@@ -334,12 +336,9 @@ function buildAggregations(scope: string, noEntityCounts = false) {
   return aggs;
 }
 
-// Exact totals without track_total_hits: filter→value_count siblings ride the
-// same matching-doc pass the query already performs (one integer increment per
-// doc — no heap, no fetch, no ordinals). Cost ≈ +2-5% of the query vs full
-// exact counting; exact at every scale (no cap, no truncation, no shard
-// pre-trim — unlike grid-bucket sums). `id` is keyword on both indices (the
-// pagination tiebreaker sorts on it), so the counter equals doc count.
+// Exact totals without track_total_hits: filter→value_count siblings re-evaluate
+// the full base filter per counter. Kept only as the NATIVE_COUNTS=0 fallback —
+// measured ~2.6x slower than native counting at 100k/1M (see flags.nativeCounts).
 function buildExactCountAggs(must: any[], filters: any[]) {
   const scoped = (extra: any) => ({
     filter: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: [...filters, extra] } },
@@ -413,35 +412,156 @@ const NEW_LISTING_DAYS = 14;
 // entity type) naturally get more dots — true density, no per-type quota.
 const MARKER_LIMIT = 500;
 
-export async function queryESListings(params: any) {
+// --- Split counts (SPLIT_COUNTS) ---
+//
+// Measured (live ES, 1M corpus, cache-controlled): exact counting costs
+// +32-68ms when attached to a size:24 query (the top-k collector counts every
+// match) but 0-10ms as a size:0 request (Lucene's sub-linear Weight.count
+// path). The list query therefore runs track_total_hits:false and counts come
+// from the functions below, cached and coalesced across instances.
+//
+// The count cache key is the FILTER POPULATION ONLY — no cursor, sort, or
+// pageSize — because counts are page- and sort-invariant. That makes every
+// paginated page and every re-sort of the same population reuse one count
+// instead of recomputing it (the list response cache key includes cursor+sort,
+// so it cannot provide that reuse).
+export function buildCountCacheKey(must: any[], filters: any[]): string {
+  return `md:v5:c:${buildFilterHash64({ must, filters } as Record<string, any>)}`;
+}
+
+export function buildCountQuery(must: any[], filters: any[], scope: string): any {
+  const aggs: any = {};
+  // Exact property/project split in the same count pass (one ordinal pass on a
+  // 2-value keyword). Only meaningful when both entity types are queried.
+  if (scope === 'both') aggs.by_entity_type = { terms: { field: 'entity_type', size: 2 } };
+  return {
+    index: indexForScope(scope),
+    size: 0,
+    track_total_hits: true,
+    query: { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } },
+    ...(Object.keys(aggs).length > 0 ? { aggs } : {}),
+    // The shard request cache only serves size:0 requests. The JS client
+    // hoists this to the URL query string (raw-body callers must not).
+    request_cache: true,
+  };
+}
+
+export function parseListingCounts(
+  res: any,
+  scope: string
+): { total: number; totalRelation?: string; propertyTotal: number; projectTotal: number } {
+  const h = res?.hits?.total;
+  const total = typeof h === 'object' ? h.value : typeof h === 'number' ? h : 0;
+  const totalRelation = typeof h === 'object' ? h.relation : undefined;
+  let propertyTotal = 0;
+  let projectTotal = 0;
+  if (scope === 'both') {
+    for (const b of res?.aggregations?.by_entity_type?.buckets || []) {
+      if (b.key === 'property') propertyTotal = b.doc_count;
+      if (b.key === 'project') projectTotal = b.doc_count;
+    }
+  } else if (scope === 'projects') {
+    projectTotal = total;
+  } else {
+    propertyTotal = total;
+  }
+  return { total, totalRelation, propertyTotal, projectTotal };
+}
+
+// Counts for an already-built population (AD3: callers pass the same
+// must/filters they query with). Redis-cached under the population key and
+// coalesced across instances; failures are never cached and degrade to one
+// uncached attempt rather than hiding the count.
+export async function getListingCountsFor(must: any[], filters: any[], scope: string, sort?: string) {
   const es = getElasticsearchClient();
+  const run = async () => {
+    const res: any = await es.search(buildCountQuery(must, filters, scope));
+    return parseListingCounts(res, scope);
+  };
+  const key = buildCountCacheKey(must, filters);
+  // Tiered TTL so counts expire with the ordering tier they are read beside —
+  // a count must never outlive the list population it describes by much.
+  const ttl = redisTTLForSort(sort);
+  try {
+    const { value } = await singleflightCompute(key, ttl, run);
+    if (value) return value;
+  } catch {
+    /* fall through to the uncached attempt below */
+  }
+  return run();
+}
+
+export async function getListingCounts(params: any, scope: string) {
+  const { must, filters } = buildFilters(params, scope);
+  return getListingCountsFor(must, filters, scope, params?.sort);
+}
+
+// List query plan (pure — exported for tests and benchmarks). Counting strategy
+// is selected HERE so every list surface (browse sidebar via /api/map-data,
+// /api/search) shares one implementation.
+//
+// Measured on live ES (100k and 1M synthetic corpora, cache-controlled):
+//   counters (3x filter→value_count)  218ms  @1M all-matches
+//   native inline (tth:true + terms)   83ms  @1M all-matches
+//   split count (size:0, cached)        1-10ms per count
+// Each counter re-evaluates the full base filter; a top-k collector counts
+// every match; a count-only request uses Lucene's sub-linear Weight.count path.
+// Exact at every scale.
+export function buildListQuery(params: any) {
   const { cursor, pageSize = 24, sort = 'newest', scope = 'both', lat, lng } = params;
 
   const { must, filters } = buildFilters(params, scope);
 
   const query = { bool: { must: must.length > 0 ? must : [{ match_all: {} }], filter: filters } };
 
+  const split = flags.splitCounts;
+  const native = flags.nativeCounts;
   const esQuery: any = {
     index: indexForScope(scope),
     size: pageSize,
-    // Exact totals now come from filter→value_count siblings below (cheap
-    // counters riding the same matching-doc pass — exact at every scale).
-    // track_total_hits stays off: legacy capped counting (even 10K) is pure
-    // overhead once counters exist. Reversible via flags.exactCountCounters.
-    track_total_hits: flags.exactCountCounters ? false : (flags.listCap10K ? flags.listTrackCap : 100000),
+    // Split: counts travel separately (getListingCountsFor) so this query never
+    // counts. Inline: exact via tth:true, or the counter/capped fallbacks.
+    track_total_hits: split
+      ? false
+      : native
+        ? true
+        : (flags.exactCountCounters ? false : (flags.listCap10K ? flags.listTrackCap : 100000)),
     query,
     sort: buildSortClause(sort, lat, lng, scope),
-    aggs: {
-      ...buildAggregations(scope, flags.exactCountCounters),
-      ...(flags.exactCountCounters ? buildExactCountAggs(must, filters) : {}),
-    },
+    aggs: split
+      ? buildAggregations(scope, true)
+      : native
+        ? buildAggregations(scope, false)
+        : {
+            ...buildAggregations(scope, flags.exactCountCounters),
+            ...(flags.exactCountCounters ? buildExactCountAggs(must, filters) : {}),
+          },
     // Only return fields used by the browse page — cuts response size by ~55%
     _source: LISTING_SOURCE_FIELDS,
   };
 
   if (cursor) esQuery.search_after = cursor;
+  return esQuery;
+}
 
-  const esResponse = await es.search(esQuery);
+export async function queryESListings(params: any) {
+  const es = getElasticsearchClient();
+  const { pageSize = 24, scope = 'both' } = params;
+
+  const split = flags.splitCounts;
+  const esQuery = buildListQuery(params);
+  // Split mode: the list query does not count; counts come from the cached,
+  // cross-instance coalesced count request for the same population (AD3 — same
+  // buildFilters). Run both in parallel so a cold request pays max(list, count)
+  // rather than their sum; a cached count costs one Redis read.
+  const countPromise = split
+    ? (() => {
+        const { must, filters } = buildFilters(params, scope);
+        return getListingCountsFor(must, filters, scope, params.sort);
+      })()
+    : Promise.resolve(null);
+
+  const [esResponse, counts] = await Promise.all([es.search(esQuery), countPromise]);
   const hits = esResponse.hits.hits;
 
   // Cap amenity arrays at 6 per doc (cards render 3 + "+N more"); the true
@@ -458,33 +578,45 @@ export async function queryESListings(params: any) {
     };
   });
 
-  const total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total || 0;
-  const totalRelation = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.relation : undefined;
-
-  // Exact badge totals from the counter siblings when present (always eq —
-  // counters have no cap, truncation, or shard pre-trim). Falls back to the
-  // legacy capped/terms path when the flag is off or aggs are missing.
-  const exact = readExactCount((esResponse as any).aggregations);
-  const exactTotal = exact != null ? exact.total : total;
-  const exactRelation = exact != null ? 'eq' : totalRelation;
-
+  let total: number;
+  let totalRelation: string | undefined;
   let propertyTotal = 0;
   let projectTotal = 0;
-  if (scope === 'both') {
-    if (exact != null) {
-      propertyTotal = exact.property;
-      projectTotal = exact.project;
-    } else {
-      const byEntity = (esResponse.aggregations as any)?.by_entity_type?.buckets || [];
-      for (const b of byEntity) {
-        if (b.key === 'property') propertyTotal = b.doc_count;
-        if (b.key === 'project') projectTotal = b.doc_count;
-      }
-    }
-  } else if (scope === 'projects') {
-    projectTotal = exactTotal;
+  if (split && counts) {
+    // Split mode: exact counts from the cached count request (relation 'eq' —
+    // uncapped, no shard pre-trim). The list query never counted.
+    total = counts.total;
+    totalRelation = counts.totalRelation;
+    propertyTotal = counts.propertyTotal;
+    projectTotal = counts.projectTotal;
   } else {
-    propertyTotal = exactTotal;
+    // Inline mode (SPLIT_COUNTS=0): native path reads the exact `hits.total`
+    // (tth:true, relation 'eq') and the property/project split from
+    // by_entity_type; the NATIVE_COUNTS=0 fallback reads the counter siblings
+    // (also exact, just slower). Both are exact at every scale — no cap,
+    // truncation, or shard pre-trim.
+    total = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.value : esResponse.hits.total || 0;
+    totalRelation = typeof esResponse.hits.total === 'object' ? esResponse.hits.total.relation : undefined;
+    const exact = readExactCount((esResponse as any).aggregations);
+    total = exact != null ? exact.total : total;
+    totalRelation = exact != null ? 'eq' : totalRelation;
+
+    if (scope === 'both') {
+      if (exact != null) {
+        propertyTotal = exact.property;
+        projectTotal = exact.project;
+      } else {
+        const byEntity = (esResponse.aggregations as any)?.by_entity_type?.buckets || [];
+        for (const b of byEntity) {
+          if (b.key === 'property') propertyTotal = b.doc_count;
+          if (b.key === 'project') projectTotal = b.doc_count;
+        }
+      }
+    } else if (scope === 'projects') {
+      projectTotal = total;
+    } else {
+      propertyTotal = total;
+    }
   }
 
   const projectGroups = ((esResponse.aggregations as any)?.by_project?.buckets || [])
@@ -496,22 +628,14 @@ export async function queryESListings(params: any) {
 
   // Intent-aware empty state: when a purpose filter zeroes results, one cheap
   // count-only retry without it tells the UI "N available under other intents"
-  // instead of a dead-end "No results". Runs ONLY on empty (no cost otherwise).
-  // Gated on the exact total so the capped/legacy path behaves identically.
+  // instead of a dead-end "No results". Runs ONLY on empty (no cost otherwise)
+  // and rides the same cached/coalesced count path as every other count.
   let withoutPurposeTotal: number | null = null;
-  if (exactTotal === 0 && typeof params?.listingPurpose === 'string' && params.listingPurpose.trim()) {
+  if (total === 0 && typeof params?.listingPurpose === 'string' && params.listingPurpose.trim()) {
     try {
       const relaxed = buildFilters({ ...params, listingPurpose: undefined }, scope);
-      const countRes: any = await es.count({
-        index: indexForScope(scope),
-        query: {
-          bool: {
-            must: relaxed.must.length > 0 ? relaxed.must : [{ match_all: {} }],
-            filter: relaxed.filters,
-          },
-        },
-      });
-      withoutPurposeTotal = typeof countRes.count === 'number' ? countRes.count : null;
+      const relaxedCounts = await getListingCountsFor(relaxed.must, relaxed.filters, scope, params.sort);
+      withoutPurposeTotal = typeof relaxedCounts?.total === 'number' ? relaxedCounts.total : null;
     } catch {
       withoutPurposeTotal = null;
     }
@@ -519,8 +643,8 @@ export async function queryESListings(params: any) {
 
   return {
     results,
-    total: exactTotal,
-    totalRelation: exactRelation,
+    total,
+    totalRelation,
     propertyTotal,
     projectTotal,
     projectGroups,

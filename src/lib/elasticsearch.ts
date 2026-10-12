@@ -95,8 +95,11 @@ export async function isEsAvailable(): Promise<boolean> {
 // tile instead of splitting properties/projects (halves scope=both fan-out).
 // Text (multi_match) queries route to the legacy indices instead — see
 // esTileMarkers.queryTileMarkersForBounds.
-export const TILES_INDEX_ALIAS = 'listings_tile';
+// Read-index names are env-overridable so a benchmark server can point at
+// scratch corpora (bench_props/bench_projects/bench_tile) without touching the
+// live aliases. Defaults are byte-identical to production behavior.
+export const TILES_INDEX_ALIAS = process.env.ES_TILES_INDEX || 'listings_tile';
 
-export const ES_INDEX_ALIAS = 'properties_search';
+export const ES_INDEX_ALIAS = process.env.ES_PROPERTIES_INDEX || 'properties_search';
 export const ES_WRITE_ALIAS = 'properties_write';
-export const PROJECTS_INDEX_ALIAS = 'projects_search';
+export const PROJECTS_INDEX_ALIAS = process.env.ES_PROJECTS_INDEX || 'projects_search';

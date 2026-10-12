@@ -10,7 +10,9 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - xpack.ml.enabled=false
-      - "ES_JAVA_OPTS=-Xms256m -Xmx512m"
+      # Local bench: Docker VM is 4 GB and shared with the Supabase stack;
+      # 1 GB heap leaves headroom for Lucene off-heap + container peers.
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
       - cluster.name=realestate-platform
       - node.name=es01
       - network.host=0.0.0.0
