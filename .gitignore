@@ -76,8 +76,10 @@ playwright-report/
 # local opencode tooling (kept out of git on purpose)
 opencode.json
 .claude/
-playwright.config.ts
-/specs/
+# specs: only the shared state-selection browser test is tracked; the rest of
+# the local spec tooling stays untracked.
+/specs/*
+!/specs/state-selection.spec.ts
 /scripts/verify-map-consistency.js
 /src/lib/esQueryBuilder.test.ts
 # background worker runtime artifacts (start-all.sh pid + log)
@@ -86,3 +88,11 @@ playwright.config.ts
 # local database dumps (schema + data + auth; large and sensitive — never commit)
 local_*.sql
 local_*.sql.gz
+
+# Natural Earth source downloads (regenerate via scripts/build-admin-geo.mjs)
+scripts/data/
+
+# benchmark raw logs/diffs (result JSONs + digests are committed)
+bench-results/*.log
+bench-results/*.diff
+bench-results/lint.txt

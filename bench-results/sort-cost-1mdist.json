@@ -1,0 +1,1314 @@
+{
+  "label": "1mdist",
+  "runs": 5,
+  "viewports": {
+    "delhi_z11": {
+      "sorts": {
+        "newest": {
+          "list": {
+            "wallMs": 39.81404199999997,
+            "tookMs": 32,
+            "queryMs": 20.552654,
+            "collectMs": 17.535773,
+            "fetchMs": 2.067792,
+            "cpuMs": 40.167927,
+            "leaves": {
+              "filter_term": 6.911457,
+              "range": 4.464124
+            },
+            "children": {
+              "SimpleFieldCollector": 11.213932,
+              "AggregatorCollector: []": 1.719826
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 32.28212499999972,
+            "tookMs": 29,
+            "queryMs": 17.94506,
+            "collectMs": 15.919368,
+            "fetchMs": 0,
+            "cpuMs": 33.743001,
+            "leaves": {
+              "filter_term": 5.272715,
+              "range": 3.679692
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 12.780409,
+              "PartialHitCountCollector": 0.054958
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 14.66953
+            }
+          },
+          "fill": {
+            "wallMs": 100.88254200000029,
+            "tookMs": 82,
+            "queryMs": 22.445673,
+            "collectMs": 35.762453,
+            "fetchMs": 27.957375,
+            "cpuMs": 86.459635,
+            "leaves": {
+              "filter_term": 6.811787,
+              "range": 4.934221
+            },
+            "children": {
+              "SimpleFieldCollector": 31.305184
+            },
+            "aggs": {}
+          }
+        },
+        "price_asc": {
+          "list": {
+            "wallMs": 36.43445799999972,
+            "tookMs": 32,
+            "queryMs": 21.867068,
+            "collectMs": 16.2768,
+            "fetchMs": 1.629208,
+            "cpuMs": 39.575408,
+            "leaves": {
+              "filter_term": 6.211879,
+              "range": 4.776007
+            },
+            "children": {
+              "SimpleFieldCollector": 8.310088,
+              "AggregatorCollector: []": 1.860789
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 33.19637499999999,
+            "tookMs": 29,
+            "queryMs": 16.224442,
+            "collectMs": 17.096752,
+            "fetchMs": 0,
+            "cpuMs": 33.357793,
+            "leaves": {
+              "filter_term": 4.531187,
+              "range": 3.407856
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 13.615985,
+              "PartialHitCountCollector": 0.08346
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 15.607414
+            }
+          },
+          "fill": {
+            "wallMs": 68.49433299999964,
+            "tookMs": 56,
+            "queryMs": 16.395563,
+            "collectMs": 14.280504,
+            "fetchMs": 27.790041,
+            "cpuMs": 59.558796,
+            "leaves": {
+              "filter_term": 4.492816,
+              "range": 3.58544
+            },
+            "children": {
+              "SimpleFieldCollector": 10.849417
+            },
+            "aggs": {}
+          }
+        },
+        "price_desc": {
+          "list": {
+            "wallMs": 34.84954199999993,
+            "tookMs": 29,
+            "queryMs": 20.354458,
+            "collectMs": 14.725795,
+            "fetchMs": 1.889375,
+            "cpuMs": 37.41095,
+            "leaves": {
+              "filter_term": 5.460524,
+              "range": 4.719413
+            },
+            "children": {
+              "SimpleFieldCollector": 7.214871,
+              "AggregatorCollector: []": 1.719901
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 34.943999999999505,
+            "tookMs": 32,
+            "queryMs": 18.379423,
+            "collectMs": 18.440976,
+            "fetchMs": 0,
+            "cpuMs": 36.922329,
+            "leaves": {
+              "filter_term": 5.154697,
+              "range": 3.79415
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 14.756689,
+              "PartialHitCountCollector": 0.066791
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 17.799241
+            }
+          },
+          "fill": {
+            "wallMs": 155.09991700000046,
+            "tookMs": 131,
+            "queryMs": 31.886874,
+            "collectMs": 50.789625,
+            "fetchMs": 71.419583,
+            "cpuMs": 128.024097,
+            "leaves": {
+              "filter_term": 11.016121,
+              "range": 9.096169
+            },
+            "children": {
+              "SimpleFieldCollector": 44.486979
+            },
+            "aggs": {}
+          }
+        },
+        "beds": {
+          "list": {
+            "wallMs": 50.44304199999988,
+            "tookMs": 44,
+            "queryMs": 26.066097,
+            "collectMs": 18.283249,
+            "fetchMs": 6.261875,
+            "cpuMs": 49.189531,
+            "leaves": {
+              "filter_term": 7.231848,
+              "range": 5.798843
+            },
+            "children": {
+              "SimpleFieldCollector": 10.261266,
+              "AggregatorCollector: []": 1.939774
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 52.299707999999555,
+            "tookMs": 45,
+            "queryMs": 22.553475,
+            "collectMs": 24.200287,
+            "fetchMs": 0,
+            "cpuMs": 45.997841,
+            "leaves": {
+              "filter_term": 8.048429,
+              "range": 4.925452
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 20.362788,
+              "PartialHitCountCollector": 0.230624
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 22.866735
+            }
+          },
+          "fill": {
+            "wallMs": 94.25154199999997,
+            "tookMs": 79,
+            "queryMs": 21.59771,
+            "collectMs": 16.854199,
+            "fetchMs": 42.893,
+            "cpuMs": 82.359453,
+            "leaves": {
+              "filter_term": 6.58835,
+              "range": 4.278555
+            },
+            "children": {
+              "SimpleFieldCollector": 12.553986
+            },
+            "aggs": {}
+          }
+        },
+        "baths": {
+          "list": {
+            "wallMs": 35.21524999999929,
+            "tookMs": 32,
+            "queryMs": 23.198476,
+            "collectMs": 15.070519,
+            "fetchMs": 1.585667,
+            "cpuMs": 40.883185,
+            "leaves": {
+              "filter_term": 5.525888,
+              "range": 4.574431
+            },
+            "children": {
+              "SimpleFieldCollector": 7.493755,
+              "AggregatorCollector: []": 1.745972
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 32.10554199999933,
+            "tookMs": 29,
+            "queryMs": 17.119184,
+            "collectMs": 16.856059,
+            "fetchMs": 0,
+            "cpuMs": 33.376021,
+            "leaves": {
+              "filter_term": 4.760711,
+              "range": 3.240045
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 13.451528,
+              "PartialHitCountCollector": 0.051083
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 15.76049
+            }
+          },
+          "fill": {
+            "wallMs": 96.43600000000151,
+            "tookMs": 82,
+            "queryMs": 21.031479,
+            "collectMs": 17.019641,
+            "fetchMs": 46.44425,
+            "cpuMs": 84.568911,
+            "leaves": {
+              "filter_term": 6.328582,
+              "range": 4.544617
+            },
+            "children": {
+              "SimpleFieldCollector": 13.328761
+            },
+            "aggs": {}
+          }
+        },
+        "sqft": {
+          "list": {
+            "wallMs": 32.55633399999897,
+            "tookMs": 28,
+            "queryMs": 20.53221,
+            "collectMs": 14.906985,
+            "fetchMs": 1.515292,
+            "cpuMs": 37.379437,
+            "leaves": {
+              "filter_term": 5.411492,
+              "range": 4.007797
+            },
+            "children": {
+              "SimpleFieldCollector": 7.66194,
+              "AggregatorCollector: []": 1.735396
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 37.897790999999415,
+            "tookMs": 34,
+            "queryMs": 18.66509,
+            "collectMs": 18.284751,
+            "fetchMs": 0,
+            "cpuMs": 37.395915,
+            "leaves": {
+              "filter_term": 5.134423,
+              "range": 4.141436
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 14.603788,
+              "PartialHitCountCollector": 0.06488
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 16.88161
+            }
+          },
+          "fill": {
+            "wallMs": 95.5135420000006,
+            "tookMs": 78,
+            "queryMs": 25.120578,
+            "collectMs": 17.3599,
+            "fetchMs": 36.362,
+            "cpuMs": 78.724552,
+            "leaves": {
+              "filter_term": 7.373584,
+              "range": 4.515317
+            },
+            "children": {
+              "SimpleFieldCollector": 13.322775
+            },
+            "aggs": {}
+          }
+        },
+        "lot": {
+          "list": {
+            "wallMs": 33.76391700000022,
+            "tookMs": 30,
+            "queryMs": 21.477082,
+            "collectMs": 14.752148,
+            "fetchMs": 2.050292,
+            "cpuMs": 38.356438,
+            "leaves": {
+              "filter_term": 5.823387,
+              "range": 5.005768
+            },
+            "children": {
+              "SimpleFieldCollector": 7.86371,
+              "AggregatorCollector: []": 1.704773
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 57.632958000000144,
+            "tookMs": 53,
+            "queryMs": 26.457734,
+            "collectMs": 26.855768,
+            "fetchMs": 0,
+            "cpuMs": 53.389585,
+            "leaves": {
+              "filter_term": 9.186167,
+              "range": 5.71799
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 22.67374,
+              "PartialHitCountCollector": 0.204792
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 26.402021
+            }
+          },
+          "fill": {
+            "wallMs": 93.58987499999967,
+            "tookMs": 80,
+            "queryMs": 22.192836,
+            "collectMs": 18.184093,
+            "fetchMs": 41.681333,
+            "cpuMs": 83.509843,
+            "leaves": {
+              "filter_term": 7.357916,
+              "range": 4.575865
+            },
+            "children": {
+              "SimpleFieldCollector": 13.973182
+            },
+            "aggs": {}
+          }
+        },
+        "popular": {
+          "list": {
+            "wallMs": 36.19970899999862,
+            "tookMs": 31,
+            "queryMs": 23.487415,
+            "collectMs": 15.934587,
+            "fetchMs": 2.093125,
+            "cpuMs": 42.078069,
+            "leaves": {
+              "filter_term": 6.486673,
+              "range": 5.012176
+            },
+            "children": {
+              "SimpleFieldCollector": 8.27285,
+              "AggregatorCollector: []": 1.842452
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 51.507166999999754,
+            "tookMs": 44,
+            "queryMs": 23.707977,
+            "collectMs": 24.503609,
+            "fetchMs": 0,
+            "cpuMs": 48.253795,
+            "leaves": {
+              "filter_term": 6.625175,
+              "range": 5.569306
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 19.651959,
+              "PartialHitCountCollector": 0.125375
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 22.277199
+            }
+          },
+          "fill": {
+            "wallMs": 144.20474999999897,
+            "tookMs": 120,
+            "queryMs": 25.849947,
+            "collectMs": 41.510106,
+            "fetchMs": 40.4515,
+            "cpuMs": 136.570266,
+            "leaves": {
+              "filter_term": 7.488294,
+              "range": 6.146057
+            },
+            "children": {
+              "SimpleFieldCollector": 36.638593
+            },
+            "aggs": {}
+          }
+        }
+      }
+    },
+    "dubai_z10": {
+      "sorts": {
+        "newest": {
+          "list": {
+            "wallMs": 41.93070799999987,
+            "tookMs": 38,
+            "queryMs": 23.865457,
+            "collectMs": 20.986345,
+            "fetchMs": 2.071417,
+            "cpuMs": 47.180767,
+            "leaves": {
+              "filter_term": 6.852611,
+              "range": 5.524732
+            },
+            "children": {
+              "SimpleFieldCollector": 12.119033,
+              "AggregatorCollector: []": 2.088988
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 36.679542000001675,
+            "tookMs": 34,
+            "queryMs": 20.096383,
+            "collectMs": 19.902338,
+            "fetchMs": 0,
+            "cpuMs": 40.040137,
+            "leaves": {
+              "filter_term": 5.789617,
+              "range": 3.968883
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 15.39201,
+              "PartialHitCountCollector": 0.057334
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 17.273738
+            }
+          },
+          "fill": {
+            "wallMs": 123.82849999999962,
+            "tookMs": 108,
+            "queryMs": 31.056116,
+            "collectMs": 41.564329,
+            "fetchMs": 42.239041,
+            "cpuMs": 113.360871,
+            "leaves": {
+              "filter_term": 7.797294,
+              "range": 5.95832
+            },
+            "children": {
+              "SimpleFieldCollector": 36.766211
+            },
+            "aggs": {}
+          }
+        },
+        "price_asc": {
+          "list": {
+            "wallMs": 42.36804199999824,
+            "tookMs": 37,
+            "queryMs": 25.190995,
+            "collectMs": 17.222806,
+            "fetchMs": 2.202917,
+            "cpuMs": 46.467218,
+            "leaves": {
+              "filter_term": 6.712922,
+              "range": 5.925314
+            },
+            "children": {
+              "SimpleFieldCollector": 9.17331,
+              "AggregatorCollector: []": 1.898541
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 78.80537499999991,
+            "tookMs": 69,
+            "queryMs": 37.457635,
+            "collectMs": 36.917465,
+            "fetchMs": 0,
+            "cpuMs": 72.957612,
+            "leaves": {
+              "filter_term": 11.666294,
+              "range": 9.05937
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 31.068679,
+              "PartialHitCountCollector": 0.255171
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 33.770147
+            }
+          },
+          "fill": {
+            "wallMs": 119.81016699999964,
+            "tookMs": 94,
+            "queryMs": 26.4846,
+            "collectMs": 21.190438,
+            "fetchMs": 34.719708,
+            "cpuMs": 88.213798,
+            "leaves": {
+              "filter_term": 7.406713,
+              "range": 6.035047
+            },
+            "children": {
+              "SimpleFieldCollector": 15.876021
+            },
+            "aggs": {}
+          }
+        },
+        "price_desc": {
+          "list": {
+            "wallMs": 38.755333000000974,
+            "tookMs": 35,
+            "queryMs": 25.200393,
+            "collectMs": 17.294683,
+            "fetchMs": 2.158209,
+            "cpuMs": 45.163161,
+            "leaves": {
+              "filter_term": 7.363376,
+              "range": 5.574127
+            },
+            "children": {
+              "SimpleFieldCollector": 8.660021,
+              "AggregatorCollector: []": 2.09338
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 36.040790999999444,
+            "tookMs": 32,
+            "queryMs": 18.539698,
+            "collectMs": 18.923415,
+            "fetchMs": 0,
+            "cpuMs": 37.411715,
+            "leaves": {
+              "filter_term": 5.271599,
+              "range": 3.734234
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 14.596589,
+              "PartialHitCountCollector": 0.094539
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 16.757901
+            }
+          },
+          "fill": {
+            "wallMs": 59.77787499999977,
+            "tookMs": 50,
+            "queryMs": 18.610923,
+            "collectMs": 18.245722,
+            "fetchMs": 17.858541,
+            "cpuMs": 54.207888,
+            "leaves": {
+              "filter_term": 5.077888,
+              "range": 4.331354
+            },
+            "children": {
+              "SimpleFieldCollector": 14.201016
+            },
+            "aggs": {}
+          }
+        },
+        "beds": {
+          "list": {
+            "wallMs": 33.89179199999853,
+            "tookMs": 30,
+            "queryMs": 23.342742,
+            "collectMs": 15.742199,
+            "fetchMs": 1.180583,
+            "cpuMs": 41.056084,
+            "leaves": {
+              "filter_term": 5.927136,
+              "range": 4.886052
+            },
+            "children": {
+              "SimpleFieldCollector": 7.983812,
+              "AggregatorCollector: []": 1.823532
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 40.53350000000137,
+            "tookMs": 37,
+            "queryMs": 20.175032,
+            "collectMs": 21.266552,
+            "fetchMs": 0,
+            "cpuMs": 41.475618,
+            "leaves": {
+              "filter_term": 6.090781,
+              "range": 4.09583
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 16.948685,
+              "PartialHitCountCollector": 0.104126
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 19.074145
+            }
+          },
+          "fill": {
+            "wallMs": 69.1103750000002,
+            "tookMs": 57,
+            "queryMs": 19.914545,
+            "collectMs": 15.657306,
+            "fetchMs": 25.955125,
+            "cpuMs": 61.904415,
+            "leaves": {
+              "filter_term": 5.626817,
+              "range": 3.774568
+            },
+            "children": {
+              "SimpleFieldCollector": 11.09659
+            },
+            "aggs": {}
+          }
+        },
+        "baths": {
+          "list": {
+            "wallMs": 54.57887499999924,
+            "tookMs": 48,
+            "queryMs": 31.062902,
+            "collectMs": 18.821989,
+            "fetchMs": 4.928834,
+            "cpuMs": 56.221642,
+            "leaves": {
+              "filter_term": 8.373195,
+              "range": 6.235027
+            },
+            "children": {
+              "SimpleFieldCollector": 10.430108,
+              "AggregatorCollector: []": 2.215431
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 56.21979199999987,
+            "tookMs": 51,
+            "queryMs": 25.82397,
+            "collectMs": 28.50593,
+            "fetchMs": 0,
+            "cpuMs": 54.410693,
+            "leaves": {
+              "filter_term": 7.825184,
+              "range": 5.913509
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 23.303163,
+              "PartialHitCountCollector": 0.167998
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 24.661524
+            }
+          },
+          "fill": {
+            "wallMs": 83.71695799999725,
+            "tookMs": 68,
+            "queryMs": 21.353885,
+            "collectMs": 17.086246,
+            "fetchMs": 33.92125,
+            "cpuMs": 72.482776,
+            "leaves": {
+              "filter_term": 5.695841,
+              "range": 4.341725
+            },
+            "children": {
+              "SimpleFieldCollector": 12.712463
+            },
+            "aggs": {}
+          }
+        },
+        "sqft": {
+          "list": {
+            "wallMs": 51.057958999997936,
+            "tookMs": 46,
+            "queryMs": 27.460246,
+            "collectMs": 18.440754,
+            "fetchMs": 3.054708,
+            "cpuMs": 50.49092,
+            "leaves": {
+              "filter_term": 8.168452,
+              "range": 5.459122
+            },
+            "children": {
+              "SimpleFieldCollector": 10.363899,
+              "AggregatorCollector: []": 2.020721
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 42.97929199999999,
+            "tookMs": 39,
+            "queryMs": 22.615491,
+            "collectMs": 21.746989,
+            "fetchMs": 0,
+            "cpuMs": 44.448022,
+            "leaves": {
+              "filter_term": 6.269796,
+              "range": 4.980394
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 16.988149,
+              "PartialHitCountCollector": 0.084335
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 19.699859
+            }
+          },
+          "fill": {
+            "wallMs": 148.28891600000134,
+            "tookMs": 123,
+            "queryMs": 25.091362,
+            "collectMs": 22.850228,
+            "fetchMs": 85.005417,
+            "cpuMs": 125.630951,
+            "leaves": {
+              "filter_term": 7.52077,
+              "range": 5.568076
+            },
+            "children": {
+              "SimpleFieldCollector": 18.432431
+            },
+            "aggs": {}
+          }
+        },
+        "lot": {
+          "list": {
+            "wallMs": 34.40245900000082,
+            "tookMs": 31,
+            "queryMs": 23.585649,
+            "collectMs": 15.763263,
+            "fetchMs": 1.609542,
+            "cpuMs": 40.767855,
+            "leaves": {
+              "filter_term": 5.651416,
+              "range": 4.810503
+            },
+            "children": {
+              "SimpleFieldCollector": 7.905107,
+              "AggregatorCollector: []": 1.942519
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 51.1687090000014,
+            "tookMs": 45,
+            "queryMs": 28.805462,
+            "collectMs": 24.133787,
+            "fetchMs": 0,
+            "cpuMs": 53.042956,
+            "leaves": {
+              "filter_term": 8.054842,
+              "range": 4.92105
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 19.634941,
+              "PartialHitCountCollector": 0.14967
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 23.200616
+            }
+          },
+          "fill": {
+            "wallMs": 86.11312499999985,
+            "tookMs": 69,
+            "queryMs": 21.226341,
+            "collectMs": 17.479144,
+            "fetchMs": 34.510375,
+            "cpuMs": 73.937674,
+            "leaves": {
+              "filter_term": 5.66167,
+              "range": 4.588218
+            },
+            "children": {
+              "SimpleFieldCollector": 13.027351
+            },
+            "aggs": {}
+          }
+        },
+        "popular": {
+          "list": {
+            "wallMs": 60.147000000000844,
+            "tookMs": 52,
+            "queryMs": 33.63555,
+            "collectMs": 21.063746,
+            "fetchMs": 5.296167,
+            "cpuMs": 60.315025,
+            "leaves": {
+              "filter_term": 11.772539,
+              "range": 8.867244
+            },
+            "children": {
+              "SimpleFieldCollector": 11.059774,
+              "AggregatorCollector: []": 2.427124
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 40.590165999998135,
+            "tookMs": 37,
+            "queryMs": 21.128608,
+            "collectMs": 19.879458,
+            "fetchMs": 0,
+            "cpuMs": 41.598614,
+            "leaves": {
+              "filter_term": 5.871344,
+              "range": 4.487149
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 15.457425,
+              "PartialHitCountCollector": 0.093543
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 19.072727
+            }
+          },
+          "fill": {
+            "wallMs": 89.65404200000194,
+            "tookMs": 73,
+            "queryMs": 21.113184,
+            "collectMs": 29.392009,
+            "fetchMs": 22.384083,
+            "cpuMs": 77.077238,
+            "leaves": {
+              "filter_term": 6.191393,
+              "range": 4.230417
+            },
+            "children": {
+              "SimpleFieldCollector": 25.232525
+            },
+            "aggs": {}
+          }
+        }
+      }
+    },
+    "country_z4": {
+      "sorts": {
+        "newest": {
+          "list": {
+            "wallMs": 371.4683750000004,
+            "tookMs": 368,
+            "queryMs": 353.266814,
+            "collectMs": 298.47511,
+            "fetchMs": 2.3965,
+            "cpuMs": 652.902465,
+            "leaves": {
+              "filter_term": 50.845171,
+              "range": 47.441324
+            },
+            "children": {
+              "SimpleFieldCollector": 107.330173,
+              "AggregatorCollector: []": 45.731462
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 482.5092499999955,
+            "tookMs": 477,
+            "queryMs": 307.922764,
+            "collectMs": 366.469646,
+            "fetchMs": 0,
+            "cpuMs": 675.719203,
+            "leaves": {
+              "range": 45.806825,
+              "filter_term": 44.968787
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 276.580301,
+              "PartialHitCountCollector": 0.156792
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 370.481144
+            }
+          },
+          "fill": {
+            "wallMs": 362.75108300000284,
+            "tookMs": 345,
+            "queryMs": 363.65105,
+            "collectMs": 225.689771,
+            "fetchMs": 28.095417,
+            "cpuMs": 609.046797,
+            "leaves": {
+              "filter_term": 53.291057,
+              "range": 46.039208
+            },
+            "children": {
+              "SimpleFieldCollector": 127.350647
+            },
+            "aggs": {}
+          }
+        },
+        "price_asc": {
+          "list": {
+            "wallMs": 436.50762499999837,
+            "tookMs": 430,
+            "queryMs": 386.681482,
+            "collectMs": 340.42916,
+            "fetchMs": 1.90875,
+            "cpuMs": 728.905434,
+            "leaves": {
+              "range": 59.909031,
+              "filter_term": 56.255966
+            },
+            "children": {
+              "SimpleFieldCollector": 143.407169,
+              "AggregatorCollector: []": 46.451665
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 2401.305333000004,
+            "tookMs": 2323,
+            "queryMs": 611.921822,
+            "collectMs": 1808.718703,
+            "fetchMs": 0,
+            "cpuMs": 2420.728233,
+            "leaves": {
+              "range": 93.695698,
+              "filter_term": 92.888415
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 1602.748746,
+              "PartialHitCountCollector": 2.106916
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 1482.790427
+            }
+          },
+          "fill": {
+            "wallMs": 535.3647920000003,
+            "tookMs": 512,
+            "queryMs": 501.949769,
+            "collectMs": 313.289771,
+            "fetchMs": 67.74525,
+            "cpuMs": 872.358414,
+            "leaves": {
+              "filter_term": 70.449772,
+              "range": 69.999613
+            },
+            "children": {
+              "SimpleFieldCollector": 178.320482
+            },
+            "aggs": {}
+          }
+        },
+        "price_desc": {
+          "list": {
+            "wallMs": 538.257958999995,
+            "tookMs": 524,
+            "queryMs": 440.253736,
+            "collectMs": 386.865413,
+            "fetchMs": 5.694084,
+            "cpuMs": 857.964823,
+            "leaves": {
+              "filter_term": 67.120743,
+              "range": 57.447753
+            },
+            "children": {
+              "SimpleFieldCollector": 153.023616,
+              "AggregatorCollector: []": 57.081595
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 577.7961249999935,
+            "tookMs": 571,
+            "queryMs": 345.253644,
+            "collectMs": 437.382355,
+            "fetchMs": 0,
+            "cpuMs": 782.688083,
+            "leaves": {
+              "range": 52.98368,
+              "filter_term": 51.189333
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 340.233708,
+              "PartialHitCountCollector": 0.233125
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 487.918002
+            }
+          },
+          "fill": {
+            "wallMs": 574.9676670000044,
+            "tookMs": 532,
+            "queryMs": 701.424776,
+            "collectMs": 306.423087,
+            "fetchMs": 78.695084,
+            "cpuMs": 1086.663489,
+            "leaves": {
+              "range": 99.883811,
+              "filter_term": 76.724985
+            },
+            "children": {
+              "SimpleFieldCollector": 174.147255
+            },
+            "aggs": {}
+          }
+        },
+        "beds": {
+          "list": {
+            "wallMs": 718.1617079999996,
+            "tookMs": 700,
+            "queryMs": 530.864352,
+            "collectMs": 524.431692,
+            "fetchMs": 6.007666,
+            "cpuMs": 1062.073544,
+            "leaves": {
+              "filter_term": 72.368595,
+              "range": 70.362305
+            },
+            "children": {
+              "SimpleFieldCollector": 243.619121,
+              "AggregatorCollector: []": 57.325919
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 656.9207090000127,
+            "tookMs": 650,
+            "queryMs": 399.721525,
+            "collectMs": 509.04147,
+            "fetchMs": 0,
+            "cpuMs": 915.910087,
+            "leaves": {
+              "filter_term": 61.06882,
+              "range": 57.382473
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 397.195586,
+              "PartialHitCountCollector": 0.254459
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 503.038732
+            }
+          },
+          "fill": {
+            "wallMs": 514.0300840000127,
+            "tookMs": 498,
+            "queryMs": 402.942575,
+            "collectMs": 224.236182,
+            "fetchMs": 63.964041,
+            "cpuMs": 771.186343,
+            "leaves": {
+              "filter_term": 62.366146,
+              "range": 60.833821
+            },
+            "children": {
+              "SimpleFieldCollector": 112.606868
+            },
+            "aggs": {}
+          }
+        },
+        "baths": {
+          "list": {
+            "wallMs": 591.8092079999915,
+            "tookMs": 584,
+            "queryMs": 581.42208,
+            "collectMs": 442.512623,
+            "fetchMs": 10.194209,
+            "cpuMs": 1115.647717,
+            "leaves": {
+              "range": 76.197203,
+              "filter_term": 72.000988
+            },
+            "children": {
+              "SimpleFieldCollector": 202.510405,
+              "AggregatorCollector: []": 58.251786
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 883.3190420000028,
+            "tookMs": 857,
+            "queryMs": 507.53582,
+            "collectMs": 646.329318,
+            "fetchMs": 0,
+            "cpuMs": 1159.942509,
+            "leaves": {
+              "filter_term": 85.978764,
+              "range": 72.424058
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 510.797929,
+              "PartialHitCountCollector": 0.286498
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 703.277851
+            }
+          },
+          "fill": {
+            "wallMs": 398.6096249999973,
+            "tookMs": 383,
+            "queryMs": 366.606595,
+            "collectMs": 215.236381,
+            "fetchMs": 58.338,
+            "cpuMs": 644.722157,
+            "leaves": {
+              "filter_term": 55.60179,
+              "range": 53.670276
+            },
+            "children": {
+              "SimpleFieldCollector": 109.947871
+            },
+            "aggs": {}
+          }
+        },
+        "sqft": {
+          "list": {
+            "wallMs": 492.5161669999943,
+            "tookMs": 482,
+            "queryMs": 471.914342,
+            "collectMs": 380.381422,
+            "fetchMs": 3.412583,
+            "cpuMs": 875.893035,
+            "leaves": {
+              "filter_term": 70.544472,
+              "range": 63.537651
+            },
+            "children": {
+              "SimpleFieldCollector": 161.225566,
+              "AggregatorCollector: []": 51.418614
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 705.8583749999962,
+            "tookMs": 697,
+            "queryMs": 394.73093,
+            "collectMs": 548.246546,
+            "fetchMs": 0,
+            "cpuMs": 922.181395,
+            "leaves": {
+              "range": 65.512997,
+              "filter_term": 59.076537
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 438.026253,
+              "PartialHitCountCollector": 0.276625
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 507.812784
+            }
+          },
+          "fill": {
+            "wallMs": 319.64270800001395,
+            "tookMs": 306,
+            "queryMs": 310.983683,
+            "collectMs": 176.746203,
+            "fetchMs": 44.383542,
+            "cpuMs": 536.562929,
+            "leaves": {
+              "range": 48.291386,
+              "filter_term": 46.643534
+            },
+            "children": {
+              "SimpleFieldCollector": 88.957543
+            },
+            "aggs": {}
+          }
+        },
+        "lot": {
+          "list": {
+            "wallMs": 362.81891599998926,
+            "tookMs": 358,
+            "queryMs": 336.386551,
+            "collectMs": 296.854525,
+            "fetchMs": 1.909584,
+            "cpuMs": 613.879869,
+            "leaves": {
+              "filter_term": 46.114654,
+              "range": 43.630652
+            },
+            "children": {
+              "SimpleFieldCollector": 117.338643,
+              "AggregatorCollector: []": 41.759144
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 641.9572920000064,
+            "tookMs": 634,
+            "queryMs": 368.769339,
+            "collectMs": 496.615435,
+            "fetchMs": 0,
+            "cpuMs": 865.423274,
+            "leaves": {
+              "filter_term": 60.137923,
+              "range": 54.416907
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 393.789773,
+              "PartialHitCountCollector": 0.211503
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 489.637601
+            }
+          },
+          "fill": {
+            "wallMs": 351.05729199998314,
+            "tookMs": 338,
+            "queryMs": 361.794625,
+            "collectMs": 194.460899,
+            "fetchMs": 41.648542,
+            "cpuMs": 593.88248,
+            "leaves": {
+              "range": 57.231063,
+              "filter_term": 56.417962
+            },
+            "children": {
+              "SimpleFieldCollector": 96.828744
+            },
+            "aggs": {}
+          }
+        },
+        "popular": {
+          "list": {
+            "wallMs": 400.5042919999978,
+            "tookMs": 391,
+            "queryMs": 401.965856,
+            "collectMs": 334.556014,
+            "fetchMs": 4.539375,
+            "cpuMs": 738.097413,
+            "leaves": {
+              "range": 58.341662,
+              "filter_term": 53.670198
+            },
+            "children": {
+              "SimpleFieldCollector": 128.925864,
+              "AggregatorCollector: []": 49.665219
+            },
+            "aggs": {}
+          },
+          "tile": {
+            "wallMs": 1018.1486250000016,
+            "tookMs": 1006,
+            "queryMs": 707.414172,
+            "collectMs": 751.007953,
+            "fetchMs": 0,
+            "cpuMs": 1483.031806,
+            "leaves": {
+              "filter_term": 132.456854,
+              "range": 69.872175
+            },
+            "children": {
+              "AggregatorCollector: [tiles]": 597.14181,
+              "PartialHitCountCollector": 0.527502
+            },
+            "aggs": {
+              "GeoTileGridAggregator": 646.417752
+            }
+          },
+          "fill": {
+            "wallMs": 832.3764579999843,
+            "tookMs": 789,
+            "queryMs": 522.981591,
+            "collectMs": 494.037117,
+            "fetchMs": 100.287459,
+            "cpuMs": 1110.576166,
+            "leaves": {
+              "range": 94.910019,
+              "filter_term": 80.299029
+            },
+            "children": {
+              "SimpleFieldCollector": 334.117916
+            },
+            "aggs": {}
+          }
+        }
+      }
+    }
+  }
+}

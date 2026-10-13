@@ -55,6 +55,15 @@ export interface RawMapFilters {
   /** Exact-ring boundary: all outer rings of the selected entity (mainland +
    * islands). A listing inside ANY ring matches. Supersedes `polygon`. */
   polygons?: { lat: number; lng: number }[][];
+  /** Admin-1 boundary resolved server-side: canonical MapTiler polygons with
+   * their holes. Filtering is open-additive over polygons and exact-excluding
+   * over holes (even-odd), the same shape the client draws. Supersedes
+   * `polygon`/`polygons`. */
+  polygonsWithHoles?: RegionShape[];
+  /** `<region id>:<geometry sha>` — cache-key token that stands in for the
+   * multi-megabyte shape arrays when hashing (measured ~90 ms per hash at 54k
+   * points). Only honored together with polygonsWithHoles. */
+  regionToken?: string;
 }
 
 export interface NormalizedMapFilters {
@@ -81,7 +90,24 @@ export interface NormalizedMapFilters {
   cursor?: unknown;
   polygon?: { lat: number; lng: number }[];
   polygons?: { lat: number; lng: number }[][];
+  polygonsWithHoles?: RegionShape[];
+  regionToken?: string;
 }
+
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+/** One canonical admin-1 polygon: verbatim outer ring + its holes. */
+export interface RegionShape {
+  outer: LatLng[];
+  holes: LatLng[][];
+}
+
+// Region token shape: `<ISO 3166-2 id>:<sha256 prefix>`. Validated so a client
+// cannot smuggle an arbitrary string into cache keys.
+const REGION_TOKEN_RE = /^(IN|AE)-[A-Z]{2}:[0-9a-f]{8,64}$/;
 
 // Tier-aware price snapping. scope=both (or unknown) mixes currencies and
 // sale/rent bands in one result set, so we snap against every candidate
@@ -234,6 +260,55 @@ function normPolygons(
   });
 }
 
+// Round a shared (outer+holes) point budget across every ring of every shape.
+// The canonical admin-1 geometry is far below the cap (largest ~48k points vs
+// the 120k tenant cap), so this is a defensive path only: it must never fire
+// in a way that silently narrows the selected boundary's semantics.
+function normRegionShapes(
+  shapes: RegionShape[] | undefined,
+  precision: number,
+  maxPoints: number
+): RegionShape[] | undefined {
+  if (!Array.isArray(shapes) || shapes.length === 0) return undefined;
+  const cleanRing = (ring: unknown): LatLng[] => {
+    if (!Array.isArray(ring)) return [];
+    return (ring as unknown[])
+      .filter(
+        (p): p is LatLng =>
+          !!p && typeof (p as LatLng).lat === 'number' && typeof (p as LatLng).lng === 'number'
+      )
+      .map((p) => ({ lat: cleanFloat(roundNum(p.lat, precision)), lng: cleanFloat(roundNum(p.lng, precision)) }));
+  };
+  const cleaned = shapes
+    .map((s) => ({
+      outer: cleanRing(s?.outer),
+      holes: Array.isArray(s?.holes) ? (s.holes.map(cleanRing).filter((h) => h.length >= 3) as LatLng[][]) : [],
+    }))
+    .filter((s) => s.outer.length >= 3);
+  if (cleaned.length === 0) return undefined;
+
+  const rings = cleaned.flatMap((s) => [s.outer, ...s.holes]);
+  const total = rings.reduce((n, r) => n + r.length, 0);
+  if (total > maxPoints) {
+    for (const ring of rings) {
+      const keep = Math.max(3, Math.floor((ring.length / total) * maxPoints));
+      if (ring.length <= keep) continue;
+      const stride = ring.length / keep;
+      const sampled: LatLng[] = [];
+      for (let i = 0; i < keep; i++) sampled.push(ring[Math.floor(i * stride)]);
+      ring.length = 0;
+      ring.push(...sampled);
+    }
+  }
+  const close = (ring: LatLng[]) => {
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first.lat !== last.lat || first.lng !== last.lng) ring.push({ ...first });
+    return ring;
+  };
+  return cleaned.map((s) => ({ outer: close(s.outer), holes: s.holes.map(close) }));
+}
+
 // Trim float dust from bounds (~0.1m precision) so identical viewports hash
 // identically across runtimes. Deliberately NOT grid-snapped: the ES query
 // runs on these exact bounds, so every cached payload covers precisely the
@@ -283,8 +358,13 @@ function orderedForHash(f: NormalizedMapFilters): Record<string, unknown> {
     sort: f.sort,
     pageSize: f.pageSize,
     cursor: f.cursor,
-    polygon: f.polygon,
-    polygons: f.polygons,
+    // A region token stands in for ALL boundary arrays: same region ⇒ same key
+    // regardless of whether the request carried rings, shapes, or only the id.
+    // Without a token, raw boundaries hash as before (client-drawn polygons).
+    regionToken: f.regionToken,
+    polygon: f.regionToken ? undefined : f.polygon,
+    polygons: f.regionToken ? undefined : f.polygons,
+    polygonsWithHoles: f.regionToken ? undefined : f.polygonsWithHoles,
   };
 }
 
@@ -337,6 +417,12 @@ export function normalizeFilters(raw: RawMapFilters): NormalizedMapFilters {
   if (raw.cursor !== undefined) out.cursor = raw.cursor;
   out.polygon = normPolygon(raw.polygon, cfg.polygonPrecision, cfg.polygonMaxPoints);
   out.polygons = normPolygons(raw.polygons, cfg.polygonPrecision, cfg.polygonMaxPoints);
+  out.polygonsWithHoles = normRegionShapes(raw.polygonsWithHoles, cfg.polygonPrecision, cfg.polygonMaxPoints);
+  // The token is only meaningful alongside the shapes it identifies; a token
+  // without a boundary would key an unfiltered query as if it were filtered.
+  if (out.polygonsWithHoles && typeof raw.regionToken === 'string' && REGION_TOKEN_RE.test(raw.regionToken)) {
+    out.regionToken = raw.regionToken;
+  }
   return out;
 }
 

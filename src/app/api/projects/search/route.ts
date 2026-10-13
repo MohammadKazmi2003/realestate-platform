@@ -3,6 +3,9 @@ import { getElasticsearchClient, isEsAvailable, PROJECTS_INDEX_ALIAS, recordEsSu
 import { cacheGet, cacheSet } from '@/lib/redis';
 import { checkSearchRateLimit, getRateLimitIdentifier } from '@/lib/rateLimit';
 import { logger } from '@/lib/logger';
+import { normalizeBoundaryPolygons } from '@/lib/filterNormalize';
+import { boundaryClauseFromShapes } from '@/lib/esQueryBuilder';
+import { getAdminRegion, getAdminRegionLite } from '@/lib/adminRegionsServer';
 
 export async function POST(req: NextRequest) {
   const identifier = getRateLimitIdentifier(req);
@@ -26,7 +29,31 @@ export async function POST(req: NextRequest) {
       bounds,
       polygon,
       polygons,
+      state,
     } = body;
+
+    // Admin-1 state selection resolves server-side to the same canonical
+    // MapTiler geometry the map outline renders and supersedes any raw
+    // boundary. The geometry token keeps the cache key small without losing
+    // identity.
+    let effectivePolygon = polygon;
+    let effectivePolygons = polygons;
+    let regionShapes: { outer: { lat: number; lng: number }[]; holes: { lat: number; lng: number }[][] }[] | undefined;
+    let regionToken: string | undefined;
+    if (typeof state === 'string' && state.trim()) {
+      const meta = getAdminRegionLite(state.trim());
+      if (!meta) {
+        return NextResponse.json({ error: `unknown state: ${state}` }, { status: 400 });
+      }
+      const region = getAdminRegion(state.trim());
+      if (!region) {
+        return NextResponse.json({ error: 'state geometry unavailable' }, { status: 503 });
+      }
+      effectivePolygon = undefined;
+      effectivePolygons = undefined;
+      regionShapes = region.shapes;
+      regionToken = region.token;
+    }
 
     const sanitize = (s: string | undefined, maxLen = 200) => {
       if (!s) return s;
@@ -48,7 +75,11 @@ export async function POST(req: NextRequest) {
     };
     const normalizedAmenities = (amenities || []).map((a: string) => a.toLowerCase().trim());
     const normalizedConstructionPhases = (constructionPhases || []).map((c: string) => c.toLowerCase().trim());
-    const cacheKey = `ps:${JSON.stringify({ cleanedQuery, minPrice, maxPrice, constructionPhases: normalizedConstructionPhases, amenity: amenity?.toLowerCase().trim(), amenities: normalizedAmenities, sort, pageSize, cursor, page, bounds: roundBounds(bounds), polygons: polygons ?? polygon ?? null })}`;
+    // Normalized once (6 dp, point caps, closed rings) so this route shares the
+    // same boundary semantics and cache-key geometry as /api/search and
+    // /api/map-data — raw MapTiler-scale rings used to be sent uncapped here.
+    const boundaryRings = normalizeBoundaryPolygons(effectivePolygon, effectivePolygons);
+    const cacheKey = `ps:${JSON.stringify({ cleanedQuery, minPrice, maxPrice, constructionPhases: normalizedConstructionPhases, amenity: amenity?.toLowerCase().trim(), amenities: normalizedAmenities, sort, pageSize, cursor, page, bounds: roundBounds(bounds), region: regionToken ?? null, polygons: boundaryRings.length > 0 ? boundaryRings : null })}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached);
@@ -101,12 +132,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const boundaryRings: any[][] = Array.isArray(polygons)
-      ? polygons.filter((r: any) => Array.isArray(r) && r.length >= 3)
-      : Array.isArray(polygon) && polygon.length >= 3
-        ? [polygon]
-        : [];
-    if (boundaryRings.length === 1) {
+    const regionClause = boundaryClauseFromShapes(regionShapes);
+    if (regionClause) {
+      filters.push(regionClause);
+    } else if (boundaryRings.length === 1) {
       filters.push({
         geo_polygon: {
           location: {

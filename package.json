@@ -17,6 +17,8 @@
     "provision": "node scripts/provision-customer.js",
     "scale:cold": "npx tsx scripts/scale-cold.ts",
     "scale:e2e": "npx tsx scripts/scale-e2e.ts",
+    "verify:states": "npx tsx scripts/verify-state-selection.ts",
+    "test:states": "playwright test state-selection",
     "scale:layered": "npx tsx scripts/scale-layered.ts",
     "scale:smoke": "npx tsx scripts/scale-smoke.ts",
     "scale:stress": "npx tsx scripts/scale-stress.ts",

@@ -1,0 +1,35 @@
+{
+  "label": "100k-redis",
+  "scenario": "warm",
+  "levels": [
+    {
+      "conc": 25,
+      "requests": 100,
+      "wallSec": 1.63,
+      "qps": 61.2,
+      "p50": 335,
+      "p95": 602,
+      "p99": 611,
+      "errPct": 0,
+      "cacheHitPct": 84,
+      "esPerReq": 0.1,
+      "samples": {
+        "count": 3,
+        "searchActiveMax": 0,
+        "searchQueueMax": 0,
+        "searchRejectedDelta": 0,
+        "searchThreads": 13,
+        "cpuMax": 13,
+        "heapUsedMaxMB": 406,
+        "heapMaxMB": 1024,
+        "appCpuMax": 167.1,
+        "appRssMaxMB": 191
+      },
+      "redis": {
+        "opsPerSec": 253,
+        "keyspaceHitsDelta": 193,
+        "keyspaceMissesDelta": 101
+      }
+    }
+  ]
+}

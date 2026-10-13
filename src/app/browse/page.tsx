@@ -15,6 +15,8 @@ import { getLookup } from '@/lib/lookupCache';
 import type { Project } from '@/lib/types';
 import { MarkerLruCache } from '@/lib/markerCache';
 import { setupMapLayers, updateSourceData, updateCircleRadius, setHighlightedPoint, setHighlightState, removeMapLayers, type ClusterPoint } from '@/lib/map/mapLayers';
+import { ADMIN_LAYERS, setupAdminLayers, applyAdminTier, setAdminHover, clearAdminHover, setAdminSelected, setSelectedDetail, setOverviewSelectedExcluded, setHoverDetail, setOverviewHoverExcluded, setAdminDetailState, removeAdminLayers } from '@/lib/map/adminLayers';
+import { showStateTooltip, hideStateTooltip, destroyStateTooltip } from '@/lib/map/stateTooltip';
 import { tenant } from '@/lib/tenant';
 import { formatMoneyCompact } from '@/lib/format';
 import { mergeUniqueById } from '@/lib/collections';
@@ -45,6 +47,9 @@ const MAX_LIST_ITEMS = 500;
 // Default viewport fits the tenant's home market with margin at the default
 // container size (default tenant: whole India + Dubai projects at z4).
 const DEFAULT_ZOOM = tenant.map.zoom;
+// Interactive admin-1 (state/emirate) selection config; disabled via
+// NEXT_PUBLIC_ADMIN1=0 or by leaving map.admin1 out of the tenant file.
+const ADMIN1 = tenant.map.admin1;
 
 // Price label for the highlighted speech-bubble marker — projects are priced
 // in the tenant's project currency. Truncated so it always fits the fixed
@@ -123,13 +128,14 @@ function countryOf(placeName: string): string {
 
 /**
  * Point-place fallback: some city `place` entities (e.g. Mumbai, Dubai) have
- * no polygon of their own — only a point. Resolve matching areas from the
- * suggestion list the user already saw (e.g. Mumbai City + Suburban
- * districts): same country, name shares the locality token, real
- * (non-degenerate) bbox. Administrative types win; any other polygon-bearing
- * type is fallback rather than nothing. Geometries fetched by id in parallel
- * (max 3 per tier). Deliberately uses the visible list — NOT a fresh text
- * re-query, whose full-text candidates differ (all `place`, all degenerate).
+ * no polygon of their own — only a point. Resolve matching administrative
+ * areas from the suggestion list the user already saw (e.g. Mumbai City +
+ * Suburban districts): same country, shared locality token, real
+ * (non-degenerate) bbox, ADMIN place types only. The previous non-admin tier
+ * drew whatever polygon happened to share a name (e.g. Kharghar Lake), which
+ * is exactly the misleading outline class this fallback must never produce.
+ * Deliberately uses the visible list — NOT a fresh text re-query, whose
+ * full-text candidates differ (all `place`, all degenerate).
  * Returns merged rings + union bbox, or null when nothing qualifies.
  */
 async function resolveAdminBoundary(
@@ -139,48 +145,37 @@ async function resolveAdminBoundary(
   const locality = text.split(',')[0]?.trim().toLowerCase();
   if (!locality) return null;
   const homeCountry = countryOf(text);
-  // Relevant matches only (same country, shared locality token, real bbox) —
-  // but keep the mix dynamic: admin areas first, any other polygon-bearing
-  // type (lake, road corridor, address) as fallback rather than nothing.
   const relevant = (suggestions || []).filter(s => {
     if (!s || s.type !== 'geocoded' || !s.id) return false;
     if (!s.text.toLowerCase().includes(locality)) return false;
     if (homeCountry && countryOf(s.text) !== homeCountry) return false;
+    if (!Array.isArray(s.place_type) || !s.place_type.some(t => ADMIN_PLACE_TYPES.has(t))) return false;
     const b = s.bbox || [];
     if (b.length !== 4 || b[0] === b[2] || b[1] === b[3]) return false;
     return true;
   });
-  const isAdmin = (s: AutocompleteSuggestion) =>
-    !Array.isArray(s.place_type) || s.place_type.some(t => ADMIN_PLACE_TYPES.has(t));
-  const ordered = [...relevant.filter(isAdmin), ...relevant.filter(s => !isAdmin(s))];
-  const resolveGroup = async (group: AutocompleteSuggestion[]) => {
-    const rings: BoundaryRings = [];
-    const boxes: number[][] = [];
-    const settled = await Promise.allSettled(group.slice(0, 3).map(c => fetchGeometryById(c.id!)));
-    group.slice(0, 3).forEach((c, i) => {
-      if (settled[i].status === 'fulfilled') {
-        const r = (settled[i] as PromiseFulfilledResult<BoundaryRings>).value;
-        if (r.length > 0) {
-          rings.push(...r);
-          if (c.bbox?.length === 4) boxes.push(c.bbox);
-        }
+  const rings: BoundaryRings = [];
+  const boxes: number[][] = [];
+  const settled = await Promise.allSettled(relevant.slice(0, 3).map(c => fetchGeometryById(c.id!)));
+  relevant.slice(0, 3).forEach((c, i) => {
+    if (settled[i].status === 'fulfilled') {
+      const r = (settled[i] as PromiseFulfilledResult<BoundaryRings>).value;
+      if (r.length > 0) {
+        rings.push(...r);
+        if (c.bbox?.length === 4) boxes.push(c.bbox);
       }
-    });
-    if (rings.length === 0 || boxes.length === 0) return null;
-    return {
-      rings,
-      bbox: {
-        minLng: Math.min(...boxes.map(b => b[0])),
-        minLat: Math.min(...boxes.map(b => b[1])),
-        maxLng: Math.max(...boxes.map(b => b[2])),
-        maxLat: Math.max(...boxes.map(b => b[3])),
-      },
-    };
+    }
+  });
+  if (rings.length === 0 || boxes.length === 0) return null;
+  return {
+    rings,
+    bbox: {
+      minLng: Math.min(...boxes.map(b => b[0])),
+      minLat: Math.min(...boxes.map(b => b[1])),
+      maxLng: Math.max(...boxes.map(b => b[2])),
+      maxLat: Math.max(...boxes.map(b => b[3])),
+    },
   };
-  return (
-    (await resolveGroup(ordered.filter(isAdmin))) ??
-    (await resolveGroup(ordered.filter(s => !isAdmin(s))))
-  );
 }
 
 /** Fetch exact geometry for a MapTiler feature id (the clicked entity itself,
@@ -197,6 +192,45 @@ async function fetchGeometryById(featureId: string, signal?: AbortSignal): Promi
   const geo = data.features?.[0]?.geometry;
   if (!geo || (geo.type !== 'MultiPolygon' && geo.type !== 'Polygon')) return [];
   return allRingsFromGeometry(geo);
+}
+
+/** Locality polygon from OSM (via /api/place-geometry) for city/neighborhood
+ * entities MapTiler only knows as centroids. The server validates containment
+ * against the searched point, so the returned outline is the polygon the
+ * point is actually inside — never a same-named parcel or a bounding box. */
+async function fetchPlaceGeometryFromOSM(
+  text: string,
+  center?: [number, number] | null
+): Promise<{ rings: BoundaryRings; bbox: { minLat: number; maxLat: number; minLng: number; maxLng: number } } | null> {
+  const q = text.trim();
+  if (!q || !center) return null;
+  const [lng, latNum] = center;
+  if (!Number.isFinite(lng) || !Number.isFinite(latNum)) return null;
+  try {
+    const res = await fetch(
+      `/api/place-geometry?q=${encodeURIComponent(q)}&lat=${latNum}&lng=${lng}`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rings: BoundaryRings = Array.isArray(data?.rings)
+      ? data.rings
+          .map((ring: unknown) =>
+            (Array.isArray(ring) ? ring : [])
+              .map((p: any) => ({ lat: Number(p?.lat), lng: Number(p?.lng) }))
+              .filter((p: { lat: number; lng: number }) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+          )
+          .filter((ring: { lat: number; lng: number }[]) => ring.length >= 3)
+      : [];
+    const b = data?.bbox;
+    if (rings.length === 0 || !Array.isArray(b) || b.length !== 4) return null;
+    return {
+      rings,
+      bbox: { minLng: b[0], minLat: b[1], maxLng: b[2], maxLat: b[3] },
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function searchProjects(params: any): Promise<{ results: any[]; total: number; nextCursor?: any[] | null }> {
@@ -331,6 +365,14 @@ export default function BrowsePage() {
   const [boundaryPoints, setBoundaryPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [boundaryActive, setBoundaryActive] = useState(false);
+  // Label for the active non-state boundary (geocoded locality name or the
+  // freehand marker). Surfaces in the single map-overlay boundary control so
+  // switching locations updates the chip text.
+  const [activeBoundaryLabel, setActiveBoundaryLabel] = useState<string | null>(null);
+  // Interactive state/emirate selection. The server resolves the id to the
+  // bundled boundary, so the client only carries id/name here (no geometry in
+  // URLs or cache keys).
+  const [selectedState, setSelectedState] = useState<{ id: string; name: string } | null>(null);
   const boundarySourceRef = useRef<maplibregl.GeoJSONSource | null>(null);
   const isDrawingRef = useRef(false);
   const drawPointsRef = useRef<{ lat: number; lng: number }[]>([]);
@@ -348,6 +390,41 @@ export default function BrowsePage() {
   const searchScopeRef = useRef(searchScope);
   const intentRef = useRef<Intent>(intent);
   const fullScreenResultsRef = useRef(fullScreenResults);
+  const selectedStateRef = useRef(selectedState);
+  // Zoom-tier flag: below overviewMaxZoom the map shows state outlines only and
+  // the server skips marker generation entirely (markers=false).
+  const overviewModeRef = useRef(false);
+  // Admin-1 GeoJSON (fetched once from /geo/<file>); layers are (re)built from it.
+  const adminGeoRef = useRef<any>(null);
+  const stateHoverRef = useRef<string | null>(null);
+  // Canonical MapTiler geometry per state (id → FeatureCollection), fetched on
+  // hover/selection from /api/admin-geo?state=<ID>&v=<sha> and reused for both.
+  // The sha cache-busts across deploys; the pending map dedupes concurrent
+  // hover/select/prefetch requests for the same state.
+  const stateGeoCacheRef = useRef<Map<string, any>>(new Map());
+  const stateGeoPendingRef = useRef<Map<string, Promise<any | null>>>(new Map());
+  // Locality polygons from OSM (server-cached); session memory avoids repeat
+  // route calls when the same search result is clicked/typed again. Null is a
+  // valid cached answer ("no precise boundary") — it prevents retry storms for
+  // localities without geometry.
+  const placeGeoCacheRef = useRef<Map<string, { rings: BoundaryRings; bbox: { minLat: number; maxLat: number; minLng: number; maxLng: number } } | null>>(new Map());
+  // Id whose canonical geometry is currently drawn as the hover fill — guards
+  // against re-setting a megabyte-scale GeoJSON source on every mousemove.
+  const stateHoverDetailRef = useRef<string | null>(null);
+  const statePrefetchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const markerHoverRef = useRef(false);
+  const stateCountAbortRef = useRef<AbortController | null>(null);
+  const stateCountTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const zoomTierTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Hover count cache keyed by state id; cleared when filters/scope/intent
+  // change so a count can never describe a stale population.
+  const stateCountCacheRef = useRef<Record<string, string>>({});
+  // Map-effect callbacks published to the rest of the component (the map
+  // lifecycle effect runs once, before the selection helpers are defined).
+  const selectStateRef = useRef<(id: string, name: string, bbox: [number, number, number, number]) => void>(() => {});
+  const ensureAdminLayersRef = useRef<(() => void) | null>(null);
+  const applyAdminTierRef = useRef<(() => void) | null>(null);
+  const lookupMapsRef = useRef({ bhkIdToLabel: {} as Record<number, string>, propTypeIdToName: {} as Record<number, string> });
   const fetchIdRef = useRef(0);
   const initialMoveEndRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
@@ -378,11 +455,79 @@ export default function BrowsePage() {
   fullScreenResultsRef.current = fullScreenResults;
   isDrawingModeRef.current = isDrawingMode;
   boundaryActiveRef.current = boundaryActive;
+  selectedStateRef.current = selectedState;
 
   // A6: Sync filtersRef after render (not during render) — prevents stale reads
   useEffect(() => {
     filtersRef.current = filters;
   }, [filters]);
+
+  useEffect(() => {
+    lookupMapsRef.current = lookupMaps;
+  }, [lookupMaps]);
+
+  // Canonical region geometry, fetched once per id per session (memory + HTTP
+  // immutable caches). Never rejects: a failed fetch degrades to the overview
+  // hover/outline that is already drawn, and a later hover retries.
+  const fetchStateDetail = useCallback((id: string, sha?: string | null): Promise<any | null> => {
+    const cached = stateGeoCacheRef.current.get(id);
+    if (cached) return Promise.resolve(cached);
+    const pending = stateGeoPendingRef.current.get(id);
+    if (pending) return pending;
+    const url = `/api/admin-geo?state=${encodeURIComponent(id)}${sha ? `&v=${encodeURIComponent(sha)}` : ''}`;
+    const p = fetch(url)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((geo) => {
+        const fc = geo?.features?.length ? geo : null;
+        if (fc) stateGeoCacheRef.current.set(id, fc);
+        return fc;
+      })
+      .catch(() => null)
+      .finally(() => {
+        stateGeoPendingRef.current.delete(id);
+      });
+    stateGeoPendingRef.current.set(id, p);
+    return p;
+  }, []);
+
+  // Locality geometry via the OSM resolver, memoized per text+center. Returns
+  // null when no validated polygon exists; callers then recenter without an
+  // outline (a bbox rectangle is never drawn — it is not a boundary).
+  const resolvePlaceGeometryOSM = useCallback(async (text: string, center?: [number, number] | null) => {
+    if (!center || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) return null;
+    const key = `${text.trim().toLowerCase()}|${center[0].toFixed(3)},${center[1].toFixed(3)}`;
+    const cached = placeGeoCacheRef.current.get(key);
+    if (cached !== undefined) return cached;
+    const result = await fetchPlaceGeometryFromOSM(text, center);
+    placeGeoCacheRef.current.set(key, result);
+    return result;
+  }, []);
+
+  // Admin-1 boundaries: one static tenant asset fetched once (gzipped by the
+  // API route); the same file the server resolves ?state= against, so outline
+  // and filter cannot drift.
+  useEffect(() => {
+    if (!ADMIN1) return;
+    let cancelled = false;
+    fetch('/api/admin-geo')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((geo) => {
+        if (cancelled || !geo) return;
+        adminGeoRef.current = geo;
+        ensureAdminLayersRef.current?.();
+      })
+      .catch(() => { /* state layer is progressive enhancement — never block the map */ });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Hover counts describe "current filters"; any filter/scope/intent/sort change
+  // invalidates the client-side label cache (the server-side count cache is
+  // keyed by the filter population and handles its own reuse).
+  useEffect(() => {
+    stateCountCacheRef.current = {};
+  }, [filters, searchScope, intent, sortBy]);
 
   // A5: Cancel any in-flight autocomplete request + pending debounce
   const cancelAutocomplete = useCallback(() => {
@@ -471,7 +616,7 @@ export default function BrowsePage() {
             minLng: Math.min(...rings.flat().map(p => p.lng)),
             maxLng: Math.max(...rings.flat().map(p => p.lng)),
           };
-          applyGeocodedBoundary(rings, bounds);
+          applyGeocodedBoundary(rings, bounds, text);
           handleApplyFiltersWithLocation(text, { rings, bbox: bounds });
           return;
         }
@@ -481,40 +626,37 @@ export default function BrowsePage() {
         // Suburban districts) and outline + filter by their exact rings.
         const admin = await resolveAdminBoundary(text, suggestionListRef.current);
         if (admin) {
-          applyGeocodedBoundary(admin.rings, admin.bbox);
+          applyGeocodedBoundary(admin.rings, admin.bbox, text);
           handleApplyFiltersWithLocation(text, { rings: admin.rings, bbox: admin.bbox });
           return;
         }
+        // MapTiler returns centroids for neighborhoods/cities (Point/MultiPoint
+        // lookups) — the real locality polygon comes from OSM via the server
+        // resolver, which only accepts a polygon the searched point is inside.
+        const place = await resolvePlaceGeometryOSM(text, sug.center as [number, number] | undefined);
+        if (place) {
+          applyGeocodedBoundary(place.rings, place.bbox, text);
+          handleApplyFiltersWithLocation(text, { rings: place.rings, bbox: place.bbox });
+          return;
+        }
       } catch {}
-      // Geometry fetch failed → fall through to bbox/center fallbacks below.
-    }
-
-    if (sug?.bbox && sug.bbox.length === 4 && sugBbox && !isDegenerateBbox(sug.bbox)) {
-      // Fallback: bbox rectangle when exact geometry is unavailable.
-      const [west, south, east, north] = sug.bbox;
-      const rect = [
-        { lat: north, lng: west },
-        { lat: north, lng: east },
-        { lat: south, lng: east },
-        { lat: south, lng: west },
-      ];
-      applyGeocodedBoundary([rect], sugBbox);
-      if (mapRef.current) {
-        mapRef.current.fitBounds([west, south, east, north], { padding: 40, duration: 800 });
-      }
-      handleApplyFiltersWithLocation(text, { rings: [rect], bbox: sugBbox });
-      return;
+      // No polygon anywhere → center-only handling below. A bounding box is
+      // never drawn as a boundary.
     }
 
     {
       // Center-only (or degenerate point-bbox, e.g. city `place` entries):
       // bounds box around the point, and clear any stale outline/rings so a
-      // previous boundary can't keep filtering the new search.
+      // previous boundary can't keep filtering the new search. The state
+      // selection is dropped too — a location search is a boundary selection
+      // and must not leave the old state outline standing in for it.
       const center = sug?.center ?? (sugBbox ? [(sugBbox.minLng + sugBbox.maxLng) / 2, (sugBbox.minLat + sugBbox.maxLat) / 2] : null);
       if (center) {
+        resetStateSelection();
         clearBoundaryState();
         const [lng, lat] = center;
         geocodedBoundsRef.current = { minLat: lat - 0.1, maxLat: lat + 0.1, minLng: lng - 0.1, maxLng: lng + 0.1 };
+        mapRef.current?.flyTo({ center: [lng, lat], zoom: 13, essential: true });
         handleApplyFiltersWithLocation(text, { rings: null, bbox: geocodedBoundsRef.current });
         return;
       }
@@ -534,7 +676,10 @@ export default function BrowsePage() {
     return 'relevance';
   };
 
-  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: BoundaryRings | null) => {
+  // stateOverride: undefined → use the current selection; explicit null → force
+  // no state (clearing). The id travels to the server, which resolves it to the
+  // same bundled boundary the outline renders.
+  const fetchAllProperties = useCallback(async (bounds: LngLatBounds | null, cursorOverride?: { propertyCursor?: any[] | null; projectCursor?: any[] | null; append?: boolean }, polygonOverride?: BoundaryRings | null, stateOverride?: string | null) => {
     // Cancel-on-new: the latest request represents the viewport we actually
     // need, so any in-flight request is aborted immediately instead of being
     // queued. Aborted requests fail with AbortError and are a silent no-op,
@@ -643,6 +788,10 @@ export default function BrowsePage() {
     const activeFilters = filtersRef.current;
     const activeIntent = intentRef.current;
     const activeListingPurpose = intentToListingPurpose(activeIntent);
+    const activeStateId = stateOverride === undefined ? (selectedStateRef.current?.id ?? null) : stateOverride;
+    // State-overview mode (below the tenant's overview zoom): outlines only —
+    // the server skips marker generation entirely (markers=false).
+    const overviewMode = !isListView && overviewModeRef.current;
     // Page size: 24 always. Map dots come from the markers array returned by
     // /api/map-data (up to 500 per viewport), not from the 24 list docs here.
     const params: any = { pageSize: 24, sort: sortByRef.current };
@@ -672,6 +821,8 @@ export default function BrowsePage() {
     if (activeRings && activeRings.length > 0) {
       params.polygons = activeRings;
     }
+    if (activeStateId) params.state = activeStateId;
+    if (overviewMode) params.markers = false;
     if (searchAsIMoveRef.current && bounds && !isListView) {
       // Clamp viewport bounds to valid coordinate ranges before sending.
       // At very low zooms the viewport can exceed the antimeridian (MapLibre
@@ -708,6 +859,10 @@ export default function BrowsePage() {
           pageSize: 24,
           sort: sortByRef.current,
           ...(activeListingPurpose ? { listingPurpose: activeListingPurpose } : {}),
+          // State id stays on GET (URL-safe, CDN-shareable); the server resolves
+          // it to the same bundled boundary the outline renders.
+          ...(activeStateId ? { state: activeStateId } : {}),
+          ...(overviewMode ? { markers: false } : {}),
         };
         if (activeFilters.bhkTypeId && bhkIdToLabel[Number(activeFilters.bhkTypeId)]) {
           combinedParams.bhkType = bhkIdToLabel[Number(activeFilters.bhkTypeId)];
@@ -749,7 +904,7 @@ export default function BrowsePage() {
           qp.set('scope', scope);
           qp.set('sort', sortByRef.current);
           qp.set('pageSize', String(combinedParams.pageSize ?? 24));
-          for (const k of ['query', 'listingPurpose', 'bhkType', 'propertyType'] as const) {
+          for (const k of ['query', 'listingPurpose', 'bhkType', 'propertyType', 'state'] as const) {
             const v = (combinedParams as any)[k];
             if (v != null && v !== '') qp.set(k, String(v));
           }
@@ -757,6 +912,7 @@ export default function BrowsePage() {
             const v = (combinedParams as any)[k];
             if (v != null && v !== '') qp.set(k, String(v));
           }
+          if (overviewMode) qp.set('markers', 'false');
           res = await fetch(`/api/map-data?${qp.toString()}`, { signal });
         }
         if (fetchId !== fetchIdRef.current) return;
@@ -859,6 +1015,9 @@ export default function BrowsePage() {
             if (combinedParams.maxPrice != null) gps.set('maxPrice', String(combinedParams.maxPrice));
             if (combinedParams.bhkType) gps.set('bhkType', combinedParams.bhkType);
             if (combinedParams.propertyType) gps.set('propertyType', combinedParams.propertyType);
+            // Pills must describe the same population as the list/markers (AD3),
+            // so the state filter travels with this request too.
+            if (combinedParams.state) gps.set('state', String(combinedParams.state));
             fetch(`/api/project-groups?${gps.toString()}`, { signal })
               .then((r) => (r.ok ? r.json() : null))
               .then((j) => {
@@ -882,6 +1041,7 @@ export default function BrowsePage() {
           pageSize: 24,
           sort: sortByRef.current,
           ...(activeListingPurpose ? { listingPurpose: activeListingPurpose } : {}),
+          ...(activeStateId ? { state: activeStateId } : {}),
         };
         if (activeFilters.bhkTypeId && bhkIdToLabel[Number(activeFilters.bhkTypeId)]) {
           combinedParams.bhkType = bhkIdToLabel[Number(activeFilters.bhkTypeId)];
@@ -973,6 +1133,7 @@ export default function BrowsePage() {
           sort: projectSortForBrowse(sortByRef.current),
           bounds: params.bounds,
           polygons: params.polygons,
+          state: activeStateId || undefined,
           signal,
         };
         if (cursorOverride?.projectCursor) {
@@ -1174,10 +1335,228 @@ export default function BrowsePage() {
     if (process.env.NODE_ENV !== 'production') (window as any).__map = map; // dev-only debug hook
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
+    // ---- Interactive state/emirate selection (admin-1) --------------------
+    // Marker layers are hidden in overview mode so the country view is state
+    // outlines only; the server is also told markers=false in that mode.
+    const ADMIN_MARKER_LAYER_IDS = [
+      'unclustered-properties-halo',
+      'unclustered-projects-halo',
+      'unclustered-properties',
+      'unclustered-projects',
+      'marker-price',
+      'marker-count',
+    ];
+    const computeTier = (zoom: number): 'overview' | 'outline' | 'city' => {
+      if (!ADMIN1) return 'city';
+      if (zoom < ADMIN1.overviewMaxZoom) return 'overview';
+      if (zoom <= ADMIN1.outlineMaxZoom) return 'outline';
+      return 'city';
+    };
+    // Drop every trace of state hover (feature states, canonical hover
+    // geometry, tooltip, pending counts, cursor). Used on pointer leave AND
+    // when zoom crosses out of the state-interaction band, so a stationary
+    // pointer cannot leave a stale highlight behind.
+    function clearStateHover() {
+      if (stateHoverRef.current != null) {
+        clearAdminHover(map, stateHoverRef.current);
+        setAdminDetailState(map, null, stateHoverRef.current);
+        stateHoverRef.current = null;
+      }
+      stateHoverDetailRef.current = null;
+      setHoverDetail(map, null);
+      setOverviewHoverExcluded(map, null);
+      hideStateTooltip();
+      if (stateCountTimerRef.current) clearTimeout(stateCountTimerRef.current);
+      if (stateCountAbortRef.current) stateCountAbortRef.current.abort();
+      if (!markerHoverRef.current) map.getCanvas().style.cursor = '';
+    }
+    const applyTierForZoom = () => {
+      if (!ADMIN1) return;
+      const tier = computeTier(map.getZoom());
+      overviewModeRef.current = tier === 'overview';
+      // Above outlineMaxZoom the hit surface is hidden: leave no hover behind
+      // when the threshold is crossed while the pointer rests on a state.
+      if (tier === 'city') clearStateHover();
+      applyAdminTier(map, tier, !!selectedStateRef.current);
+      const visible = tier !== 'overview';
+      for (const id of ADMIN_MARKER_LAYER_IDS) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+      }
+    };
+    applyAdminTierRef.current = applyTierForZoom;
+
+    const ensureAdminLayers = () => {
+      if (!ADMIN1 || !adminGeoRef.current) return;
+      // Admin layers are inserted beneath the marker layers so dots stay on top
+      // and a visible marker keeps its click priority over the state fill.
+      const beforeId = map.getLayer('unclustered-properties')
+        ? 'unclustered-properties'
+        : map.getLayer('unclustered-properties-halo')
+          ? 'unclustered-properties-halo'
+          : undefined;
+      setupAdminLayers(map, adminGeoRef.current, beforeId);
+      applyTierForZoom();
+    };
+    ensureAdminLayersRef.current = ensureAdminLayers;
+
+    // Hover counts are lazy (one cached count per state x filter population),
+    // debounced and aborted on leave so a fast pointer sweep never queues
+    // queries for states the user didn't dwell on.
+    const fetchStateCount = (id: string, name: string, point: { x: number; y: number }, immediate = false) => {
+      if (!ADMIN1?.showCounts) return;
+      const cached = stateCountCacheRef.current[id];
+      if (cached) {
+        if (stateHoverRef.current === id) showStateTooltip(map, point, name, cached);
+        return;
+      }
+      if (stateCountTimerRef.current) clearTimeout(stateCountTimerRef.current);
+      const run = async () => {
+        if (stateCountAbortRef.current) stateCountAbortRef.current.abort();
+        const ctrl = new AbortController();
+        stateCountAbortRef.current = ctrl;
+        try {
+          const gps = new URLSearchParams({ state: id, scope: searchScopeRef.current });
+          const f = filtersRef.current;
+          const { bhkIdToLabel, propTypeIdToName } = lookupMapsRef.current;
+          if (f.location) gps.set('query', f.location);
+          if (f.minPrice) gps.set('minPrice', f.minPrice);
+          if (f.maxPrice) gps.set('maxPrice', f.maxPrice);
+          if (f.bhkTypeId && bhkIdToLabel[Number(f.bhkTypeId)]) gps.set('bhkType', bhkIdToLabel[Number(f.bhkTypeId)]);
+          if (f.propertyTypeId && propTypeIdToName[Number(f.propertyTypeId)]) gps.set('propertyType', propTypeIdToName[Number(f.propertyTypeId)]);
+          const purpose = intentToListingPurpose(intentRef.current);
+          if (purpose) gps.set('listingPurpose', purpose);
+          const res = await fetch(`/api/state-counts?${gps.toString()}`, { signal: ctrl.signal });
+          if (!res.ok) return;
+          const j = await res.json();
+          if (typeof j?.total !== 'number') return;
+          const label = `${j.total.toLocaleString()} ${j.total === 1 ? 'listing' : 'listings'}`;
+          stateCountCacheRef.current[id] = label;
+          if (stateHoverRef.current === id) showStateTooltip(map, point, name, label);
+        } catch { /* aborted or offline — the tooltip keeps the name only */ }
+      };
+      if (immediate) void run();
+      else stateCountTimerRef.current = setTimeout(run, 150);
+    };
+
+    const onStateMouseMove = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
+      if (!ADMIN1 || isDrawingModeRef.current || isDrawingRef.current) return;
+      // Above outlineMaxZoom state interaction is off; this covers events
+      // already in flight when the tier flipped.
+      if (computeTier(map.getZoom()) === 'city') return;
+      const feature = e.features?.[0];
+      if (!feature) return;
+      const id = String((feature as any).id ?? (feature.properties as any)?.id ?? '');
+      const name = String((feature.properties as any)?.name || id);
+      if (!id) return;
+      if (stateHoverRef.current !== id) {
+        clearAdminHover(map, stateHoverRef.current);
+        setAdminDetailState(map, null, stateHoverRef.current);
+        setAdminHover(map, id);
+        stateHoverRef.current = id;
+      }
+      map.getCanvas().style.cursor = 'pointer';
+      const cachedLabel = stateCountCacheRef.current[id] ?? null;
+      showStateTooltip(map, e.point, name, cachedLabel);
+      if (!cachedLabel) fetchStateCount(id, name, e.point);
+      // Upgrade the coarse overview hover to the exact MapTiler shape as soon
+      // as the canonical geometry is available (usually instant after first
+      // hover/prefetch, one gzipped fetch otherwise). Guarded by the applied-id
+      // ref: re-setting the source on every mousemove re-parses the full
+      // geometry and freezes the render loop.
+      if (stateHoverDetailRef.current !== id) {
+        const sha = typeof (feature.properties as any)?.sha === 'string' ? (feature.properties as any).sha : null;
+        fetchStateDetail(id, sha).then((fc) => {
+          if (!fc || stateHoverRef.current !== id || mapRef.current !== map) return;
+          if (stateHoverDetailRef.current === id) return;
+          stateHoverDetailRef.current = id;
+          setHoverDetail(map, fc);
+          setOverviewHoverExcluded(map, id);
+          setAdminDetailState(map, id);
+        });
+      }
+    };
+
+    const onStateMouseLeave = () => clearStateHover();
+
+    // MapLibre serializes non-string feature properties — arrays arrive as
+    // JSON strings in event features (same reason onPointClick parses
+    // `props.amenities`). Accept both shapes so the click can never depend on
+    // the serialization detail.
+    const parseBbox = (raw: unknown): [number, number, number, number] | null => {
+      let value: unknown = raw;
+      if (typeof value === 'string') {
+        try { value = JSON.parse(value); } catch { return null; }
+      }
+      if (!Array.isArray(value) || value.length !== 4) return null;
+      const nums = value.map(Number);
+      if (!nums.every((n) => Number.isFinite(n))) return null;
+      return nums as [number, number, number, number];
+    };
+
+    const onStateClick = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
+      if (!ADMIN1 || isDrawingModeRef.current || isDrawingRef.current) return;
+      // Above outlineMaxZoom click-to-select is off (hit surface hidden).
+      if (computeTier(map.getZoom()) === 'city') return;
+      // A marker click wins the press (its handler opened the suppression window).
+      if (Date.now() < suppressMapClickUntil.current) return;
+      const feature = e.features?.[0];
+      if (!feature) return;
+      const props = feature.properties as any;
+      const id = String((feature as any).id ?? props?.id ?? '');
+      const bbox = parseBbox(props?.bbox);
+      if (!id || !bbox) return;
+      e.originalEvent?.stopPropagation?.();
+      suppressMapClickUntil.current = Date.now() + 350;
+      hideStateTooltip();
+      selectStateRef.current(id, String(props?.name || id), bbox);
+    };
+
+    // Idle prefetch: warm canonical geometry for up to two visible states so
+    // the first hover in the outline band renders exact without waiting on the
+    // network. Sequential, saveData-aware, never on the overview tier.
+    const scheduleStatePrefetch = () => {
+      if (statePrefetchTimerRef.current) clearTimeout(statePrefetchTimerRef.current);
+      if ((navigator as any).connection?.saveData) return;
+      statePrefetchTimerRef.current = setTimeout(() => {
+        if (mapRef.current !== map || overviewModeRef.current) return;
+        const geo = adminGeoRef.current;
+        if (!geo) return;
+        const b = map.getBounds();
+        const vp = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+        const picks = (geo.features || [])
+          .filter((f: any) => {
+            const bb = parseBbox(f?.properties?.bbox);
+            return bb !== null && !(bb[2] < vp[0] || bb[0] > vp[2] || bb[3] < vp[1] || bb[1] > vp[3]);
+          })
+          .filter((f: any) => !stateGeoCacheRef.current.has(String(f.id)))
+          .slice(0, 2);
+        let chain: Promise<unknown> = Promise.resolve();
+        for (const f of picks) {
+          const id = String(f.id);
+          const sha = typeof f?.properties?.sha === 'string' ? f.properties.sha : null;
+          chain = chain.then(() => fetchStateDetail(id, sha));
+        }
+      }, 400);
+    };
+
+    const onZoomEnd = () => {
+      if (!ADMIN1) return;
+      const wasOverview = overviewModeRef.current;
+      applyTierForZoom();
+      // Crossing the overview threshold changes the request shape itself
+      // (markers=false), so refetch even when search-as-I-move is off.
+      if (wasOverview !== overviewModeRef.current && !isDrawingModeRef.current) {
+        if (zoomTierTimerRef.current) clearTimeout(zoomTierTimerRef.current);
+        zoomTierTimerRef.current = setTimeout(() => fetchPropertiesRef.current(map.getBounds()), 250);
+      }
+      if (!overviewModeRef.current && !isDrawingModeRef.current) scheduleStatePrefetch();
+    };
+
     const onPointMouseMove = (e: maplibregl.MapMouseEvent & { features?: Feature[] }) => {
       const feature = e.features?.[0];
       if (!feature) return;
       const props = feature.properties as any;
+      markerHoverRef.current = true;
       map.getCanvas().style.cursor = 'pointer';
       const point: ClusterPoint = {
         id: props.id, type: props.type, title: props.title, price: props.price || 0,
@@ -1197,7 +1576,10 @@ export default function BrowsePage() {
     };
 
     const onPointMouseLeave = () => {
-      map.getCanvas().style.cursor = '';
+      markerHoverRef.current = false;
+      // Leave the pointer cursor alone when the pointer is still over a state
+      // fill (both layers can be under the cursor at the same time).
+      if (!stateHoverRef.current) map.getCanvas().style.cursor = '';
       hidePropertyPreview();
     };
 
@@ -1438,6 +1820,12 @@ export default function BrowsePage() {
 
       setupMapLayers(map);
 
+      // Admin-1 layers go under the markers (beforeId) and above nothing else;
+      // safe no-op until the GeoJSON fetch resolves (ensureAdminLayersRef fires
+      // again from the geo effect).
+      ensureAdminLayers();
+      applyTierForZoom();
+
       map.on('mousemove', 'unclustered-properties', onPointMouseMove);
       map.on('mousemove', 'unclustered-projects', onPointMouseMove);
       map.on('mouseleave', 'unclustered-properties', onPointMouseLeave);
@@ -1446,6 +1834,14 @@ export default function BrowsePage() {
       map.on('click', 'unclustered-projects', onPointClick);
       // Clicking the highlighted price-marker also opens the card
       map.on('click', 'highlighted-pin', onPointClick);
+      // State hover/click are layer handlers, so MarkerLibre only dispatches
+      // them when the point is actually inside a state polygon. Touch devices
+      // get selection through the same click path (tap), with no hover
+      // dependency; hover is a pointer-only enhancement.
+      map.on('mousemove', ADMIN_LAYERS.fill, onStateMouseMove);
+      map.on('mouseleave', ADMIN_LAYERS.fill, onStateMouseLeave);
+      map.on('click', ADMIN_LAYERS.fill, onStateClick);
+      map.on('zoomend', onZoomEnd);
       map.on('click', onMapClick);
 
       // Initial data load. If a location search is in progress, it already
@@ -1548,12 +1944,25 @@ export default function BrowsePage() {
       map.off('click', 'unclustered-projects', onPointClick);
       map.off('click', 'highlighted-pin', onPointClick);
       map.off('click', onMapClick);
+      // Admin-1 teardown: unregister once-only listeners, clear hover state
+      // and remove the tooltip element; layers go with the map itself.
+      map.off('mousemove', ADMIN_LAYERS.fill, onStateMouseMove);
+      map.off('mouseleave', ADMIN_LAYERS.fill, onStateMouseLeave);
+      map.off('click', ADMIN_LAYERS.fill, onStateClick);
+      map.off('zoomend', onZoomEnd);
+      hideStateTooltip();
+      destroyStateTooltip();
+      removeAdminLayers(map);
+      if (stateCountTimerRef.current) clearTimeout(stateCountTimerRef.current);
+      if (zoomTierTimerRef.current) clearTimeout(zoomTierTimerRef.current);
+      if (statePrefetchTimerRef.current) clearTimeout(statePrefetchTimerRef.current);
+      if (stateCountAbortRef.current) stateCountAbortRef.current.abort();
       removeMapLayers(map);
       destroyPreviewCards();
       map.remove();
       mapRef.current = null;
     };
-    }, [router]);
+    }, [router, fetchStateDetail]);
 
   useEffect(() => {
     const resizer = resizerRef.current;
@@ -1668,7 +2077,7 @@ export default function BrowsePage() {
     // no text re-geocode, so the filter can never belong to another entity.
     if (explicit !== undefined && explicit !== null) {
       if (explicit.rings && explicit.rings.length > 0 && explicit.bbox) {
-        applyGeocodedBoundary(explicit.rings, explicit.bbox);
+        applyGeocodedBoundary(explicit.rings, explicit.bbox, locationText);
       }
       // rings null (center-only) / bbox already set by the caller: fall through
       // straight to the fetch with the caller's state.
@@ -1707,25 +2116,25 @@ export default function BrowsePage() {
                   minLng: Math.min(...rings.flat().map(p => p.lng)),
                   maxLng: Math.max(...rings.flat().map(p => p.lng)),
                 };
-            applyGeocodedBoundary(rings, bbox);
-          } else if (feature.bbox && feature.bbox.length === 4 && !isDegenerateBbox(feature.bbox)) {
-            // Fallback to bbox rectangle (skipped for point-bboxes — those
-            // become center lookups below instead of zero-area outlines).
-            const [west, south, east, north] = feature.bbox;
-            const rect = [
-              { lat: north, lng: west },
-              { lat: north, lng: east },
-              { lat: south, lng: east },
-              { lat: south, lng: west },
-            ];
-            applyGeocodedBoundary([rect], { minLat: south, maxLat: north, minLng: west, maxLng: east });
-          } else if (feature.center || (feature.bbox && feature.bbox.length === 4)) {
-            // Center lookup (also covers degenerate point-bboxes): bounds box
-            // around the point, no outline, no stale rings.
-            const [lng, lat] = feature.center ?? [(feature.bbox[0] + feature.bbox[2]) / 2, (feature.bbox[1] + feature.bbox[3]) / 2];
-            clearBoundaryState();
-            mapRef.current?.flyTo({ center: [lng, lat], zoom: 13, essential: true });
-            geocodedBoundsRef.current = { minLat: lat - 0.1, maxLat: lat + 0.1, minLng: lng - 0.1, maxLng: lng + 0.1 };
+            applyGeocodedBoundary(rings, bbox, locationText);
+          } else {
+            // No polygon on the MapTiler entity (city/neighborhood centroids).
+            // Try OSM for the real locality polygon; a bounding box is never
+            // drawn. Fall back to a center lookup only when nothing validates.
+            const center: [number, number] | null = Array.isArray(feature.center) && feature.center.length === 2
+              ? [Number(feature.center[0]), Number(feature.center[1])]
+              : feature.bbox && feature.bbox.length === 4
+                ? [(Number(feature.bbox[0]) + Number(feature.bbox[2])) / 2, (Number(feature.bbox[1]) + Number(feature.bbox[3])) / 2]
+                : null;
+            const place = center ? await resolvePlaceGeometryOSM(locationText, center) : null;
+            if (place) {
+              applyGeocodedBoundary(place.rings, place.bbox, locationText);
+            } else if (center && Number.isFinite(center[0]) && Number.isFinite(center[1])) {
+              // Center lookup: bounds box around the point, no outline.
+              clearBoundaryState();
+              mapRef.current?.flyTo({ center, zoom: 13, essential: true });
+              geocodedBoundsRef.current = { minLat: center[1] - 0.1, maxLat: center[1] + 0.1, minLng: center[0] - 0.1, maxLng: center[0] + 0.1 };
+            }
           }
         }
       } catch {}
@@ -1778,6 +2187,7 @@ export default function BrowsePage() {
     setIsDrawingMode(false);
     drawPointsRef.current = [];
     updateBoundaryLayerRef.current([]);
+    resetStateSelection();
     if (mapRef.current) {
       mapRef.current.dragPan.enable();
       mapRef.current.scrollZoom.enable();
@@ -1787,7 +2197,10 @@ export default function BrowsePage() {
     }
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     fetchPropertiesRef.current(
-      searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null
+      searchAsIMoveRef.current && mapRef.current ? mapRef.current.getBounds() : null,
+      undefined,
+      undefined,
+      null
     );
   };
 
@@ -1842,6 +2255,11 @@ export default function BrowsePage() {
     // Rent intent is properties-only (projects are sale inventory).
     const effectiveScope = intentRef.current === 'rent' && scope !== 'properties' ? 'properties' : scope;
     setSearchScope(effectiveScope);
+    // The fetch below runs synchronously, before React re-renders — without
+    // updating the ref here the request would use the PREVIOUS scope, leaving
+    // markers/counts one mode behind the toggle (and, on the next refetch,
+    // querying the wrong mode entirely).
+    searchScopeRef.current = effectiveScope;
     setPropertyNextCursor(null);
     setProjectNextCursor(null);
     setHasMoreProperties(false);
@@ -1863,6 +2281,7 @@ export default function BrowsePage() {
     // Rent forces properties scope; Buy leaves scope as-is.
     if (next === 'rent' && searchScopeRef.current !== 'properties') {
       setSearchScope('properties');
+      searchScopeRef.current = 'properties'; // fetch below must not read the old scope
     }
     setPropertyNextCursor(null);
     setProjectNextCursor(null);
@@ -1950,10 +2369,27 @@ export default function BrowsePage() {
 
   // Single choke point for geocoded boundaries: the outline drawn and the
   // rings sent to ES come from the SAME array, so they can never disagree.
-  const applyGeocodedBoundary = useCallback((rings: BoundaryRings, bbox: GeoBounds | null) => {
+  // Drop the state selection without refetching; used when another boundary
+  // type replaces it (geocoded rings, freehand draw, reset). The full-detail
+  // outline is dropped with it and the overview line is restored for all states.
+  const resetStateSelection = useCallback(() => {
+    const prev = selectedStateRef.current;
+    if (prev && mapRef.current) {
+      setAdminSelected(mapRef.current, null, prev.id);
+      setOverviewSelectedExcluded(mapRef.current, null);
+      setSelectedDetail(mapRef.current, null);
+    }
+    selectedStateRef.current = null;
+    setSelectedState(null);
+  }, []);
+
+  const applyGeocodedBoundary = useCallback((rings: BoundaryRings, bbox: GeoBounds | null, label?: string | null) => {
+    // A geocoded boundary replaces any state selection (single filter source).
+    resetStateSelection();
     const valid = (rings || []).filter(r => Array.isArray(r) && r.length >= 3);
     geocodedRingsRef.current = valid.length > 0 ? valid : null;
     drawPointsRef.current = [];
+    setActiveBoundaryLabel(valid.length > 0 ? (label?.trim() || 'Selected area') : null);
     if (valid.length > 0) {
       setBoundaryPoints(valid.flat());
       setBoundaryActive(true);
@@ -1968,7 +2404,7 @@ export default function BrowsePage() {
         }
       }
     }
-  }, []);
+  }, [resetStateSelection]);
 
   // Full boundary reset: outline, filter rings, freehand accumulator, bounds.
   const clearBoundaryState = useCallback(() => {
@@ -1976,11 +2412,14 @@ export default function BrowsePage() {
     drawPointsRef.current = [];
     setBoundaryPoints([]);
     setBoundaryActive(false);
+    setActiveBoundaryLabel(null);
     geocodedBoundsRef.current = null;
     updateBoundaryLayerRef.current([]);
   }, []);
 
   const activateDrawing = useCallback(() => {
+    // Drawing replaces any state selection.
+    resetStateSelection();
     setIsDrawingMode(true);
     setBoundaryPoints([]);
     drawPointsRef.current = [];
@@ -1998,7 +2437,7 @@ export default function BrowsePage() {
       mapRef.current.doubleClickZoom.disable();
       mapRef.current.getCanvas().style.cursor = 'crosshair';
     }
-  }, []);
+  }, [resetStateSelection]);
 
   const cancelDrawing = useCallback(() => {
     setIsDrawingMode(false);
@@ -2008,6 +2447,7 @@ export default function BrowsePage() {
     drawPointsRef.current = [];
     setBoundaryPoints([]);
     setBoundaryActive(false);
+    setActiveBoundaryLabel(null);
     updateBoundaryLayer([]);
     if (mapRef.current) {
       mapRef.current.dragPan.enable();
@@ -2020,12 +2460,15 @@ export default function BrowsePage() {
   }, [updateBoundaryLayer]);
 
   const applyBoundary = useCallback(() => {
+    // A freehand boundary replaces any state selection (single filter source).
+    resetStateSelection();
     const pts = drawPointsRef.current;
     if (pts.length < 3) return;
     const simplified = simplifyPolygon(pts);
     drawPointsRef.current = simplified;
     setBoundaryPoints(simplified);
     setBoundaryActive(true);
+    setActiveBoundaryLabel('Drawn boundary');
     setIsDrawingMode(false);
     if (mapRef.current) {
       mapRef.current.dragPan.enable();
@@ -2038,11 +2481,12 @@ export default function BrowsePage() {
     // Pass current map bounds instead of null — null causes 400 "bounds required" error
     const bounds = mapRef.current?.getBounds() ?? null;
     fetchPropertiesRef.current(bounds, undefined, [simplified]);
-  }, [updateBoundaryLayer]);
+  }, [updateBoundaryLayer, resetStateSelection]);
 
   const removeBoundary = useCallback(() => {
     setBoundaryActive(false);
     setBoundaryPoints([]);
+    setActiveBoundaryLabel(null);
     setIsDrawingMode(false);
     drawPointsRef.current = [];
     geocodedRingsRef.current = null;
@@ -2057,6 +2501,81 @@ export default function BrowsePage() {
     }
     fetchPropertiesRef.current(mapRef.current ? mapRef.current.getBounds() : null);
   }, [updateBoundaryLayer]);
+
+  // ---- Interactive state/emirate selection -------------------------------
+  // The state id is the only filter token sent to the server — the rings stay
+  // server-side so outline, count, and ES filter can never drift (AD3/AD5).
+  const selectState = useCallback((id: string, name: string, bbox: [number, number, number, number]) => {
+    const map = mapRef.current;
+    // A state selection is a boundary selection: replace any geocoded/freehand
+    // boundary so exactly one filter geometry is ever active.
+    clearBoundaryState();
+    const prev = selectedStateRef.current;
+    if (map) {
+      // Selection must be independent of hover: drop the hover feature-state so
+      // the blue hover fill cannot linger as if it were the selected styling
+      // (selected regions render as an outline only).
+      clearAdminHover(map, stateHoverRef.current);
+      setAdminDetailState(map, null, stateHoverRef.current);
+      stateHoverRef.current = null;
+      stateHoverDetailRef.current = null;
+      setHoverDetail(map, null);
+      setOverviewHoverExcluded(map, null);
+      setAdminSelected(map, id, prev && prev.id !== id ? prev.id : null);
+      // The simplified overview line is replaced by the canonical outline as
+      // soon as it is available (cached after a hover or prefetch), so the two
+      // never draw on top of each other.
+      setOverviewSelectedExcluded(map, id);
+      const beforeId = map.getLayer('unclustered-properties')
+        ? 'unclustered-properties'
+        : map.getLayer('unclustered-properties-halo')
+          ? 'unclustered-properties-halo'
+          : undefined;
+      const sha = (adminGeoRef.current?.features || []).find((f: any) => String(f.id) === id)?.properties?.sha;
+      fetchStateDetail(id, typeof sha === 'string' ? sha : null)
+        .then((fc) => {
+          // Ignore stale responses (a newer state may have been selected, or
+          // the map may have been torn down) — same epoch discipline as search.
+          if (!fc || selectedStateRef.current?.id !== id || mapRef.current !== map) return;
+          setSelectedDetail(map, fc.features[0], beforeId);
+        })
+        .catch(() => { /* the overview outline remains until a retry succeeds */ });
+    }
+    const next = { id, name };
+    selectedStateRef.current = next;
+    setSelectedState(next);
+    applyAdminTierRef.current?.();
+    if (map) {
+      // Same latch geocoded selections use: the post-fitBounds moveend becomes
+      // a no-op instead of a duplicate corrective fetch.
+      geocodedBoundsRef.current = { minLat: bbox[1], maxLat: bbox[3], minLng: bbox[0], maxLng: bbox[2] };
+      map.fitBounds([bbox[0], bbox[1], bbox[2], bbox[3]], { padding: 40, duration: 800 });
+    }
+    const boundsDuck = {
+      getSouthWest: () => ({ lat: bbox[1], lng: bbox[0] }),
+      getNorthEast: () => ({ lat: bbox[3], lng: bbox[2] }),
+    } as unknown as LngLatBounds;
+    fetchPropertiesRef.current(boundsDuck, undefined, undefined, id);
+  }, [clearBoundaryState]);
+
+  const clearStateSelection = useCallback(() => {
+    resetStateSelection();
+    fetchPropertiesRef.current(mapRef.current ? mapRef.current.getBounds() : null, undefined, undefined, null);
+  }, [resetStateSelection]);
+
+  // The single overlay control's remove action: a state selection drops the
+  // state filter; any other boundary (geocoded locality or freehand) goes
+  // through the full boundary reset, which also refetches the listings.
+  const removeActiveBoundary = useCallback(() => {
+    if (selectedStateRef.current) {
+      clearStateSelection();
+      return;
+    }
+    removeBoundary();
+  }, [clearStateSelection, removeBoundary]);
+
+  // Publish to the map-lifecycle effect (which runs before this definition).
+  selectStateRef.current = selectState;
 
   const SCOPE_OPTIONS: { value: SearchScope; label: string; icon: React.ReactNode }[] = [
     { value: 'properties', label: 'Properties', icon: <FaHome size={12} /> },
@@ -2083,7 +2602,13 @@ export default function BrowsePage() {
   );
 
   const activeFilterCount = Object.values(filters).filter(value => value.trim().length > 0).length
-    + (boundaryActive ? 1 : 0);
+    + (boundaryActive ? 1 : 0)
+    + (selectedState ? 1 : 0);
+
+  // Single boundary-control descriptor for the map overlay: the selected
+  // region's name, the geocoded locality name / freehand marker, or null →
+  // the control shows the "Draw Boundary" action instead.
+  const boundaryLabel = selectedState?.name ?? (boundaryActive ? (activeBoundaryLabel ?? 'Custom boundary') : null);
 
   const sidebarToggleIcon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2116,6 +2641,11 @@ export default function BrowsePage() {
           }}
         >
 
+          {/* ONE SCROLL SURFACE: toggle row, filters, and results scroll
+              together. Nothing is pinned here, so filter sections scroll out
+              of view naturally; the manual ^ toggle stays the explicit
+              collapse control. */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
            {/* SIDEBAR TOGGLE + FILTER ACCORDION */}
             <div className="p-4 pb-2">
               <div className="flex items-center gap-2">
@@ -2149,11 +2679,13 @@ export default function BrowsePage() {
               </div>
             </div>
 
-           {/* FILTER CONTENT (accordion) */}
+           {/* FILTER CONTENT (accordion): grid-rows animation grows to the
+               card's natural height — no fixed cap to clip on short viewports. */}
             <div className={cn(
-              "transition-all duration-300 ease-in-out overflow-hidden",
-              filterOpen ? "max-h-[700px] opacity-100" : "max-h-0 opacity-0"
+              "grid transition-all duration-300 ease-in-out",
+              filterOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
             )}>
+             <div className="overflow-hidden">
              <div className="px-4 pb-2">
               <div className="shadow-neumorphic-outset rounded-3xl p-4 space-y-4">
 
@@ -2241,43 +2773,13 @@ export default function BrowsePage() {
                   </button>
                   {locationError && <p className="text-xs text-danger-color mt-1 text-center">{locationError}</p>}
                 </div>
-
-                {/* Draw Boundary */}
-                <div>
-                  {!isDrawingMode && !boundaryActive && (
-                    <button onClick={activateDrawing} className="neumorphic-button w-full flex items-center justify-center gap-2">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 2 L22 8.5 L22 15.5 L12 22 L2 15.5 L2 8.5 Z"/>
-                        <circle cx="12" cy="12" r="3" fill="currentColor"/>
-                      </svg>
-                      Draw Boundary
-                    </button>
-                  )}
-                  {isDrawingMode && (
-                    <div className="space-y-2">
-                      <p className="text-xs text-text-color-light text-center">Click & drag on map to draw a boundary. {boundaryPoints.length >= 3 ? `(${boundaryPoints.length} points)` : '(min 3 points required)'}</p>
-                      <div className="flex gap-2">
-                        <button onClick={cancelDrawing} className="neumorphic-button flex-1">Cancel</button>
-                        <button onClick={applyBoundary} disabled={boundaryPoints.length < 3} className="neumorphic-button bg-cta-gradient flex-1 disabled:opacity-50">Apply</button>
-                      </div>
-                    </div>
-                  )}
-                  {boundaryActive && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-success-color">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                        Boundary Active ({boundaryPoints.length} pts)
-                      </div>
-                      <button onClick={removeBoundary} className="neumorphic-button w-full text-danger-color">Remove Boundary</button>
-                    </div>
-                  )}
-                </div>
               </div>
+            </div>
             </div>
           </div>
 
-          {/* RESULTS LIST */}
-          <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3">
+          {/* RESULTS LIST (natural flow: the panel itself is the scroll surface) */}
+          <div className="px-4 pb-4 space-y-3">
             {combinedList.length > 0 && (
               <>
                 <div className="flex items-center justify-between pt-2">
@@ -2475,6 +2977,7 @@ export default function BrowsePage() {
               </>
             )}
           </div>
+          </div>
         </aside>
 
         {/* RESIZE HANDLE */}
@@ -2496,23 +2999,83 @@ export default function BrowsePage() {
         )}>
           <div ref={mapContainer} className="w-full h-full" />
           {loading && <div className="absolute top-4 right-4 bg-bg-color p-2 rounded-full shadow-neumorphic-outset"><FaSpinner className="animate-spin text-blue-500" /></div>}
-          {/* Zillow-style visible/total counter + community pills */}
-          {!loading && (propertyTotal + projectTotal) > 0 && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1.5 pointer-events-none">
-              <div className="rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
-                {markerCount} of {(propertyTotal + projectTotal).toLocaleString()}{totalRelation === 'gte' ? '+' : ''} homes
-              </div>
-              {projectGroups.length > 0 && (
-                <div className="flex flex-wrap justify-center gap-1 max-w-md pointer-events-auto">
-                  {projectGroups.slice(0, 3).map(g => (
-                    <span key={g.name} className="rounded-full bg-red-800/90 px-2 py-0.5 text-[11px] font-semibold text-white">
-                      {g.count} in {g.name}
-                    </span>
-                  ))}
+          {/* Top map status stack: homes count with the active state/emirate
+              boundary control beside it (highlighted while a state filter is
+              active; its X removes the boundary), community pills below. */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1.5 pointer-events-none">
+            <div className="flex items-center gap-2">
+              {!loading && (propertyTotal + projectTotal) > 0 && (
+                <div className="rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
+                  {markerCount} of {(propertyTotal + projectTotal).toLocaleString()}{totalRelation === 'gte' ? '+' : ''} homes
                 </div>
               )}
+              {/* Single boundary control (top of the map): idle → Draw
+                  Boundary; drawing → point count + Apply/Cancel; active →
+                  boundary name + remove (×). Text-first, no polygon glyphs. */}
+              {isDrawingMode ? (
+                <div className="pointer-events-auto flex items-center gap-2 rounded-full bg-blue-600 py-1 pl-3 pr-1 text-white shadow-lg">
+                  <span className="text-xs font-semibold">
+                    {boundaryPoints.length >= 3 ? `${boundaryPoints.length} points` : 'Draw on map (min 3 points)'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={applyBoundary}
+                    disabled={boundaryPoints.length < 3}
+                    className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelDrawing}
+                    aria-label="Cancel drawing"
+                    title="Cancel drawing"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/30"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
+                      <line x1="5" y1="5" x2="19" y2="19" />
+                      <line x1="19" y1="5" x2="5" y2="19" />
+                    </svg>
+                  </button>
+                </div>
+              ) : boundaryLabel ? (
+                <div className="pointer-events-auto flex items-center gap-2 rounded-full bg-blue-600 py-1 pl-3 pr-1 text-white shadow-lg">
+                  <span className="max-w-[200px] truncate text-xs font-semibold">{boundaryLabel}</span>
+                  <button
+                    type="button"
+                    onClick={removeActiveBoundary}
+                    aria-label={selectedState ? `Clear ${selectedState.name} selection` : `Remove ${boundaryLabel}`}
+                    title="Remove boundary"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/30"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
+                      <line x1="5" y1="5" x2="19" y2="19" />
+                      <line x1="19" y1="5" x2="5" y2="19" />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={activateDrawing}
+                  aria-label="Draw boundary"
+                  title="Draw a custom boundary on the map"
+                  className="pointer-events-auto rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm transition-colors hover:bg-black/80"
+                >
+                  Draw Boundary
+                </button>
+              )}
             </div>
-          )}
+            {!loading && (propertyTotal + projectTotal) > 0 && projectGroups.length > 0 && (
+              <div className="flex flex-wrap justify-center gap-1 max-w-md pointer-events-auto">
+                {projectGroups.slice(0, 3).map(g => (
+                  <span key={g.name} className="rounded-full bg-red-800/90 px-2 py-0.5 text-[11px] font-semibold text-white">
+                    {g.count} in {g.name}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           {!sidebarOpen && !fullScreenResults && (
             <button
               type="button"

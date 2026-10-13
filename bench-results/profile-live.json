@@ -1,0 +1,524 @@
+{
+  "label": "live",
+  "runs": 11,
+  "indices": {
+    "props": "properties_search",
+    "projects": "projects_search",
+    "tiles": "listings_tile"
+  },
+  "shapes": {
+    "list_both_newest": {
+      "index": "properties_search,projects_search",
+      "wallMs": 9.177374999999984,
+      "tookMs": 4,
+      "shardCount": 2,
+      "rewriteMs": 0.082667,
+      "queryMs": 0.299246,
+      "collectorMs": 0.201084,
+      "fetchMs": 1.990875,
+      "totalShardCpuMs": 2.570501,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.299246
+      },
+      "queryLeaves": {
+        "filter_term": 0.172791,
+        "range": 0.080046
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.201084
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 0.166706,
+        "AggregatorCollector: []": 0.007503
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "list_both_price_desc": {
+      "index": "properties_search,projects_search",
+      "wallMs": 6.250249999999937,
+      "tookMs": 3,
+      "shardCount": 2,
+      "rewriteMs": 0.049709,
+      "queryMs": 0.363462,
+      "collectorMs": 0.214959,
+      "fetchMs": 1.489875,
+      "totalShardCpuMs": 2.114594,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.363462
+      },
+      "queryLeaves": {
+        "filter_term": 0.152173,
+        "range": 0.088667
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.214959
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 0.195629,
+        "AggregatorCollector: []": 0.008586
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "list_props_newest": {
+      "index": "properties_search",
+      "wallMs": 7.317250000000058,
+      "tookMs": 4,
+      "shardCount": 1,
+      "rewriteMs": 0.040333,
+      "queryMs": 0.262584,
+      "collectorMs": 0.112915,
+      "fetchMs": 2.310042,
+      "totalShardCpuMs": 2.859918,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.262584
+      },
+      "queryLeaves": {
+        "filter_term": 0.102089,
+        "range": 0.064378
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.112915
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 0.093958,
+        "AggregatorCollector: []": 0.005795
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 13,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13
+        }
+      }
+    },
+    "list_both_newest_INLINE_NATIVE": {
+      "index": "properties_search,projects_search",
+      "wallMs": 7.993249999999989,
+      "tookMs": 5,
+      "shardCount": 2,
+      "rewriteMs": 0.123541,
+      "queryMs": 0.350502,
+      "collectorMs": 0.24192,
+      "fetchMs": 1.645917,
+      "totalShardCpuMs": 2.818618,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.350502
+      },
+      "queryLeaves": {
+        "filter_term": 0.134169,
+        "range": 0.094914
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.24192
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 0.150919,
+        "AggregatorCollector: [by_entity_type]": 0.087374
+      },
+      "aggs": {
+        "GlobalOrdinalsStringTermsAggregator.LowCardinality": 0.105045
+      },
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "list_both_newest_INLINE_COUNTERS": {
+      "index": "properties_search,projects_search",
+      "wallMs": 12.337582999999995,
+      "tookMs": 7,
+      "shardCount": 2,
+      "rewriteMs": 0.385665,
+      "queryMs": 1.003878,
+      "collectorMs": 1.36925,
+      "fetchMs": 1.873333,
+      "totalShardCpuMs": 5.049129,
+      "queryClauses": {
+        "BooleanQuery": 0.776043,
+        "ConstantScoreQuery": 0.227835
+      },
+      "queryLeaves": {
+        "filter_term": 0.569171,
+        "range": 0.200502
+      },
+      "collectors": {
+        "QueryPhaseCollector": 1.36925
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [exact_total, exact_property, exact_project]": 1.223127,
+        "SimpleFieldCollector": 0.228542
+      },
+      "aggs": {
+        "FilterAggregationBuilder.FilterAggregator": 1.373793
+      },
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "count_both": {
+      "index": "properties_search,projects_search",
+      "wallMs": 2.0080829999999423,
+      "tookMs": 0,
+      "shardCount": 2,
+      "rewriteMs": 0.059041,
+      "queryMs": 0.227416,
+      "collectorMs": 0.181919,
+      "fetchMs": 0,
+      "totalShardCpuMs": 0.470665,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.227416
+      },
+      "queryLeaves": {
+        "filter_term": 0.104709,
+        "range": 0.059799
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.181919
+      },
+      "collectorChildren": {
+        "PartialHitCountCollector": 0.091415,
+        "AggregatorCollector: [by_entity_type]": 0.05113
+      },
+      "aggs": {
+        "GlobalOrdinalsStringTermsAggregator.LowCardinality": 0.066377
+      },
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "count_props": {
+      "index": "properties_search",
+      "wallMs": 3.828375000000051,
+      "tookMs": 1,
+      "shardCount": 1,
+      "rewriteMs": 0.04475,
+      "queryMs": 0.293085,
+      "collectorMs": 0.103125,
+      "fetchMs": 0,
+      "totalShardCpuMs": 0.464043,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.293085
+      },
+      "queryLeaves": {
+        "filter_term": 0.115168,
+        "range": 0.082046
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.103125
+      },
+      "collectorChildren": {
+        "PartialHitCountCollector": 0.09088
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 13,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13
+        }
+      }
+    },
+    "tile_city_delhi_z11": {
+      "index": "listings_tile",
+      "wallMs": 8.448374999999942,
+      "tookMs": 3,
+      "shardCount": 1,
+      "rewriteMs": 0.072376,
+      "queryMs": 0.296287,
+      "collectorMs": 0.209752,
+      "fetchMs": 0,
+      "totalShardCpuMs": 0.560334,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.296287
+      },
+      "queryLeaves": {
+        "range": 0.123252,
+        "filter_term": 0.077627
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.209752
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [tiles]": 0.187084,
+        "PartialHitCountCollector": 0.012208
+      },
+      "aggs": {
+        "GeoTileGridAggregator": 0.88325
+      },
+      "shardDelta": {
+        "total": 13,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "listings_tile:0": 13
+        }
+      }
+    },
+    "tile_city_dubai_z10": {
+      "index": "listings_tile",
+      "wallMs": 7.518458999999893,
+      "tookMs": 3,
+      "shardCount": 1,
+      "rewriteMs": 0.070625,
+      "queryMs": 0.709395,
+      "collectorMs": 0.677672,
+      "fetchMs": 0,
+      "totalShardCpuMs": 1.5072,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.709395
+      },
+      "queryLeaves": {
+        "range": 0.207753,
+        "filter_term": 0.164605
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.677672
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [tiles]": 0.555647,
+        "PartialHitCountCollector": 0.01146
+      },
+      "aggs": {
+        "GeoTileGridAggregator": 1.142652
+      },
+      "shardDelta": {
+        "total": 13,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "listings_tile:0": 13
+        }
+      }
+    },
+    "tile_country_z4": {
+      "index": "listings_tile",
+      "wallMs": 6.769334000000072,
+      "tookMs": 3,
+      "shardCount": 1,
+      "rewriteMs": 0.057041,
+      "queryMs": 0.62144,
+      "collectorMs": 0.814615,
+      "fetchMs": 0,
+      "totalShardCpuMs": 1.495558,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.62144
+      },
+      "queryLeaves": {
+        "filter_term": 0.132044,
+        "range": 0.088449
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.814615
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [tiles]": 0.670646,
+        "PartialHitCountCollector": 0.009877
+      },
+      "aggs": {
+        "GeoTileGridAggregator": 1.256219
+      },
+      "shardDelta": {
+        "total": 13,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "listings_tile:0": 13
+        }
+      }
+    },
+    "fill_viewport_500": {
+      "index": "listings_tile",
+      "wallMs": 6.070999999999913,
+      "tookMs": 2,
+      "shardCount": 1,
+      "rewriteMs": 0.040958,
+      "queryMs": 0.159544,
+      "collectorMs": 0.108084,
+      "fetchMs": 1.26775,
+      "totalShardCpuMs": 1.507129,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.159544
+      },
+      "queryLeaves": {
+        "range": 0.066833,
+        "filter_term": 0.048212
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.108084
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 0.102167
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 13,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "listings_tile:0": 13
+        }
+      }
+    },
+    "legacy_random_500": {
+      "index": "properties_search,projects_search",
+      "wallMs": 6.624917000000096,
+      "tookMs": 2,
+      "shardCount": 2,
+      "rewriteMs": 0.059958,
+      "queryMs": 0.310544,
+      "collectorMs": 0.037832,
+      "fetchMs": 1.30125,
+      "totalShardCpuMs": 1.68242,
+      "queryClauses": {
+        "FunctionScoreQuery": 0.310544
+      },
+      "queryLeaves": {
+        "filter_term": 0.121919,
+        "range": 0.096126
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.037832
+      },
+      "collectorChildren": {
+        "SimpleTopScoreDocCollector": 0.027044
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "pills_by_project": {
+      "index": "properties_search,projects_search",
+      "wallMs": 4.181250000000091,
+      "tookMs": 1,
+      "shardCount": 2,
+      "rewriteMs": 0.093793,
+      "queryMs": 0.215417,
+      "collectorMs": 0.089124,
+      "fetchMs": 0,
+      "totalShardCpuMs": 0.410832,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.215417
+      },
+      "queryLeaves": {
+        "filter_term": 0.071751,
+        "range": 0.070003
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.089124
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [by_project]": 0.059545,
+        "PartialHitCountCollector": 0.016583
+      },
+      "aggs": {
+        "GlobalOrdinalsStringTermsAggregator.LowCardinality": 0.056751,
+        "NonCollectingAggregator": 0.012293
+      },
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    },
+    "quantile_created_country": {
+      "index": "properties_search,projects_search",
+      "wallMs": 6.855750000000171,
+      "tookMs": 3,
+      "shardCount": 2,
+      "rewriteMs": 0.048459,
+      "queryMs": 1.032438,
+      "collectorMs": 0.726456,
+      "fetchMs": 0,
+      "totalShardCpuMs": 1.899857,
+      "queryClauses": {
+        "ConstantScoreQuery": 1.032438
+      },
+      "queryLeaves": {
+        "filter_term": 0.358654,
+        "range": 0.142077
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.726456
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [p]": 0.539455,
+        "PartialHitCountCollector": 0.026626
+      },
+      "aggs": {
+        "TDigestPercentilesAggregator": 0.584151
+      },
+      "shardDelta": {
+        "total": 26,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "properties_v1:0": 13,
+          "projects_v1:0": 13
+        }
+      }
+    }
+  }
+}

@@ -472,3 +472,29 @@ body {
 .map-cluster-view-all:hover {
   background: #eff6ff;
 }
+
+/* Interactive state/emirate hover tooltip (map admin-1 selection) */
+.map-state-tooltip {
+  position: fixed;
+  z-index: 9998;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  padding: 6px 10px;
+  max-width: 220px;
+}
+.map-state-tooltip-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.map-state-tooltip-count {
+  font-size: 0.7rem;
+  color: #475569;
+  margin-top: 1px;
+}

@@ -46,6 +46,21 @@ export interface AmenitiesHighlightConfig {
   premium: string[];
 }
 
+// Interactive admin-1 (state/emirate) selection config. Paths are relative to
+// public/: `file` is the simplified overview layer, `manifest` indexes the
+// canonical per-region MapTiler geometry shared by the outline and the ES
+// filter (one source of truth for what is drawn and what is matched).
+export interface Admin1Config {
+  file: string;
+  manifest: string;
+  /** Below this zoom the map shows state outlines only (markers are skipped server-side). */
+  overviewMaxZoom: number;
+  /** Outline visibility band. Above outlineMaxZoom only the selected state is outlined. */
+  outlineMinZoom: number;
+  outlineMaxZoom: number;
+  showCounts: boolean;
+}
+
 export interface TenantConfig {
   slug: string;
   brand: { name: string };
@@ -58,7 +73,7 @@ export interface TenantConfig {
   bedsModel: 'bhk' | 'bedrooms';
   bedsLabel: string;
   areaUnit: string;
-  map: { center: [number, number]; zoom: number; geocodeCountries: string };
+  map: { center: [number, number]; zoom: number; geocodeCountries: string; admin1?: Admin1Config };
   features: { projects: boolean };
   filterNormalization: FilterNormalizationConfig;
   priceScales?: Record<string, Record<PricePurpose, PriceScale>>;
@@ -145,7 +160,7 @@ function loadTenant(): TenantConfig {
     ...(base.filterNormalization || {}),
   };
   const priceScales = sanitizePriceScales(
-    (base as Record<string, unknown>).priceScales,
+    (base as unknown as Record<string, unknown>).priceScales,
     filterNormalization.priceSteps
   );
   return {
@@ -162,6 +177,8 @@ function loadTenant(): TenantConfig {
       center: parseCenter(process.env.NEXT_PUBLIC_MAP_CENTER, base.map.center),
       zoom: process.env.NEXT_PUBLIC_MAP_ZOOM ? Number(process.env.NEXT_PUBLIC_MAP_ZOOM) || base.map.zoom : base.map.zoom,
       geocodeCountries: process.env.NEXT_PUBLIC_GEOCODE_COUNTRIES ?? base.map.geocodeCountries,
+      // Env kill-switch for the interactive admin-1 layer (AD7-style revert).
+      admin1: process.env.NEXT_PUBLIC_ADMIN1 === '0' ? undefined : base.map.admin1,
     },
     filterNormalization,
     ...(priceScales ? { priceScales } : {}),

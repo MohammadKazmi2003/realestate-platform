@@ -9,6 +9,7 @@ import { normalizeBoundaryPolygons } from '@/lib/filterNormalize';
 import { buildFilters, getListingCountsFor, indexForScope } from '@/lib/esQueryBuilder';
 import { flags } from '@/lib/flags';
 import { attachTiming, makeServerTiming } from '@/lib/routeTiming';
+import { getAdminRegion, getAdminRegionLite } from '@/lib/adminRegionsServer';
 
 function roundBounds(b: any) {
   if (!b) return b;
@@ -47,8 +48,30 @@ export async function POST(req: NextRequest) {
     const {
       query: rawQuery, location: rawLocation, minPrice, maxPrice, propertyType, bhkType, listingPurpose,
       amenities = [], furnishings = [], bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds,
-      polygon, polygons, cursor, pageSize = 24, sort = 'newest', scope = 'properties',
+      polygon, polygons, state, cursor, pageSize = 24, sort = 'newest', scope = 'properties',
     } = parsed.data as any;
+
+    // Admin-1 state selection resolves server-side to the same canonical
+    // MapTiler geometry the map outline renders; it supersedes any raw boundary
+    // the client sent.
+    let effectivePolygon = polygon as any;
+    let effectivePolygons = polygons as any;
+    let regionShapes: { outer: { lat: number; lng: number }[]; holes: { lat: number; lng: number }[][] }[] | undefined;
+    let regionToken: string | undefined;
+    if (typeof state === 'string' && state.trim()) {
+      const meta = getAdminRegionLite(state.trim());
+      if (!meta) {
+        return NextResponse.json({ error: `unknown state: ${state}` }, { status: 400 });
+      }
+      const region = getAdminRegion(state.trim());
+      if (!region) {
+        return NextResponse.json({ error: 'state geometry unavailable' }, { status: 503 });
+      }
+      regionShapes = region.shapes;
+      regionToken = region.token;
+      effectivePolygon = undefined;
+      effectivePolygons = undefined;
+    }
 
     const stripNumbers = (s: string | undefined): string | undefined => {
       if (!s) return s;
@@ -60,13 +83,16 @@ export async function POST(req: NextRequest) {
     const normalizedAmenities = amenities.map((a: string) => a.toLowerCase().trim());
     const normalizedFurnishings = furnishings.map((f: string) => f.toLowerCase().trim());
     // Normalized once so the key, the query, and /api/map-data page 1 all
-    // describe the identical boundary (fixes stale Load-More pages).
-    const boundaryRings = normalizeBoundaryPolygons(polygon as any, polygons as any);
-    const hasBoundary = boundaryRings.length > 0;
+    // describe the identical boundary (fixes stale Load-More pages). State
+    // selections arrive pre-normalized from the registry.
+    const boundaryRings = normalizeBoundaryPolygons(effectivePolygon, effectivePolygons);
+    const hasBoundary = boundaryRings.length > 0 || regionShapes !== undefined;
 
     // NOTE: cursor MUST be part of the key — without it every "load more"
     // page returns the cached page 1, which appends duplicate ids downstream.
-    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), polygons: hasBoundary ? boundaryRings : null, pageSize, sort, scope, cursor: cursor ?? null })}`;
+    // A state boundary is keyed by its region token, never the multi-megabyte
+    // canonical shapes.
+    const cacheKey = `s:${JSON.stringify({ query, location, minPrice, maxPrice, propertyType, bhkType, listingPurpose, amenities: normalizedAmenities, furnishings: normalizedFurnishings, bathrooms, minArea, maxArea, lat, lng, radiusKm, bounds: roundBounds(bounds), polygons: boundaryRings.length > 0 ? boundaryRings : null, region: regionToken ?? null, pageSize, sort, scope, cursor: cursor ?? null })}`;
 
     const cached = await cacheGet(cacheKey);
     timing.record('cache');
@@ -91,6 +117,8 @@ export async function POST(req: NextRequest) {
         ...parsed.data,
         polygon: undefined,
         polygons: boundaryRings.length > 0 ? boundaryRings : undefined,
+        polygonsWithHoles: regionShapes,
+        regionToken,
       },
       scope
     );
@@ -209,7 +237,7 @@ export async function POST(req: NextRequest) {
     const tCompute = performance.now();
     const [esResponse, counts] = await Promise.all([
       es.search(esQuery),
-      splitCounts ? getListingCountsFor(must, filters, scope, sort) : Promise.resolve(null),
+      splitCounts ? getListingCountsFor(must, filters, scope, sort, regionToken) : Promise.resolve(null),
     ]);
     timing.record('compute', performance.now() - tCompute);
     recordEsSuccess();
@@ -268,8 +296,8 @@ export async function POST(req: NextRequest) {
     let withoutPurposeTotal: number | null = null;
     if (exactTotal === 0 && typeof listingPurpose === 'string' && listingPurpose.trim()) {
       try {
-        const relaxed = buildFilters({ ...parsed.data, listingPurpose: undefined }, scope);
-        const relaxedCounts = await getListingCountsFor(relaxed.must, relaxed.filters, scope, sort);
+        const relaxed = buildFilters({ ...parsed.data, listingPurpose: undefined, polygonsWithHoles: regionShapes, regionToken }, scope);
+        const relaxedCounts = await getListingCountsFor(relaxed.must, relaxed.filters, scope, sort, regionToken);
         withoutPurposeTotal = typeof relaxedCounts?.total === 'number' ? relaxedCounts.total : null;
       } catch {
         withoutPurposeTotal = null;

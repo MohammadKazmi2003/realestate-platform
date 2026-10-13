@@ -1,0 +1,12 @@
+8f93db0862acd053716c4d4316a5150d7d9f9839
+ M docker-compose.yml
+ M src/app/api/search/route.ts
+ M src/lib/esQueryBuilder.ts
+ M src/lib/flags.ts
+?? bench-results/
+?? docs/compose/reports/es-count-scaling-2026-10-10.md
+?? docs/compose/reports/es-count-strategy-2026-10-10.md
+?? docs/compose/reports/map-search-audit-2026-10-10.md
+?? scripts/bench-count-strategies.js
+?? scripts/build-bench-corpora.mjs
+?? src/__tests__/countStrategy.test.ts

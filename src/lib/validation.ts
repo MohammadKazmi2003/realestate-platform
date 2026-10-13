@@ -68,7 +68,12 @@ export const searchQuerySchema = z.object({
   radiusKm: z.number().min(0).max(500).optional(),
   bounds: boundsSchema.optional(),
   polygon: polygonSchema,
-  polygons: z.array(z.array(polygonPointSchema).min(3)).max(32).optional(),
+  // Client-sent ring arrays (state/emirate selections arrive as `state` and
+  // are resolved server-side; this cap covers hand-drawn/freehand boundaries).
+  polygons: z.array(z.array(polygonPointSchema).min(3)).max(1024).optional(),
+  // Admin-1 region id (e.g. IN-RJ, AE-DU). Server resolves it to the bundled
+  // boundary so clients never ship polygon geometry for state selections.
+  state: z.string().max(16).optional(),
   cursor: z.array(z.any()).optional(),
   pageSize: z.number().min(1).max(500).optional(),
   sort: z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'popular', 'beds', 'baths', 'sqft', 'lot']).optional(),

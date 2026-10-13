@@ -1,0 +1,912 @@
+{
+  "source": "maptiler-geocoding",
+  "attribution": "© MapTiler © OpenStreetMap contributors",
+  "generatedAt": "2026-10-12T15:15:19.727Z",
+  "version": "55e4493fb408962f",
+  "regions": {
+    "IN-AN": {
+      "file": "regions/IN-AN.geojson",
+      "name": "Andaman and Nicobar Islands",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        92.20420986413956,
+        6.756267423746137,
+        94.27730396389963,
+        13.675313604538466
+      ],
+      "points": 48329,
+      "rings": 282,
+      "holes": 0,
+      "sha256": "620d376237390b8029ab5a4a51e9b91694bca3c9e7f593201106e6dbff839569",
+      "sourceIds": [
+        "region.852"
+      ],
+      "bboxIoU": 0.7305913299687029,
+      "areaRatio": 0.9737987102809027
+    },
+    "IN-TG": {
+      "file": "regions/IN-TG.geojson",
+      "name": "Telangana",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        77.23658468574286,
+        15.836424606493779,
+        81.322624348104,
+        19.917296238047907
+      ],
+      "points": 10563,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "5a0a0d778e07f96ec5a2150528061fce14a285fbfbae1c3f98a14a3e13ba405d",
+      "sourceIds": [
+        "region.1541"
+      ],
+      "bboxIoU": 0.8939504779638701,
+      "areaRatio": 0.9771818359239454
+    },
+    "IN-AP": {
+      "file": "regions/IN-AP.geojson",
+      "name": "Andhra Pradesh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        76.76008354872467,
+        12.623860210684445,
+        84.76580321788788,
+        19.166806239523854
+      ],
+      "points": 19678,
+      "rings": 5,
+      "holes": 1,
+      "sha256": "ff0a1bfa2bb7a9bf3abdf8cb6030f7d33faece4ca1032e283460e09b8fc1740c",
+      "sourceIds": [
+        "region.1056"
+      ],
+      "bboxIoU": 0.9956688213077011,
+      "areaRatio": 1.0185197840036324
+    },
+    "IN-AR": {
+      "file": "regions/IN-AR.geojson",
+      "name": "Arunachal Pradesh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        91.56230796128511,
+        26.650863135948445,
+        97.39509031176567,
+        29.374556728785638
+      ],
+      "points": 8878,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "1dd01416eed6feb350e5ccb0714af93032fa049bf30bd78c12085a406f87417a",
+      "sourceIds": [
+        "region.952"
+      ],
+      "bboxIoU": 0.9602722045798963,
+      "areaRatio": 1.0131802867228736
+    },
+    "IN-AS": {
+      "file": "regions/IN-AS.geojson",
+      "name": "Assam",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        89.69860017299654,
+        24.136033018364003,
+        96.01243939250709,
+        27.971243045005835
+      ],
+      "points": 14160,
+      "rings": 2,
+      "holes": 1,
+      "sha256": "242ecd52c0f9e97e582e53457115834b40fad19732a6dd48e299db20b1b956ea",
+      "sourceIds": [
+        "region.859"
+      ],
+      "bboxIoU": 0.9961413259848497,
+      "areaRatio": 1.0012388407812822
+    },
+    "IN-BR": {
+      "file": "regions/IN-BR.geojson",
+      "name": "Bihar",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        83.32125630229712,
+        24.285716432981744,
+        88.29379554837942,
+        27.52163505877466
+      ],
+      "points": 14282,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "921b0c45266fb58a866ed499f6006f5d4c7dae8d8bc72f3ba3e8c866913be92e",
+      "sourceIds": [
+        "region.1025"
+      ],
+      "bboxIoU": 0.9060638757054608,
+      "areaRatio": 0.9991780798554518
+    },
+    "IN-CH": {
+      "file": "regions/IN-CH.geojson",
+      "name": "Chandigarh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        76.70498561114071,
+        30.664974244833196,
+        76.84902794659138,
+        30.794951380737373
+      ],
+      "points": 327,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "87fb729174a263d86eb027e71e19cac33970f07d2df1bf6053a7e05de7c896f6",
+      "sourceIds": [
+        "region.735"
+      ],
+      "bboxIoU": 0.7810427988133213,
+      "areaRatio": 0.9855181648520106
+    },
+    "IN-CT": {
+      "file": "regions/IN-CT.geojson",
+      "name": "Chhattisgarh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        80.24418018758297,
+        17.782215722496908,
+        84.39596381038427,
+        24.106686657790974
+      ],
+      "points": 14498,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "2fb93505d1093c3845aa9198b98f10c6ef7cbc7e63eca43375d8739e0c9aee35",
+      "sourceIds": [
+        "region.832"
+      ],
+      "bboxIoU": 0.997226366049815,
+      "areaRatio": 0.9978818986801858
+    },
+    "IN-DN": {
+      "file": "regions/IN-DN.geojson",
+      "name": "Dadra and Nagar Haveli and Daman and Diu",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        70.87345853447914,
+        20.04739100019283,
+        73.21782555431128,
+        20.767793769394185
+      ],
+      "points": 1644,
+      "rings": 13,
+      "holes": 1,
+      "sha256": "82e00e032175411259e57d51fa0415d225065d294811aa9b2f8c607f26c0f162",
+      "sourceIds": [
+        "region.716"
+      ],
+      "bboxIoU": 0.05397148373232141,
+      "areaRatio": 1.222711617365518
+    },
+    "IN-DD": {
+      "file": "regions/IN-DD.geojson",
+      "name": "Daman and Diu",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        70.87345853447914,
+        20.04739100019283,
+        73.21782555431128,
+        20.767793769394185
+      ],
+      "points": 1644,
+      "rings": 13,
+      "holes": 1,
+      "sha256": "efd792dffb697a031e46742e168586e370c2cecc3c0131abde778f00e6cb0ff8",
+      "sourceIds": [
+        "region.716"
+      ],
+      "bboxIoU": 0.35378906218079703,
+      "areaRatio": 1.0766780612503282
+    },
+    "IN-DL": {
+      "file": "regions/IN-DL.geojson",
+      "name": "Delhi",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        76.83883488178253,
+        28.404628607186456,
+        77.34533786773682,
+        28.883446426786136
+      ],
+      "points": 717,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "95c21f8ef0861727bfebeed34ffa009116b7fbf97668faac7211a6db95c2814a",
+      "sourceIds": [
+        "region.709"
+      ],
+      "bboxIoU": 0.9638027004025292,
+      "areaRatio": 0.9865449379414555
+    },
+    "IN-GA": {
+      "file": "regions/IN-GA.geojson",
+      "name": "Goa",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        73.67560118436813,
+        14.752931768662547,
+        74.33611359447241,
+        15.800763167339985
+      ],
+      "points": 4113,
+      "rings": 10,
+      "holes": 0,
+      "sha256": "9909c04574b665ee18984f034a79765c8c6a1c61cf488ecab4e783b4d0baa03d",
+      "sourceIds": [
+        "region.2002"
+      ],
+      "bboxIoU": 0.8497410341782672,
+      "areaRatio": 0.9836809239972802
+    },
+    "IN-GJ": {
+      "file": "regions/IN-GJ.geojson",
+      "name": "Gujarat",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        68.17565817385912,
+        20.11953240843457,
+        74.47643235325813,
+        24.711893265586106
+      ],
+      "points": 26482,
+      "rings": 59,
+      "holes": 2,
+      "sha256": "0556f5f559245be85ebf931821d1e167b44746a16c28513bab6f2005747610e3",
+      "sourceIds": [
+        "region.1110"
+      ],
+      "bboxIoU": 0.9963244155577047,
+      "areaRatio": 1.0059532992909348
+    },
+    "IN-HR": {
+      "file": "regions/IN-HR.geojson",
+      "name": "Haryana",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        74.47350706905127,
+        27.65262751468319,
+        77.60214295238256,
+        30.928770618521675
+      ],
+      "points": 7361,
+      "rings": 3,
+      "holes": 1,
+      "sha256": "305a374b637f1415d91a0e0136350b11e28cda78af059dc86369cb7960afb99a",
+      "sourceIds": [
+        "region.728"
+      ],
+      "bboxIoU": 0.9926468155124747,
+      "areaRatio": 1.0039736872388878
+    },
+    "IN-HP": {
+      "file": "regions/IN-HP.geojson",
+      "name": "Himachal Pradesh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        75.59400524944067,
+        30.377170323377335,
+        79.01238407939672,
+        33.25566886010954
+      ],
+      "points": 5878,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "08ee97e5fd01e415c89696083b1b410dd1259f00c5809c91cbaf5a5e3236ee5d",
+      "sourceIds": [
+        "region.392"
+      ],
+      "bboxIoU": 0.9884574699744028,
+      "areaRatio": 1.0013357181572478
+    },
+    "IN-JK": {
+      "file": "regions/IN-JK.geojson",
+      "name": "Jammu and Kashmir",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        73.75003349035978,
+        32.27635715999579,
+        79.46072772145271,
+        35.67293096357092
+      ],
+      "points": 19502,
+      "rings": 2,
+      "holes": 0,
+      "sha256": "4eb64eddfd690d58bf620a5fb36cfeeb739fd75fc73caf4de7bc1ea41b9b2053",
+      "sourceIds": [
+        "region.822",
+        "region.1854"
+      ],
+      "bboxIoU": 0.930969342332554,
+      "areaRatio": 1.0151805963583942
+    },
+    "IN-JH": {
+      "file": "regions/IN-JH.geojson",
+      "name": "Jharkhand",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        83.32811336964369,
+        21.97003200512841,
+        87.962825037539,
+        25.348922524887893
+      ],
+      "points": 14485,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "19b7994dd637a0e39e30bc6ea0d7ea257aeb67174d5f2e766e8d9acd011a4134",
+      "sourceIds": [
+        "region.1683"
+      ],
+      "bboxIoU": 0.9955889466618774,
+      "areaRatio": 0.9979405698916544
+    },
+    "IN-KA": {
+      "file": "regions/IN-KA.geojson",
+      "name": "Karnataka",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        74.05439078807831,
+        11.594558745956443,
+        78.58757581561804,
+        18.47664951482672
+      ],
+      "points": 17655,
+      "rings": 73,
+      "holes": 0,
+      "sha256": "470dd73f692ed95e3a82a68935f605a9f34133d2c9256552069605809fc6255a",
+      "sourceIds": [
+        "region.972"
+      ],
+      "bboxIoU": 0.9917205423145399,
+      "areaRatio": 1.0023256797060733
+    },
+    "IN-KL": {
+      "file": "regions/IN-KL.geojson",
+      "name": "Kerala",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        74.86406788229944,
+        8.293531934093222,
+        77.41236090660097,
+        12.796055924540076
+      ],
+      "points": 8402,
+      "rings": 7,
+      "holes": 1,
+      "sha256": "2cf848f1a9434e09b260f3767e37e01d3f808472cd9cc69a3e9487b75f17b15d",
+      "sourceIds": [
+        "region.872"
+      ],
+      "bboxIoU": 0.9905472091991765,
+      "areaRatio": 1.0309271698672575
+    },
+    "IN-LD": {
+      "file": "regions/IN-LD.geojson",
+      "name": "Lakshadweep",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        71.51803761720657,
+        8.0648198762947,
+        73.90614341944456,
+        12.601006615977377
+      ],
+      "points": 324,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "e74b1fe5d70836a3b43348dfb8f95435321f840a6676a4f9ebbb6fdc911a8f40",
+      "sourceIds": [
+        "region.954"
+      ],
+      "bboxIoU": 0.5089177325265578,
+      "areaRatio": 2101.600815939188
+    },
+    "IN-MP": {
+      "file": "regions/IN-MP.geojson",
+      "name": "Madhya Pradesh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        74.02938187122345,
+        21.07068863679806,
+        82.81261157244444,
+        26.86956175852293
+      ],
+      "points": 46373,
+      "rings": 5,
+      "holes": 3,
+      "sha256": "9a67df192e7f765a26f977c03452144a082033c035e15de26ea1b9e4b4d0189e",
+      "sourceIds": [
+        "region.1179"
+      ],
+      "bboxIoU": 0.997297802629427,
+      "areaRatio": 1.0004953758230424
+    },
+    "IN-MH": {
+      "file": "regions/IN-MH.geojson",
+      "name": "Maharashtra",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        72.65261102467775,
+        15.606359897824635,
+        80.89778389781713,
+        22.030269650815416
+      ],
+      "points": 29567,
+      "rings": 48,
+      "holes": 2,
+      "sha256": "f09c7796445fac67470b1292f81837bfdccea9768e4f5b378860ae5ee5bc81bd",
+      "sourceIds": [
+        "region.1218"
+      ],
+      "bboxIoU": 0.998687954072832,
+      "areaRatio": 0.9997235456892164
+    },
+    "IN-MN": {
+      "file": "regions/IN-MN.geojson",
+      "name": "Manipur",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        92.9707070812583,
+        23.833620738705815,
+        94.74524382501839,
+        25.69210152118156
+      ],
+      "points": 5061,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "2798907e482eb0d8aa02ad8ed5d780f1280a1893fb23fd56d6d1ef993d96710c",
+      "sourceIds": [
+        "region.962"
+      ],
+      "bboxIoU": 0.9873314319052608,
+      "areaRatio": 1.0013380273039836
+    },
+    "IN-ML": {
+      "file": "regions/IN-ML.geojson",
+      "name": "Meghalaya",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        89.81444377452135,
+        25.030647544156402,
+        92.80273642390966,
+        26.118165177312157
+      ],
+      "points": 5067,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "a0a5126133b548af4c6c8eab92b3a786ac79efecf5d3161b920c435931478697",
+      "sourceIds": [
+        "region.960"
+      ],
+      "bboxIoU": 0.9954228165682377,
+      "areaRatio": 0.9982436937057128
+    },
+    "IN-MZ": {
+      "file": "regions/IN-MZ.geojson",
+      "name": "Mizoram",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        92.26022209972142,
+        21.940052871102694,
+        93.43736954033376,
+        24.523130424557827
+      ],
+      "points": 9930,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "89dc84cd21b94a6b77b86f3b92d78519465e7580f5008e56fdc6cbf63843c7a1",
+      "sourceIds": [
+        "region.973"
+      ],
+      "bboxIoU": 0.9898899952990031,
+      "areaRatio": 0.9966947231588182
+    },
+    "IN-NL": {
+      "file": "regions/IN-NL.geojson",
+      "name": "Nagaland",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        93.32670025527477,
+        25.1984276527682,
+        95.24237718433142,
+        27.035801291512364
+      ],
+      "points": 7497,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "6ee044fa0fcd5c0f19afbd57f3126621ed1c6379f36922211de5523cdf56f77e",
+      "sourceIds": [
+        "region.969"
+      ],
+      "bboxIoU": 0.9902428104808932,
+      "areaRatio": 0.9977711617010794
+    },
+    "IN-OD": {
+      "file": "regions/IN-OD.geojson",
+      "name": "Odisha",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        81.38858523219824,
+        17.812273572631113,
+        87.48612977564335,
+        22.567593390213013
+      ],
+      "points": 16326,
+      "rings": 15,
+      "holes": 0,
+      "sha256": "162ac45612d3476538310855849df56320c7df6dc3043f26f9ed72f0af3cda65",
+      "sourceIds": [
+        "region.841"
+      ],
+      "bboxIoU": 0.9955773203762861,
+      "areaRatio": 0.9992714557934596
+    },
+    "IN-PY": {
+      "file": "regions/IN-PY.geojson",
+      "name": "Puducherry",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        75.52658624947071,
+        10.827721317784647,
+        82.31371331959963,
+        16.761711370268024
+      ],
+      "points": 2112,
+      "rings": 17,
+      "holes": 1,
+      "sha256": "83871d1484d3ef910d80de28596af72372908151f65d9548c89d316347ffd214",
+      "sourceIds": [
+        "region.3"
+      ],
+      "bboxIoU": 0.9511937689847826,
+      "areaRatio": 0.9022888410689528
+    },
+    "IN-PB": {
+      "file": "regions/IN-PB.geojson",
+      "name": "Punjab",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        73.87983329594135,
+        29.5429379425482,
+        76.9390579685569,
+        32.51117937468552
+      ],
+      "points": 6451,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "85ca1d1552dec2cc309d715b9a810db9d29b6e4fbb0932522452a76f72f42698",
+      "sourceIds": [
+        "region.731"
+      ],
+      "bboxIoU": 0.972265268423285,
+      "areaRatio": 1.0021694804921273
+    },
+    "IN-RJ": {
+      "file": "regions/IN-RJ.geojson",
+      "name": "Rajasthan",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        69.48443669825792,
+        23.058661453163385,
+        78.27200889587402,
+        30.19825307114517
+      ],
+      "points": 15877,
+      "rings": 4,
+      "holes": 1,
+      "sha256": "b3206f894e6cf1480139763a890c4aac01e0589079677cb8c51f773920fd5575",
+      "sourceIds": [
+        "region.798"
+      ],
+      "bboxIoU": 0.9977963901605078,
+      "areaRatio": 1.0009429272963846
+    },
+    "IN-SK": {
+      "file": "regions/IN-SK.geojson",
+      "name": "Sikkim",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        88.01203317940235,
+        27.079259642436032,
+        88.92116826027632,
+        28.12404675445435
+      ],
+      "points": 3897,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "2b6a09b0f8d3d400fb65d58cd25cd69d3a08529fad7fb8e11f49d3e8e387f9b8",
+      "sourceIds": [
+        "region.556"
+      ],
+      "bboxIoU": 0.9845401551185495,
+      "areaRatio": 1.0036186072919604
+    },
+    "IN-TN": {
+      "file": "regions/IN-TN.geojson",
+      "name": "Tamil Nadu",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        76.23294666409492,
+        8.076894085786178,
+        80.35929691046476,
+        13.563911299023554
+      ],
+      "points": 15045,
+      "rings": 42,
+      "holes": 9,
+      "sha256": "9035f97e463722b44eb3286472e240e738e403b71c6bfadd1358f267f12e6aee",
+      "sourceIds": [
+        "region.454"
+      ],
+      "bboxIoU": 0.9903370539769135,
+      "areaRatio": 0.9989834119634223
+    },
+    "IN-TR": {
+      "file": "regions/IN-TR.geojson",
+      "name": "Tripura",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        91.15080948919058,
+        22.937610654894034,
+        92.33584966510534,
+        24.530878001811836
+      ],
+      "points": 10707,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "2b6f63100595e98f599631b7677c107a46355bdae41ceb3757f39c536d99b08a",
+      "sourceIds": [
+        "region.905"
+      ],
+      "bboxIoU": 0.9900649155441149,
+      "areaRatio": 0.9909121136080156
+    },
+    "IN-UP": {
+      "file": "regions/IN-UP.geojson",
+      "name": "Uttar Pradesh",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        77.08387579768896,
+        23.870627390625245,
+        84.63450908660889,
+        30.40638287848574
+      ],
+      "points": 31376,
+      "rings": 3,
+      "holes": 0,
+      "sha256": "74d433fbe430fb2629bcf215c249fce96e0ae54dc6d5344b15e5320d7e4e6a5c",
+      "sourceIds": [
+        "region.722"
+      ],
+      "bboxIoU": 0.9980907734000766,
+      "areaRatio": 1.0011367925125838
+    },
+    "IN-UT": {
+      "file": "regions/IN-UT.geojson",
+      "name": "Uttarakhand",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        77.57132973521948,
+        28.724324579149982,
+        81.04478873312472,
+        31.45901612068973
+      ],
+      "points": 6002,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "47f7bb597669f5e777159b04f88da548501c40fb42fb51b71f1ece213c7059aa",
+      "sourceIds": [
+        "region.1979"
+      ],
+      "bboxIoU": 0.9824424380872966,
+      "areaRatio": 0.9928196206891734
+    },
+    "IN-WB": {
+      "file": "regions/IN-WB.geojson",
+      "name": "West Bengal",
+      "country": "India",
+      "countryCode": "IN",
+      "bbox": [
+        85.81967331469059,
+        21.547301700063098,
+        89.88260205835104,
+        27.22102638792378
+      ],
+      "points": 45351,
+      "rings": 94,
+      "holes": 2,
+      "sha256": "c3437cd7dab3492f640cf69ddfab4f068695893ed8094ef8efee0e4282da9da0",
+      "sourceIds": [
+        "region.1687"
+      ],
+      "bboxIoU": 0.9952674945152714,
+      "areaRatio": 1.0011392866663875
+    },
+    "AE-AZ": {
+      "file": "regions/AE-AZ.geojson",
+      "name": "Abu Dhabi",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        51.41607128083706,
+        22.631621468032847,
+        56.01739816367626,
+        25.36382925519183
+      ],
+      "points": 544,
+      "rings": 4,
+      "holes": 0,
+      "sha256": "9cb7e23b65c2f2a9023aff428345d76cbed578a75a1d19ed6f8df516879387b0",
+      "sourceIds": [
+        "region.1608"
+      ],
+      "bboxIoU": 0.8132699929114069,
+      "areaRatio": 1.4158660647318688
+    },
+    "AE-AJ": {
+      "file": "regions/AE-AJ.geojson",
+      "name": "Ajman",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        55.23507457226515,
+        24.743290070112803,
+        56.11413840204477,
+        25.623014063292242
+      ],
+      "points": 125,
+      "rings": 3,
+      "holes": 0,
+      "sha256": "0b5ba444aebb980e376e5078feaf9e3690702be21ec82b164b130bbba819eaf6",
+      "sourceIds": [
+        "region.1609"
+      ],
+      "bboxIoU": 0.6223744771490409,
+      "areaRatio": 1.8929715100926294
+    },
+    "AE-DU": {
+      "file": "regions/AE-DU.geojson",
+      "name": "Dubai",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        54.456454776227474,
+        24.623080114827133,
+        56.20528791099787,
+        25.5250677652746
+      ],
+      "points": 307,
+      "rings": 3,
+      "holes": 0,
+      "sha256": "a7b44e5e2f432e394544f412e167e83059501d1bfd4792d43f0bd54401c74a9a",
+      "sourceIds": [
+        "region.1610"
+      ],
+      "bboxIoU": 0.6203519250371545,
+      "areaRatio": 1.8191308846500356
+    },
+    "AE-FU": {
+      "file": "regions/AE-FU.geojson",
+      "name": "Fujairah",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        55.96984628587961,
+        24.987451688737256,
+        56.60140223801135,
+        25.69271574918472
+      ],
+      "points": 257,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "c324e359d95c3527c563ff4860ab90926a63e88236793ce8f6760224bb7ad1dc",
+      "sourceIds": [
+        "region.1611"
+      ],
+      "bboxIoU": 0.5492373985656551,
+      "areaRatio": 1.6947465112301379
+    },
+    "AE-RK": {
+      "file": "regions/AE-RK.geojson",
+      "name": "Ras al-Khaimah",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        55.59865236282349,
+        24.85061899851978,
+        56.34896915405989,
+        26.1517221496785
+      ],
+      "points": 775,
+      "rings": 2,
+      "holes": 0,
+      "sha256": "2cf6bdd18b1565ce343dcef95e481f016679285376cb44a2dab6193c1f397b9c",
+      "sourceIds": [
+        "region.1612"
+      ],
+      "bboxIoU": 0.663737332776615,
+      "areaRatio": 1.499592397361998
+    },
+    "AE-SH": {
+      "file": "regions/AE-SH.geojson",
+      "name": "Sharjah",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        53.97770494222641,
+        24.757259218662256,
+        56.60244561731815,
+        25.69897990836189
+      ],
+      "points": 538,
+      "rings": 6,
+      "holes": 0,
+      "sha256": "361a5ca0293233aa1540900c502de85ff78d6f3e404a894928d289ef1519ebab",
+      "sourceIds": [
+        "region.1613"
+      ],
+      "bboxIoU": 0.3633326325564212,
+      "areaRatio": 2.321329716110222
+    },
+    "AE-UQ": {
+      "file": "regions/AE-UQ.geojson",
+      "name": "Umm al-Quwain",
+      "country": "United Arab Emirates",
+      "countryCode": "AE",
+      "bbox": [
+        55.375789292156696,
+        25.312244592237036,
+        55.87688393890858,
+        25.85306621108093
+      ],
+      "points": 47,
+      "rings": 1,
+      "holes": 0,
+      "sha256": "8d3c1bcf28155bca67aa31bd7ed5e7cb8b08990376f446228216a7384dc309be",
+      "sourceIds": [
+        "region.1614"
+      ],
+      "bboxIoU": 0.40375381348496164,
+      "areaRatio": 1.8627719577133568
+    }
+  }
+}

@@ -11,6 +11,7 @@ import { coveringTileUnionBounds } from '@/lib/mapTiles';
 const EMPTY_PILLS_TTL = 30;
 import { redisTTLForSort, cdnSMaxAgeForSort } from '@/lib/mapTiles';
 import { attachTiming, makeServerTiming, ServerTiming } from '@/lib/routeTiming';
+import { getAdminRegion, getAdminRegionLite } from '@/lib/adminRegionsServer';
 
 // Lazy pills: standalone by_project terms agg (size:0, no hits).
 // The list path skips by_project (flags.lazyPills) to save ~15-20% CPU at
@@ -35,6 +36,24 @@ async function serveGroups(searchParams: URLSearchParams, timing: ServerTiming) 
   if (![bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng].every(Number.isFinite)) {
     return NextResponse.json({ error: 'bounds (minLat,maxLat,minLng,maxLng) required' }, { status: 400 });
   }
+  // Admin-1 state selection: pills must describe the SAME population as the
+  // list/markers (AD3). The state id resolves to the canonical geometry
+  // server-side; it supersedes any raw boundary params.
+  const stateParam = get('state') || undefined;
+  let regionShapes: { outer: { lat: number; lng: number }[]; holes: { lat: number; lng: number }[][] }[] | undefined;
+  let regionToken: string | undefined;
+  if (stateParam) {
+    const meta = getAdminRegionLite(stateParam);
+    if (!meta) {
+      return NextResponse.json({ error: `unknown state: ${stateParam}` }, { status: 400 });
+    }
+    const region = getAdminRegion(stateParam);
+    if (!region) {
+      return NextResponse.json({ error: 'state geometry unavailable' }, { status: 503 });
+    }
+    regionShapes = region.shapes;
+    regionToken = region.token;
+  }
   const rawFilters: any = {
     query: get('query') || undefined,
     location: get('location') || undefined,
@@ -48,6 +67,9 @@ async function serveGroups(searchParams: URLSearchParams, timing: ServerTiming) 
     bathrooms: num('bathrooms'),
     minArea: num('minArea'),
     maxArea: num('maxArea'),
+    polygon: undefined,
+    polygonsWithHoles: regionShapes,
+    regionToken,
     scope: get('scope') || 'both',
     sort: get('sort') || 'newest',
   };

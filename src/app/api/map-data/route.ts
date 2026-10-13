@@ -15,6 +15,7 @@ import {
 import { flags } from '@/lib/flags';
 import { mapWithConcurrency } from '@/lib/concurrency';
 import { attachTiming, makeServerTiming } from '@/lib/routeTiming';
+import { getAdminRegion, getAdminRegionLite } from '@/lib/adminRegionsServer';
 
 function cacheHeadersForSort(sort?: string) {
   const sMax = cdnSMaxAgeForSort(sort);
@@ -45,11 +46,44 @@ export async function POST(req: NextRequest) {
       minBedrooms, maxBedrooms,
       listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
       lat, lng, radiusKm, polygon, polygons,
+      state, markers: markersParam,
     } = body;
 
     if (!rawBounds) {
       return NextResponse.json({ error: 'bounds is required' }, { status: 400 });
     }
+
+    // Interactive state selection: the client sends a stable admin-1 id and the
+    // server injects the SAME canonical geometry the outline renders (one source
+    // of truth for filter + outline, and GET-friendly URLs without polygon
+    // payloads). State selection supersedes any raw boundary the client sent.
+    let effectivePolygon = polygon;
+    let effectivePolygons = polygons;
+    let regionShapes: { outer: { lat: number; lng: number }[]; holes: { lat: number; lng: number }[][] }[] | undefined;
+    let regionToken: string | undefined;
+    if (typeof state === 'string' && state.trim()) {
+      const meta = getAdminRegionLite(state.trim());
+      if (!meta) {
+        return NextResponse.json({ error: `unknown state: ${state}` }, { status: 400 });
+      }
+      const region = getAdminRegion(state.trim());
+      if (!region) {
+        // Canonical geometry missing/corrupt: refuse rather than filter by a
+        // different shape than the client draws.
+        return NextResponse.json({ error: 'state geometry unavailable' }, { status: 503 });
+      }
+      regionShapes = region.shapes;
+      regionToken = region.token;
+      effectivePolygon = undefined;
+      effectivePolygons = undefined;
+    }
+
+    // State-overview mode: below the tenant's overview zoom the map shows only
+    // state outlines, so the expensive O(matches) tile grid + fill are skipped
+    // entirely. Accepts false from JSON or 'false'/'0' from the GET wrapper.
+    const markersEnabled = !(
+      markersParam === false || markersParam === 'false' || markersParam === '0'
+    );
 
     const { minLat, maxLat, minLng, maxLng } = rawBounds;
     if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
@@ -80,7 +114,9 @@ export async function POST(req: NextRequest) {
         query, location, minPrice, maxPrice, propertyType, bhkType,
         minBedrooms, maxBedrooms,
         listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
-        lat, lng, radiusKm, scope, sort, pageSize, cursor, polygon, polygons,
+        lat, lng, radiusKm, scope, sort, pageSize, cursor,
+        polygon: effectivePolygon, polygons: effectivePolygons,
+        polygonsWithHoles: regionShapes, regionToken,
       }
     );
 
@@ -90,14 +126,17 @@ export async function POST(req: NextRequest) {
     const markerTTL = redisTTLForSort(sortStr);
 
     // P2: covering tiles for cache reuse (additive, never single-center-tile).
-    const tiles = flags.tileCacheV5 ? viewportCoveringTiles(bounds, zoom) : [];
-    const tileEntries = flags.tileCacheV5
+    // Skipped entirely in state-overview mode (no markers requested).
+    const tiles = markersEnabled && flags.tileCacheV5 ? viewportCoveringTiles(bounds, zoom) : [];
+    const tileEntries = markersEnabled && flags.tileCacheV5
       ? tiles.map((t) => {
           const q = prepareTileQuery(t, {
             query, location, minPrice, maxPrice, propertyType, bhkType,
             minBedrooms, maxBedrooms,
             listingPurpose, amenities, furnishings, bathrooms, minArea, maxArea,
-            lat, lng, radiusKm, scope, sort: sortStr, polygon, polygons,
+            lat, lng, radiusKm, scope, sort: sortStr,
+            polygon: effectivePolygon, polygons: effectivePolygons,
+            polygonsWithHoles: regionShapes, regionToken,
           });
           return { tile: t, ...q };
         })
@@ -110,19 +149,21 @@ export async function POST(req: NextRequest) {
     let markerCacheHit = false;
 
     // Serve fully-cached legacy responses without touching ES at all (including
-    // when ES is down — cache is the resilience layer).
+    // when ES is down — cache is the resilience layer). In state-overview mode
+    // markers are intentionally not requested, so only the list key gates the
+    // full-hit path.
     const [cachedList, cachedMarkers] = await Promise.all([
       cacheGet<any>(listKey),
-      cacheGet<any>(markerKey),
+      markersEnabled ? cacheGet<any>(markerKey) : Promise.resolve(null),
     ]);
     timing.record('cache');
     listCacheHit = !!cachedList;
     markerCacheHit = !!cachedMarkers;
-    if (cachedList && cachedMarkers) {
-      logger.info('map-data cache hit', { listKey, markerKey, ms: Date.now() - t0, zoom, scope });
+    if (cachedList && (cachedMarkers || !markersEnabled)) {
+      logger.info('map-data cache hit', { listKey, markerKey, ms: Date.now() - t0, zoom, scope, markers: markersEnabled });
       return attachTiming(NextResponse.json(
         {
-          markers: cachedMarkers,
+          markers: markersEnabled ? cachedMarkers : [],
           results: cachedList.results,
           total: cachedList.total,
           totalRelation: cachedList.totalRelation,
@@ -136,7 +177,7 @@ export async function POST(req: NextRequest) {
         {
           headers: {
             ...CACHE_HEADERS,
-            'X-Cache': 'list:HIT,markers:HIT',
+            'X-Cache': `list:HIT,markers:${markersEnabled ? 'HIT' : 'SKIP'}`,
             'X-ES-Took': '0',
           },
         }
@@ -166,7 +207,9 @@ export async function POST(req: NextRequest) {
     // concentration. Without the gate, a p90 cut on a 23-home viewport would
     // hide 21 pins behind "show biggest only" — misleading at street level.
     let quantileRange: any | null = null;
-    if (flags.quantileFilter && sortStr !== 'popular' && Number(zoom) < 10) {
+    // Quantiles only narrow the tile/fill populations; in state-overview mode
+    // (markers disabled) there is nothing to narrow, so skip the lookup.
+    if (markersEnabled && flags.quantileFilter && sortStr !== 'popular' && Number(zoom) < 10) {
       const tQuantile = performance.now();
       try {
         const { getOrComputeQuantileThresholds, quantileRangeForSort: qRange, sortFieldForQuantile: qField } = await import('@/lib/quantiles');
@@ -257,7 +300,9 @@ export async function POST(req: NextRequest) {
       // AD8: markers are the most-shared payload on the site — every user at the
       // same tile union + filters wants the same 500 dots. Coalesce across pods
       // via Redis so N instances don't each run the tile fan-out.
-      singleflightCompute<any>(markerKey, markerTTL, async () => {
+      // State-overview mode (below overviewMaxZoom) requests none at all.
+      markersEnabled
+        ? singleflightCompute<any>(markerKey, markerTTL, async () => {
         tileServedByCompute = false;
         // P4 cutover: try tile MAP first, fallback to legacy random_score.
         if (flags.mapTilesV1 && tileEntries.length > 0) {
@@ -423,7 +468,8 @@ export async function POST(req: NextRequest) {
         const v = r.value;
         if (v && tileServedByCompute) (v as any)._tileServed = true;
         return v;
-      }).finally(() => timing.record('markers', performance.now() - tMarkers)),
+      }).finally(() => timing.record('markers', performance.now() - tMarkers))
+        : Promise.resolve([] as any[]),
     ]);
     const listMs = Date.now() - listStart;
     const markerMs = Date.now() - markerStart;
@@ -484,7 +530,7 @@ export async function POST(req: NextRequest) {
       {
         headers: {
           ...CACHE_HEADERS,
-          'X-Cache': `list:${listCacheHit ? 'HIT' : 'MISS'},markers:${markerCacheHit ? 'HIT' : 'MISS'}`,
+          'X-Cache': `list:${listCacheHit ? 'HIT' : 'MISS'},markers:${markersEnabled ? (markerCacheHit ? 'HIT' : 'MISS') : 'SKIP'}`,
           'X-ES-Took': `${listMs + markerMs}`,
         },
       }
@@ -545,7 +591,7 @@ export async function GET(req: NextRequest) {
     if (![bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng].every(Number.isFinite)) {
       return NextResponse.json({ error: 'bounds (minLat,maxLat,minLng,maxLng) required' }, { status: 400 });
     }
-    if (sp.has('polygon') || sp.has('polygons') || sp.has('cursor')) {
+    if (sp.has('polygon') || sp.has('polygons') || sp.has('regionToken') || sp.has('polygonsWithHoles') || sp.has('cursor')) {
       return NextResponse.json(
         { error: 'polygon and cursor filters require POST /api/map-data' },
         { status: 400 }

@@ -1,0 +1,636 @@
+{
+  "label": "100k-s6",
+  "runs": 11,
+  "indices": {
+    "props": "bench_props_100k_s6",
+    "projects": "bench_projects_100k_s6",
+    "tiles": "bench_tile_100k_s6"
+  },
+  "shapes": {
+    "list_both_newest": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 18.346957999999972,
+      "tookMs": 10,
+      "shardCount": 12,
+      "rewriteMs": 0.505876,
+      "queryMs": 2.334366,
+      "collectorMs": 5.420313,
+      "fetchMs": 3.39575,
+      "totalShardCpuMs": 15.335898,
+      "queryClauses": {
+        "ConstantScoreQuery": 2.334366
+      },
+      "queryLeaves": {
+        "filter_term": 0.931008,
+        "range": 0.70588
+      },
+      "collectors": {
+        "QueryPhaseCollector": 5.420313
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 4.949192,
+        "AggregatorCollector: []": 0.138131,
+        "PartialHitCountCollector": 0.033007
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "list_both_price_desc": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 10.379208000000062,
+      "tookMs": 5,
+      "shardCount": 12,
+      "rewriteMs": 0.336835,
+      "queryMs": 1.851744,
+      "collectorMs": 1.954753,
+      "fetchMs": 2.984917,
+      "totalShardCpuMs": 6.823466,
+      "queryClauses": {
+        "ConstantScoreQuery": 1.851744
+      },
+      "queryLeaves": {
+        "range": 0.618566,
+        "filter_term": 0.58611
+      },
+      "collectors": {
+        "QueryPhaseCollector": 1.954753
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 1.511378,
+        "AggregatorCollector: []": 0.102292
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "list_props_newest": {
+      "index": "bench_props_100k_s6",
+      "wallMs": 9.511166999999887,
+      "tookMs": 5,
+      "shardCount": 6,
+      "rewriteMs": 0.171292,
+      "queryMs": 1.887834,
+      "collectorMs": 3.246426,
+      "fetchMs": 2.530917,
+      "totalShardCpuMs": 8.506212,
+      "queryClauses": {
+        "ConstantScoreQuery": 1.887834
+      },
+      "queryLeaves": {
+        "filter_term": 0.703538,
+        "range": 0.526307
+      },
+      "collectors": {
+        "QueryPhaseCollector": 3.246426
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 2.955484,
+        "AggregatorCollector: []": 0.099114
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 78,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "list_both_newest_INLINE_NATIVE": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 8.2015829999998,
+      "tookMs": 5,
+      "shardCount": 12,
+      "rewriteMs": 0.406291,
+      "queryMs": 1.866719,
+      "collectorMs": 3.032242,
+      "fetchMs": 2.088333,
+      "totalShardCpuMs": 7.398727,
+      "queryClauses": {
+        "ConstantScoreQuery": 1.866719
+      },
+      "queryLeaves": {
+        "filter_term": 0.668549,
+        "range": 0.525744
+      },
+      "collectors": {
+        "QueryPhaseCollector": 3.032242
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 2.139716,
+        "AggregatorCollector: [by_entity_type]": 0.349954,
+        "PartialHitCountCollector": 0.184214
+      },
+      "aggs": {
+        "GlobalOrdinalsStringTermsAggregator.LowCardinality": 0.307662
+      },
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "list_both_newest_INLINE_COUNTERS": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 24.367874999999913,
+      "tookMs": 14,
+      "shardCount": 12,
+      "rewriteMs": 1.913289,
+      "queryMs": 6.596072,
+      "collectorMs": 11.170366,
+      "fetchMs": 2.527791,
+      "totalShardCpuMs": 23.936337,
+      "queryClauses": {
+        "BooleanQuery": 4.811369,
+        "ConstantScoreQuery": 1.75624
+      },
+      "queryLeaves": {
+        "filter_term": 2.65832,
+        "range": 1.553922
+      },
+      "collectors": {
+        "QueryPhaseCollector": 11.170366
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [exact_total, exact_property, exact_project]": 7.111311,
+        "SimpleFieldCollector": 3.756109,
+        "PartialHitCountCollector": 0.031877
+      },
+      "aggs": {
+        "FilterAggregationBuilder.FilterAggregator": 7.179477
+      },
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "count_both": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 9.131665999999996,
+      "tookMs": 4,
+      "shardCount": 12,
+      "rewriteMs": 0.693327,
+      "queryMs": 2.594707,
+      "collectorMs": 1.64316,
+      "fetchMs": 0,
+      "totalShardCpuMs": 4.942771,
+      "queryClauses": {
+        "ConstantScoreQuery": 2.594707
+      },
+      "queryLeaves": {
+        "filter_term": 0.892925,
+        "range": 0.736386
+      },
+      "collectors": {
+        "QueryPhaseCollector": 1.64316
+      },
+      "collectorChildren": {
+        "PartialHitCountCollector": 0.747112,
+        "AggregatorCollector: [by_entity_type]": 0.576404
+      },
+      "aggs": {
+        "GlobalOrdinalsStringTermsAggregator.LowCardinality": 0.540255
+      },
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "count_props": {
+      "index": "bench_props_100k_s6",
+      "wallMs": 6.848749999999654,
+      "tookMs": 3,
+      "shardCount": 6,
+      "rewriteMs": 0.265791,
+      "queryMs": 2.766395,
+      "collectorMs": 0.70157,
+      "fetchMs": 0,
+      "totalShardCpuMs": 3.861447,
+      "queryClauses": {
+        "ConstantScoreQuery": 2.766395
+      },
+      "queryLeaves": {
+        "filter_term": 0.984809,
+        "range": 0.760709
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.70157
+      },
+      "collectorChildren": {
+        "PartialHitCountCollector": 0.479197
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 78,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "tile_city_delhi_z11": {
+      "index": "bench_tile_100k_s6",
+      "wallMs": 8.443375000000287,
+      "tookMs": 4,
+      "shardCount": 6,
+      "rewriteMs": 0.247166,
+      "queryMs": 2.157675,
+      "collectorMs": 2.0267,
+      "fetchMs": 0,
+      "totalShardCpuMs": 4.519948,
+      "queryClauses": {
+        "ConstantScoreQuery": 2.157675
+      },
+      "queryLeaves": {
+        "range": 0.737437,
+        "filter_term": 0.723504
+      },
+      "collectors": {
+        "QueryPhaseCollector": 2.0267
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [tiles]": 1.740448,
+        "PartialHitCountCollector": 0.032583
+      },
+      "aggs": {
+        "GeoTileGridAggregator": 4.013713
+      },
+      "shardDelta": {
+        "total": 78,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_tile_100k_s6:0": 13,
+          "bench_tile_100k_s6:1": 13,
+          "bench_tile_100k_s6:2": 13,
+          "bench_tile_100k_s6:3": 13,
+          "bench_tile_100k_s6:4": 13,
+          "bench_tile_100k_s6:5": 13
+        }
+      }
+    },
+    "tile_city_dubai_z10": {
+      "index": "bench_tile_100k_s6",
+      "wallMs": 20.991541000000325,
+      "tookMs": 17,
+      "shardCount": 6,
+      "rewriteMs": 0.239831,
+      "queryMs": 28.913384,
+      "collectorMs": 31.973914,
+      "fetchMs": 0,
+      "totalShardCpuMs": 60.693058,
+      "queryClauses": {
+        "ConstantScoreQuery": 28.913384
+      },
+      "queryLeaves": {
+        "range": 5.750069,
+        "filter_term": 4.599517
+      },
+      "collectors": {
+        "QueryPhaseCollector": 31.973914
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [tiles]": 24.38995,
+        "PartialHitCountCollector": 0.032462
+      },
+      "aggs": {
+        "GeoTileGridAggregator": 30.2825
+      },
+      "shardDelta": {
+        "total": 78,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_tile_100k_s6:0": 13,
+          "bench_tile_100k_s6:1": 13,
+          "bench_tile_100k_s6:2": 13,
+          "bench_tile_100k_s6:3": 13,
+          "bench_tile_100k_s6:4": 13,
+          "bench_tile_100k_s6:5": 13
+        }
+      }
+    },
+    "tile_country_z4": {
+      "index": "bench_tile_100k_s6",
+      "wallMs": 24.137708000000202,
+      "tookMs": 20,
+      "shardCount": 6,
+      "rewriteMs": 0.275748,
+      "queryMs": 35.124799,
+      "collectorMs": 42.172221,
+      "fetchMs": 0,
+      "totalShardCpuMs": 77.040694,
+      "queryClauses": {
+        "ConstantScoreQuery": 35.124799
+      },
+      "queryLeaves": {
+        "filter_term": 5.621318,
+        "range": 5.445696
+      },
+      "collectors": {
+        "QueryPhaseCollector": 42.172221
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [tiles]": 31.195326,
+        "PartialHitCountCollector": 0.033124
+      },
+      "aggs": {
+        "GeoTileGridAggregator": 38.429225
+      },
+      "shardDelta": {
+        "total": 78,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_tile_100k_s6:0": 13,
+          "bench_tile_100k_s6:1": 13,
+          "bench_tile_100k_s6:2": 13,
+          "bench_tile_100k_s6:3": 13,
+          "bench_tile_100k_s6:4": 13,
+          "bench_tile_100k_s6:5": 13
+        }
+      }
+    },
+    "fill_viewport_500": {
+      "index": "bench_tile_100k_s6",
+      "wallMs": 35.56866600000012,
+      "tookMs": 14,
+      "shardCount": 6,
+      "rewriteMs": 0.287249,
+      "queryMs": 2.141365,
+      "collectorMs": 4.238021,
+      "fetchMs": 37.650169,
+      "totalShardCpuMs": 46.996816,
+      "queryClauses": {
+        "ConstantScoreQuery": 2.141365
+      },
+      "queryLeaves": {
+        "filter_term": 0.731217,
+        "range": 0.659831
+      },
+      "collectors": {
+        "QueryPhaseCollector": 4.238021
+      },
+      "collectorChildren": {
+        "SimpleFieldCollector": 3.998724
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 78,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_tile_100k_s6:0": 13,
+          "bench_tile_100k_s6:1": 13,
+          "bench_tile_100k_s6:2": 13,
+          "bench_tile_100k_s6:3": 13,
+          "bench_tile_100k_s6:4": 13,
+          "bench_tile_100k_s6:5": 13
+        }
+      }
+    },
+    "legacy_random_500": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 26.120874999999614,
+      "tookMs": 13,
+      "shardCount": 12,
+      "rewriteMs": 0.468042,
+      "queryMs": 2.862378,
+      "collectorMs": 1.423488,
+      "fetchMs": 31.278376,
+      "totalShardCpuMs": 36.384102,
+      "queryClauses": {
+        "FunctionScoreQuery": 2.862378
+      },
+      "queryLeaves": {
+        "range": 0.673796,
+        "filter_term": 0.66323
+      },
+      "collectors": {
+        "QueryPhaseCollector": 1.423488
+      },
+      "collectorChildren": {
+        "SimpleTopScoreDocCollector": 1.227667
+      },
+      "aggs": {},
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "pills_by_project": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 9.297959000000446,
+      "tookMs": 3,
+      "shardCount": 12,
+      "rewriteMs": 0.420707,
+      "queryMs": 0.061582,
+      "collectorMs": 0.172294,
+      "fetchMs": 0,
+      "totalShardCpuMs": 0.676126,
+      "queryClauses": {
+        "ConstantScoreQuery": 0.061582
+      },
+      "queryLeaves": {
+        "filter_term": 0.008252,
+        "range": 0.004791
+      },
+      "collectors": {
+        "QueryPhaseCollector": 0.172294
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [by_project]": 0.075714,
+        "PartialHitCountCollector": 0.054327
+      },
+      "aggs": {
+        "NonCollectingAggregator": 0.085085
+      },
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    },
+    "quantile_created_country": {
+      "index": "bench_props_100k_s6,bench_projects_100k_s6",
+      "wallMs": 25.93249999999989,
+      "tookMs": 21,
+      "shardCount": 12,
+      "rewriteMs": 0.187167,
+      "queryMs": 38.355389,
+      "collectorMs": 39.270387,
+      "fetchMs": 0,
+      "totalShardCpuMs": 77.796234,
+      "queryClauses": {
+        "ConstantScoreQuery": 38.355389
+      },
+      "queryLeaves": {
+        "filter_term": 6.272335,
+        "range": 5.75863
+      },
+      "collectors": {
+        "QueryPhaseCollector": 39.270387
+      },
+      "collectorChildren": {
+        "AggregatorCollector: [p]": 28.369589,
+        "PartialHitCountCollector": 0.063159
+      },
+      "aggs": {
+        "TDigestPercentilesAggregator": 15.383254
+      },
+      "shardDelta": {
+        "total": 156,
+        "min": 13,
+        "max": 13,
+        "avg": 13,
+        "perShard": {
+          "bench_projects_100k_s6:0": 13,
+          "bench_projects_100k_s6:1": 13,
+          "bench_projects_100k_s6:2": 13,
+          "bench_projects_100k_s6:3": 13,
+          "bench_projects_100k_s6:4": 13,
+          "bench_projects_100k_s6:5": 13,
+          "bench_props_100k_s6:0": 13,
+          "bench_props_100k_s6:1": 13,
+          "bench_props_100k_s6:2": 13,
+          "bench_props_100k_s6:3": 13,
+          "bench_props_100k_s6:4": 13,
+          "bench_props_100k_s6:5": 13
+        }
+      }
+    }
+  }
+}

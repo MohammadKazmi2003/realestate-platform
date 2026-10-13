@@ -1,0 +1,477 @@
+{
+  "label": "5m",
+  "base": "http://localhost:3212",
+  "actions": {
+    "map_initial_delhi_z11": {
+      "description": "fresh map load, Delhi z11, Buy intent",
+      "cold": {
+        "wallMs": 798,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 10,
+        "timing": {
+          "rl": 1.5,
+          "cache": 5.3,
+          "ping": 31.3,
+          "list": 304.6,
+          "fill": 251.9,
+          "markers": 688.2,
+          "serialize": 9,
+          "total": 729.1
+        },
+        "bytes": 392204
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 24,
+        "p95": 69,
+        "p99": 96,
+        "max": 96,
+        "medianBytes": 392204,
+        "phaseP50": {
+          "rl": 1.3,
+          "cache": 11.1,
+          "total": 15.4
+        }
+      }
+    },
+    "map_subtile_pan": {
+      "description": "tiny pan within same tile union",
+      "cold": {
+        "wallMs": 492,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 9,
+        "timing": {
+          "rl": 1.7,
+          "cache": 3.8,
+          "ping": 3.9,
+          "list": 236.8,
+          "fill": 164.8,
+          "markers": 471.8,
+          "serialize": 4.7,
+          "total": 480.8
+        },
+        "bytes": 392204
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 19,
+        "p95": 27,
+        "p99": 28,
+        "max": 28,
+        "medianBytes": 392204,
+        "phaseP50": {
+          "rl": 1.1,
+          "cache": 8.5,
+          "total": 12.2
+        }
+      }
+    },
+    "map_crosstile_pan": {
+      "description": "pan to a different tile union",
+      "cold": {
+        "wallMs": 43,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 8,
+        "timing": {
+          "rl": 1.9,
+          "cache": 3.4,
+          "ping": 3.4,
+          "markers": 18.5,
+          "list": 30.9,
+          "serialize": 0.2,
+          "total": 34.8
+        },
+        "bytes": 164
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 7,
+        "p95": 10,
+        "p99": 10,
+        "max": 10,
+        "medianBytes": 164,
+        "phaseP50": {
+          "rl": 1,
+          "cache": 2.1,
+          "total": 2.4
+        }
+      }
+    },
+    "map_zoom_out_z8": {
+      "description": "zoom out to z8",
+      "cold": {
+        "wallMs": 240,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 11,
+        "timing": {
+          "rl": 1.2,
+          "cache": 3.1,
+          "ping": 3.1,
+          "quantile": 16,
+          "list": 53,
+          "fill": 144.2,
+          "markers": 206.3,
+          "serialize": 6.2,
+          "total": 231.9
+        },
+        "bytes": 392203
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 23,
+        "p95": 34,
+        "p99": 42,
+        "max": 42,
+        "medianBytes": 392203,
+        "phaseP50": {
+          "rl": 1.2,
+          "cache": 10.3,
+          "total": 13.6
+        }
+      }
+    },
+    "map_country_z4": {
+      "description": "country overview z4",
+      "cold": {
+        "wallMs": 1669,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 14,
+        "timing": {
+          "rl": 1,
+          "cache": 2.2,
+          "ping": 2.3,
+          "quantile": 55.3,
+          "list": 1204.9,
+          "fill": 199.9,
+          "markers": 1594.9,
+          "serialize": 4.6,
+          "total": 1657.6
+        },
+        "bytes": 351534
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 19,
+        "p95": 40,
+        "p99": 58,
+        "max": 58,
+        "medianBytes": 351534,
+        "phaseP50": {
+          "rl": 1.1,
+          "cache": 8.8,
+          "total": 12.2
+        }
+      }
+    },
+    "map_filter_price": {
+      "description": "price filter applied",
+      "cold": {
+        "wallMs": 19,
+        "status": 200,
+        "cache": "list:HIT,markers:HIT",
+        "esQueries": 0,
+        "timing": {
+          "rl": 1.2,
+          "cache": 8.7,
+          "total": 12.5
+        },
+        "bytes": 392204
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 24,
+        "p95": 50,
+        "p99": 67,
+        "max": 67,
+        "medianBytes": 392204,
+        "phaseP50": {
+          "rl": 1.4,
+          "cache": 11.7,
+          "total": 15.3
+        }
+      }
+    },
+    "map_filter_bhk": {
+      "description": "BHK filter applied",
+      "cold": {
+        "wallMs": 130,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 12,
+        "timing": {
+          "rl": 0.9,
+          "cache": 2.2,
+          "ping": 2.3,
+          "list": 111.2,
+          "markers": 121.6,
+          "serialize": 0.2,
+          "total": 124.2
+        },
+        "bytes": 167
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 7,
+        "p95": 10,
+        "p99": 11,
+        "max": 11,
+        "medianBytes": 167,
+        "phaseP50": {
+          "rl": 0.9,
+          "cache": 2.1,
+          "total": 2.3
+        }
+      }
+    },
+    "map_filter_type": {
+      "description": "property type filter applied",
+      "cold": {
+        "wallMs": 315,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 12,
+        "timing": {
+          "rl": 0.7,
+          "cache": 2.1,
+          "ping": 2.1,
+          "list": 105.3,
+          "fill": 149,
+          "markers": 300.9,
+          "serialize": 6.1,
+          "total": 309.4
+        },
+        "bytes": 391815
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 33,
+        "p95": 70,
+        "p99": 74,
+        "max": 74,
+        "medianBytes": 391815,
+        "phaseP50": {
+          "rl": 1.8,
+          "cache": 18.5,
+          "total": 22.8
+        }
+      }
+    },
+    "map_sort_price_desc": {
+      "description": "sort price high-low",
+      "cold": {
+        "wallMs": 480,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 8,
+        "timing": {
+          "rl": 1.2,
+          "cache": 2.7,
+          "ping": 2.7,
+          "list": 202.7,
+          "fill": 177.4,
+          "markers": 465,
+          "serialize": 4.1,
+          "total": 472.1
+        },
+        "bytes": 382937
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 35,
+        "p95": 112,
+        "p99": 126,
+        "max": 126,
+        "medianBytes": 382937,
+        "phaseP50": {
+          "rl": 1.6,
+          "cache": 15,
+          "total": 18.9
+        }
+      }
+    },
+    "map_sort_beds": {
+      "description": "sort by bedrooms",
+      "cold": {
+        "wallMs": 1049,
+        "status": 200,
+        "cache": "list:MISS,markers:MISS",
+        "esQueries": 8,
+        "timing": {
+          "rl": 3.7,
+          "cache": 9.3,
+          "ping": 9.3,
+          "list": 299.3,
+          "fill": 600,
+          "markers": 1016.1,
+          "serialize": 5.1,
+          "total": 1031.4
+        },
+        "bytes": 403264
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 100,
+        "esPerReqAvg": 0,
+        "p50": 33,
+        "p95": 66,
+        "p99": 75,
+        "max": 75,
+        "medianBytes": 403264,
+        "phaseP50": {
+          "rl": 1.6,
+          "cache": 18.8,
+          "total": 22.1
+        }
+      }
+    },
+    "project_groups": {
+      "description": "right-rail community pills",
+      "cold": {
+        "wallMs": 85,
+        "status": 200,
+        "cache": "MISS",
+        "esQueries": 2,
+        "timing": {
+          "rl": 5.1,
+          "ping": 16.7,
+          "compute": 60.9,
+          "serialize": 0.3,
+          "total": 78
+        },
+        "bytes": 20
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 0,
+        "esPerReqAvg": 0,
+        "p50": 6,
+        "p95": 8,
+        "p99": 11,
+        "max": 11,
+        "medianBytes": 20,
+        "phaseP50": {
+          "rl": 1.4,
+          "ping": 1.6,
+          "compute": 1,
+          "serialize": 0.1,
+          "total": 2.8
+        }
+      }
+    },
+    "autocomplete_dub": {
+      "description": "location autocomplete (ES + MapTiler)",
+      "cold": {
+        "wallMs": 651,
+        "status": 200,
+        "cache": "",
+        "esQueries": 0,
+        "timing": {},
+        "bytes": 1407
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 0,
+        "esPerReqAvg": 0,
+        "p50": 4,
+        "p95": 5,
+        "p99": 6,
+        "max": 6,
+        "medianBytes": 1407,
+        "phaseP50": {}
+      }
+    },
+    "load_more_page2": {
+      "description": "Load More via /api/search with cursor",
+      "cold": {
+        "wallMs": 1725,
+        "status": 200,
+        "cache": "",
+        "esQueries": 4,
+        "timing": {
+          "rl": 1.7,
+          "cache": 7.4,
+          "ping": 7.4,
+          "compute": 1694.3,
+          "cacheWrite": 7.6,
+          "serialize": 0.6,
+          "total": 1712.1
+        },
+        "bytes": 15140
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 0,
+        "esPerReqAvg": 0,
+        "p50": 7,
+        "p95": 47,
+        "p99": 48,
+        "max": 48,
+        "medianBytes": 15140,
+        "phaseP50": {
+          "rl": 1.5,
+          "cache": 3.4,
+          "total": 3.7
+        }
+      }
+    },
+    "marker_click_listing": {
+      "description": "marker click -> /api/listings/{id}",
+      "cold": {
+        "wallMs": 78,
+        "status": 200,
+        "cache": "",
+        "esQueries": 0,
+        "timing": {},
+        "bytes": 806
+      },
+      "warm": {
+        "n": 20,
+        "errPct": 0,
+        "cacheHitPct": 0,
+        "esPerReqAvg": 0,
+        "p50": 7,
+        "p95": 17,
+        "p99": 17,
+        "max": 17,
+        "medianBytes": 806,
+        "phaseP50": {}
+      }
+    }
+  }
+}

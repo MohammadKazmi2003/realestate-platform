@@ -1,0 +1,210 @@
+{
+  "label": "5m-rs02",
+  "tileIndex": "bench_tile_5m",
+  "runs": 3,
+  "viewports": {
+    "delhi_z11": {
+      "fixed_top_hits": {
+        "name": "fixed_top_hits",
+        "wallMs": 264.4825000000001,
+        "tookMs": 234,
+        "profile": null,
+        "cells": {
+          "9/365/213": 77784
+        },
+        "markers": [
+          "68006d5f-fe23-435b-a47e-7ca46f14a8c1__3241"
+        ],
+        "extra": {
+          "runs": 3,
+          "rewriteMs": 0.05525,
+          "queryMs": 114.241939,
+          "collectMs": 122.42597,
+          "fetchMs": 0,
+          "aggsMs": {
+            "GeoTileGridAggregator": 102.076587,
+            "AggregatorCollector: [tiles]": 101.382351,
+            "PartialHitCountCollector": 0.438166
+          },
+          "cells": 1,
+          "cellDocs": 77784,
+          "markerCount": 1,
+          "topCellOverlap": 1,
+          "markerOverlap": 1
+        }
+      },
+      "random_sampler": {
+        "name": "random_sampler",
+        "wallMs": 142.3400419999998,
+        "tookMs": 120,
+        "profile": null,
+        "cells": {
+          "9/365/213": 77250
+        },
+        "markers": [
+          "68006d5f-fe23-435b-a47e-7ca46f14a8c1__3057"
+        ],
+        "cellTotal": 1545,
+        "extra": {
+          "runs": 3,
+          "rewriteMs": 0.176291,
+          "queryMs": 63.295508,
+          "collectMs": 106.293127,
+          "fetchMs": 0,
+          "aggsMs": {
+            "RandomSamplerAggregator": 106.353251,
+            "AggregatorCollector: [sample]": 105.554293,
+            "PartialHitCountCollector": 0.154541
+          },
+          "cells": 1,
+          "cellDocs": 77250,
+          "markerCount": 1,
+          "topCellOverlap": 1,
+          "markerOverlap": 0
+        }
+      }
+    },
+    "dubai_z10": {
+      "fixed_top_hits": {
+        "name": "fixed_top_hits",
+        "wallMs": 2623.905584,
+        "tookMs": 2605,
+        "profile": null,
+        "cells": {
+          "6/41/27": 3765663
+        },
+        "markers": [
+          "1a63e344-f9f0-45ee-ad10-4aa3b90db9b7__3241"
+        ],
+        "extra": {
+          "runs": 3,
+          "rewriteMs": 0.124333,
+          "queryMs": 1951.459187,
+          "collectMs": 1936.206702,
+          "fetchMs": 0,
+          "aggsMs": {
+            "GeoTileGridAggregator": 2007.077399,
+            "AggregatorCollector: [tiles]": 1464.32433,
+            "PartialHitCountCollector": 0.775249
+          },
+          "cells": 1,
+          "cellDocs": 3765663,
+          "markerCount": 1,
+          "topCellOverlap": 1,
+          "markerOverlap": 1
+        }
+      },
+      "random_sampler": {
+        "name": "random_sampler",
+        "wallMs": 260.260374999998,
+        "tookMs": 248,
+        "profile": null,
+        "cells": {
+          "6/41/27": 3758600
+        },
+        "markers": [
+          "f19af855-67f0-4b30-935c-933ddb1d2838__3205"
+        ],
+        "cellTotal": 75172,
+        "extra": {
+          "runs": 3,
+          "rewriteMs": 0.159333,
+          "queryMs": 150.122588,
+          "collectMs": 237.380585,
+          "fetchMs": 0,
+          "aggsMs": {
+            "RandomSamplerAggregator": 237.466126,
+            "AggregatorCollector: [sample]": 237.159373,
+            "PartialHitCountCollector": 0.125461
+          },
+          "cells": 1,
+          "cellDocs": 3758600,
+          "markerCount": 1,
+          "topCellOverlap": 1,
+          "markerOverlap": 0
+        }
+      }
+    },
+    "country_z4": {
+      "fixed_top_hits": {
+        "name": "fixed_top_hits",
+        "wallMs": 2838.447500000002,
+        "tookMs": 2822,
+        "profile": null,
+        "cells": {
+          "6/41/27": 4644353,
+          "6/45/28": 136122,
+          "6/45/26": 77784,
+          "6/45/29": 71302,
+          "6/44/28": 64820,
+          "6/42/27": 6482
+        },
+        "markers": [
+          "1a63e344-f9f0-45ee-ad10-4aa3b90db9b7__3241",
+          "95a0a0f9-75d6-4d1f-8794-4a01804a4054__3241",
+          "68006d5f-fe23-435b-a47e-7ca46f14a8c1__3241",
+          "bdad6163-9eec-4b6a-a60e-16733293c81a__3241",
+          "10adf0b0-9181-4bff-a537-4e95fbcf8aa7__3241",
+          "5ce59f57-1980-45fc-b5b2-e11196f03a6d__3241"
+        ],
+        "extra": {
+          "runs": 3,
+          "rewriteMs": 0.249666,
+          "queryMs": 2110.785887,
+          "collectMs": 2199.452046,
+          "fetchMs": 0,
+          "aggsMs": {
+            "GeoTileGridAggregator": 2051.9951,
+            "AggregatorCollector: [tiles]": 1684.960689,
+            "PartialHitCountCollector": 0.869998
+          },
+          "cells": 6,
+          "cellDocs": 5000863,
+          "markerCount": 6,
+          "topCellOverlap": 1,
+          "markerOverlap": 1
+        }
+      },
+      "random_sampler": {
+        "name": "random_sampler",
+        "wallMs": 103.09883300000365,
+        "tookMs": 98,
+        "profile": null,
+        "cells": {
+          "6/41/27": 4631400,
+          "6/45/28": 131100,
+          "6/45/26": 77250,
+          "6/45/29": 73200,
+          "6/44/28": 63550,
+          "6/42/27": 5700
+        },
+        "markers": [
+          "f19af855-67f0-4b30-935c-933ddb1d2838__3205",
+          "b49d2963-3c48-4a22-a5a7-35d9ba182c23__3241",
+          "68006d5f-fe23-435b-a47e-7ca46f14a8c1__3057",
+          "b0aeb71d-ed30-4779-8c37-b655ceb1680d__3241",
+          "10adf0b0-9181-4bff-a537-4e95fbcf8aa7__3145",
+          "5ce59f57-1980-45fc-b5b2-e11196f03a6d__3187"
+        ],
+        "cellTotal": 99644,
+        "extra": {
+          "runs": 3,
+          "rewriteMs": 0.103542,
+          "queryMs": 114.081181,
+          "collectMs": 94.739127,
+          "fetchMs": 0,
+          "aggsMs": {
+            "RandomSamplerAggregator": 95.284248,
+            "AggregatorCollector: [sample]": 94.597501,
+            "PartialHitCountCollector": 0.071664
+          },
+          "cells": 6,
+          "cellDocs": 4982200,
+          "markerCount": 6,
+          "topCellOverlap": 1,
+          "markerOverlap": 0
+        }
+      }
+    }
+  }
+}

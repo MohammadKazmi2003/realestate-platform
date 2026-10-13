@@ -121,6 +121,34 @@ function priceFieldForScope(scope: string) {
   return 'price';
 }
 
+// geo_polygon clause for one ring, in ES point format.
+function geoPolygonClause(ring: { lat: number; lng: number }[]): any {
+  return { geo_polygon: { location: { points: ring.map((p) => ({ lat: p.lat, lon: p.lng })) } } };
+}
+
+// Admin-1 boundary clauses from canonical shapes (outer ring + holes):
+// open-additive across polygons, exact-excluding inside each polygon's holes so
+// filtering matches exactly what the map draws (even-odd). geo_polygon cannot
+// express holes, so each holed polygon is `bool { filter: outer, must_not:
+// holes }`; multiple polygons union via `should`.
+export function boundaryClauseFromShapes(
+  shapes: { outer: { lat: number; lng: number }[]; holes?: { lat: number; lng: number }[][] }[] | undefined
+): any | null {
+  if (!Array.isArray(shapes) || shapes.length === 0) return null;
+  const clauses: any[] = [];
+  for (const shape of shapes) {
+    const outer = Array.isArray(shape?.outer) ? shape.outer.filter((p) => p && typeof p.lat === 'number' && typeof p.lng === 'number') : [];
+    if (outer.length < 3) continue;
+    const holes = (Array.isArray(shape?.holes) ? shape.holes : [])
+      .map((h) => (Array.isArray(h) ? h.filter((p) => p && typeof p.lat === 'number' && typeof p.lng === 'number') : []))
+      .filter((h) => h.length >= 3);
+    clauses.push(holes.length > 0 ? { bool: { filter: [geoPolygonClause(outer)], must_not: holes.map(geoPolygonClause) } } : geoPolygonClause(outer));
+  }
+  if (clauses.length === 0) return null;
+  if (clauses.length === 1) return clauses[0];
+  return { bool: { should: clauses, minimum_should_match: 1 } };
+}
+
 // Shared query/filter construction. The sidebar list (queryESListings), the map
 // markers (queryESMapMarkers) and the totals all use the SAME filtered
 // population, so the list, the badge, and the map dots can never diverge.
@@ -130,6 +158,7 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
     minBedrooms, maxBedrooms,
     listingPurpose, amenities = [], furnishings = [], bathrooms, minArea, maxArea,
     lat, lng, radiusKm, bounds, polygon, polygons,
+    polygonsWithHoles,
   } = params;
 
   // Pincode/number groups (e.g. "Panvel, 410 206") never exist in flat
@@ -157,7 +186,11 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
     : Array.isArray(polygon) && polygon.length >= 3
       ? [polygon]
       : [];
-  const hasBoundary = boundaryRings.length > 0;
+  // Server-resolved admin-1 selection: canonical MapTiler shapes (holes
+  // included) are the filter — there is no per-listing classification, so the
+  // drawn boundary and the matched population are always the same geometry.
+  const shapeClause = boundaryClauseFromShapes(polygonsWithHoles);
+  const hasBoundary = shapeClause !== null || boundaryRings.length > 0;
 
   // Text clauses filter ONLY when no boundary is present. With exact rings,
   // geography is the filter (small places often lack text tokens entirely)
@@ -225,10 +258,17 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
     if (maxBedrooms != null) range.lte = maxBedrooms;
     propertyFilters.push({ range: { bedrooms: range } });
   }
-  if (normalizedPurpose === '__sale__') {
-    propertyFilters.push({ terms: { listing_purpose: ['Sell', 'Sale'] } });
-  } else if (normalizedPurpose) {
-    propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+  // listing_purpose exists only on property documents (projects are sale
+  // inventory and carry no such field — 1435/1435 absent in the live corpus).
+  // scope=both already wraps the property-filter set so non-property docs are
+  // exempt; a projects-only population has no listing_purpose to match, so
+  // applying the clause zeroed scope=projects for Buy intent entirely.
+  if (scope !== 'projects') {
+    if (normalizedPurpose === '__sale__') {
+      propertyFilters.push({ terms: { listing_purpose: ['Sell', 'Sale'] } });
+    } else if (normalizedPurpose) {
+      propertyFilters.push({ term: { listing_purpose: listingPurpose } });
+    }
   }
   if (normalizedAmenities.length > 0) propertyFilters.push({ terms: { amenities: normalizedAmenities } });
   if (normalizedFurnishings.length > 0) propertyFilters.push({ terms: { furnishings: normalizedFurnishings } });
@@ -255,7 +295,11 @@ export function buildFilters(params: any, scope: string): { must: any[]; filters
     }
   }
 
-  if (boundaryRings.length === 1) {
+  // Admin-1 selection supersedes raw rings: the canonical shapes ARE the
+  // boundary (holes excluded via must_not, even-odd like the renderer).
+  if (shapeClause !== null) {
+    commonFilters.push(shapeClause);
+  } else if (boundaryRings.length === 1) {
     commonFilters.push({
       geo_polygon: {
         location: { points: boundaryRings[0].map((p: any) => ({ lat: p.lat, lon: p.lng })) },
@@ -425,8 +469,30 @@ const MARKER_LIMIT = 500;
 // paginated page and every re-sort of the same population reuse one count
 // instead of recomputing it (the list response cache key includes cursor+sort,
 // so it cannot provide that reuse).
-export function buildCountCacheKey(must: any[], filters: any[]): string {
-  return `md:v5:c:${buildFilterHash64({ must, filters } as Record<string, any>)}`;
+// Replace every geo_polygon clause with a constant before hashing. Admin-1
+// boundaries arrive as megabytes of vertices; with a regionToken in the
+// payload the constant is safe (the token already identifies the geometry).
+// Without a token (client-drawn boundaries) this is never called.
+function canonicalizeBoundaryClauses(value: any): any {
+  if (Array.isArray(value)) return value.map(canonicalizeBoundaryClauses);
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length === 1 && keys[0] === 'geo_polygon') return { b: 1 };
+    const out: Record<string, any> = {};
+    for (const k of keys) out[k] = canonicalizeBoundaryClauses(value[k]);
+    return out;
+  }
+  return value;
+}
+
+// With a regionToken, boundary clauses collapse to a constant and the token
+// carries geometry identity — so the key never hashes the polygon. Without a
+// token the payload is hashed exactly as before.
+export function buildCountCacheKey(must: any[], filters: any[], regionToken?: string): string {
+  const payload = regionToken
+    ? { t: regionToken, must: canonicalizeBoundaryClauses(must), filters: canonicalizeBoundaryClauses(filters) }
+    : { must, filters };
+  return `md:v5:c:${buildFilterHash64(payload as Record<string, any>)}`;
 }
 
 export function buildCountQuery(must: any[], filters: any[], scope: string): any {
@@ -472,13 +538,13 @@ export function parseListingCounts(
 // must/filters they query with). Redis-cached under the population key and
 // coalesced across instances; failures are never cached and degrade to one
 // uncached attempt rather than hiding the count.
-export async function getListingCountsFor(must: any[], filters: any[], scope: string, sort?: string) {
+export async function getListingCountsFor(must: any[], filters: any[], scope: string, sort?: string, regionToken?: string) {
   const es = getElasticsearchClient();
   const run = async () => {
     const res: any = await es.search(buildCountQuery(must, filters, scope));
     return parseListingCounts(res, scope);
   };
-  const key = buildCountCacheKey(must, filters);
+  const key = buildCountCacheKey(must, filters, regionToken);
   // Tiered TTL so counts expire with the ordering tier they are read beside —
   // a count must never outlive the list population it describes by much.
   const ttl = redisTTLForSort(sort);
@@ -493,7 +559,7 @@ export async function getListingCountsFor(must: any[], filters: any[], scope: st
 
 export async function getListingCounts(params: any, scope: string) {
   const { must, filters } = buildFilters(params, scope);
-  return getListingCountsFor(must, filters, scope, params?.sort);
+  return getListingCountsFor(must, filters, scope, params?.sort, params?.regionToken);
 }
 
 // List query plan (pure — exported for tests and benchmarks). Counting strategy
@@ -557,7 +623,7 @@ export async function queryESListings(params: any) {
   const countPromise = split
     ? (() => {
         const { must, filters } = buildFilters(params, scope);
-        return getListingCountsFor(must, filters, scope, params.sort);
+        return getListingCountsFor(must, filters, scope, params.sort, params.regionToken);
       })()
     : Promise.resolve(null);
 
@@ -634,7 +700,7 @@ export async function queryESListings(params: any) {
   if (total === 0 && typeof params?.listingPurpose === 'string' && params.listingPurpose.trim()) {
     try {
       const relaxed = buildFilters({ ...params, listingPurpose: undefined }, scope);
-      const relaxedCounts = await getListingCountsFor(relaxed.must, relaxed.filters, scope, params.sort);
+      const relaxedCounts = await getListingCountsFor(relaxed.must, relaxed.filters, scope, params.sort, params.regionToken);
       withoutPurposeTotal = typeof relaxedCounts?.total === 'number' ? relaxedCounts.total : null;
     } catch {
       withoutPurposeTotal = null;

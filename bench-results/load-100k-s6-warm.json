@@ -1,0 +1,122 @@
+{
+  "label": "100k-s6",
+  "scenario": "warm",
+  "levels": [
+    {
+      "conc": 1,
+      "requests": 60,
+      "wallSec": 3.27,
+      "qps": 18.3,
+      "p50": 24,
+      "p95": 164,
+      "p99": 789,
+      "errPct": 0,
+      "cacheHitPct": 98.3,
+      "esPerReq": 1,
+      "samples": {
+        "count": 7,
+        "searchActiveMax": 0,
+        "searchQueueMax": 0,
+        "searchRejectedDelta": 0,
+        "searchThreads": 13,
+        "cpuMax": 35,
+        "heapUsedMaxMB": 354,
+        "heapMaxMB": 1024,
+        "appCpuMax": 94.5,
+        "appRssMaxMB": 168
+      },
+      "redis": {
+        "opsPerSec": 0,
+        "keyspaceHitsDelta": 0,
+        "keyspaceMissesDelta": 0
+      }
+    },
+    {
+      "conc": 10,
+      "requests": 60,
+      "wallSec": 1.05,
+      "qps": 57.4,
+      "p50": 145,
+      "p95": 316,
+      "p99": 346,
+      "errPct": 0,
+      "cacheHitPct": 100,
+      "esPerReq": 0,
+      "samples": {
+        "count": 3,
+        "searchActiveMax": 0,
+        "searchQueueMax": 0,
+        "searchRejectedDelta": 0,
+        "searchThreads": 13,
+        "cpuMax": 7,
+        "heapUsedMaxMB": 358,
+        "heapMaxMB": 1024,
+        "appCpuMax": 116,
+        "appRssMaxMB": 183
+      },
+      "redis": {
+        "opsPerSec": 0,
+        "keyspaceHitsDelta": 0,
+        "keyspaceMissesDelta": 0
+      }
+    },
+    {
+      "conc": 25,
+      "requests": 60,
+      "wallSec": 0.7,
+      "qps": 85.3,
+      "p50": 228,
+      "p95": 395,
+      "p99": 461,
+      "errPct": 0,
+      "cacheHitPct": 100,
+      "esPerReq": 0,
+      "samples": {
+        "count": 2,
+        "searchActiveMax": 0,
+        "searchQueueMax": 0,
+        "searchRejectedDelta": 0,
+        "searchThreads": 13,
+        "cpuMax": 6,
+        "heapUsedMaxMB": 358,
+        "heapMaxMB": 1024,
+        "appCpuMax": 115.6,
+        "appRssMaxMB": 203
+      },
+      "redis": {
+        "opsPerSec": 0,
+        "keyspaceHitsDelta": 0,
+        "keyspaceMissesDelta": 0
+      }
+    },
+    {
+      "conc": 50,
+      "requests": 60,
+      "wallSec": 1.8,
+      "qps": 33.3,
+      "p50": 1275,
+      "p95": 1649,
+      "p99": 1702,
+      "errPct": 0,
+      "cacheHitPct": 100,
+      "esPerReq": 0,
+      "samples": {
+        "count": 3,
+        "searchActiveMax": 0,
+        "searchQueueMax": 0,
+        "searchRejectedDelta": 0,
+        "searchThreads": 13,
+        "cpuMax": 35,
+        "heapUsedMaxMB": 366,
+        "heapMaxMB": 1024,
+        "appCpuMax": 87.4,
+        "appRssMaxMB": 191
+      },
+      "redis": {
+        "opsPerSec": 0,
+        "keyspaceHitsDelta": 0,
+        "keyspaceMissesDelta": 0
+      }
+    }
+  ]
+}

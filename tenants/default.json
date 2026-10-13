@@ -38,7 +38,16 @@
   "map": {
     "center": [77.0266, 28.4595],
     "zoom": 4,
-    "geocodeCountries": ""
+    "geocodeCountries": "",
+    "admin1": {
+      "$comment": "Interactive state/emirate selection. The overview file (simplified) paints the background layer; the manifest indexes the canonical MapTiler geometry used for hover/selection outlines AND the ES filter (no per-listing classification). Below overviewMaxZoom markers are skipped (state overview); outlines show between outlineMin/MaxZoom; above Max only the selected state is outlined. NEXT_PUBLIC_ADMIN1=0 disables.",
+      "file": "geo/overview.geojson",
+      "manifest": "geo/regions-manifest.json",
+      "overviewMaxZoom": 5,
+      "outlineMinZoom": 5,
+      "outlineMaxZoom": 9,
+      "showCounts": true
+    }
   },
   "features": {
     "projects": true
@@ -80,7 +89,7 @@
     "radiusStep": 5,
     "arrayFields": ["amenities", "furnishings"],
     "stripFromMarkerKey": ["sort", "pageSize", "cursor"],
-    "polygonMaxPoints": 1000,
+    "polygonMaxPoints": 120000,
     "polygonPrecision": 6
   },
   "priceScales": {
