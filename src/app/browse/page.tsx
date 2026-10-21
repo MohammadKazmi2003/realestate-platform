@@ -63,7 +63,7 @@ const DEFAULT_CENTER: [number, number] = [77.0266, 28.4595];
 const DEFAULT_ZOOM = 11;
 
 const useDebouncedCallback = (callback: (...args: any[]) => void, delay: number) => {
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   return useCallback((...args: any[]) => {
     clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => callback(...args), delay);
@@ -92,6 +92,14 @@ export default function BrowsePage() {
   const [scope, setScope] = useState<SearchScope>('both');
   // Clicked listing (marker or card) — shows detail card overlay like new-admin
   const [selected, setSelected] = useState<{ kind: 'property' | 'project'; id: string } | null>(null);
+  // Location autocomplete (MapTiler geocoding)
+  const [geoSuggestions, setGeoSuggestions] = useState<{ place_name: string; center: [number, number] }[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const geoAbortRef = useRef<AbortController | null>(null);
+  const geoTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const suggestionBoxRef = useRef<HTMLDivElement>(null);
+  // Center of the last picked suggestion so Apply doesn't re-geocode
+  const selectedGeoCenterRef = useRef<[number, number] | null>(null);
 
   const groupedPropertyTypes = useMemo(() => {
     // Systematic hierarchy: Residential → Apartment/Villa, Commercial → Office/Retail, Land.
@@ -135,10 +143,18 @@ export default function BrowsePage() {
       const { _ne, _sw } = bounds as any;
       if (_ne && _sw) boundParams = { min_lat: _sw.lat, max_lat: _ne.lat, min_lng: _sw.lng, max_lng: _ne.lng };
     }
+    const useBoundsFilter = boundParams.min_lat != null;
+    // When bounds are active, skip the location ILIKE entirely: the geocoder's
+    // full place_name ("Gurugram, Haryana, India") never matches location_text
+    // rows ("Sector 56, Gurugram"), so ANDing it with bounds returned nothing.
+    // Bounds ARE the geographic filter for a selected location.
+    // Without bounds, match on the first segment only (short locality name).
+    const locationQuery = activeFilters.location?.trim() || null;
+    const shortLocation = locationQuery ? locationQuery.split(',')[0].trim() : null;
     try {
       if (activeScope === 'properties' || activeScope === 'both') {
         const params: any = {
-          p_location_text: activeFilters.location || null,
+          p_location_text: useBoundsFilter ? null : (shortLocation || null),
           p_min_price: activeFilters.minPrice ? Number(activeFilters.minPrice) : null,
           p_max_price: activeFilters.maxPrice ? Number(activeFilters.maxPrice) : null,
           p_bhk_type_id: null, // systematic BHK filtering is client-side (see matchesBhkFilter)
@@ -167,7 +183,7 @@ export default function BrowsePage() {
           p_page_num: 1,
           p_items_per_page: 100,
           p_sort_by: 'created_at_desc',
-          p_search_text: activeFilters.location || null,
+          p_search_text: useBoundsFilter ? null : (shortLocation || null),
           p_completion_status: null,
           p_bedrooms: null,
           p_min_price: activeFilters.minPrice ? Number(activeFilters.minPrice) : null,
@@ -299,7 +315,19 @@ export default function BrowsePage() {
       setPropertyTypes((propTypeRes.data || []) as PropertyType[]);
     };
     init();
+  }, []);
 
+  // Map init must run once. Handlers read the latest callbacks/flags via refs so
+  // changing filters or searchAsIMove never re-runs this effect — recreating the
+  // Map mid-style-load threw "AbortError: signal is aborted without reason".
+  const fetchPropsRef = useRef(fetchProperties);
+  const debouncedFetchPropsRef = useRef(debouncedFetchProperties);
+  const searchAsMoveRef = useRef(searchAsIMove);
+  useEffect(() => { fetchPropsRef.current = fetchProperties; }, [fetchProperties]);
+  useEffect(() => { debouncedFetchPropsRef.current = debouncedFetchProperties; }, [debouncedFetchProperties]);
+  useEffect(() => { searchAsMoveRef.current = searchAsIMove; }, [searchAsIMove]);
+
+  useEffect(() => {
     if (mapRef.current || !mapContainer.current || !process.env.NEXT_PUBLIC_MAPTILER_KEY) return;
 
     mapRef.current = new maplibregl.Map({
@@ -310,11 +338,11 @@ export default function BrowsePage() {
 
     mapRef.current.addControl(new maplibregl.NavigationControl(), 'top-right');
     const onMapInteraction = () => {
-      if (mapRef.current && searchAsIMove) {
-          debouncedFetchProperties(mapRef.current.getBounds());
+      if (mapRef.current && searchAsMoveRef.current) {
+          debouncedFetchPropsRef.current(mapRef.current.getBounds());
       }
     };
-    mapRef.current.on('load', () => fetchProperties(mapRef.current!.getBounds()));
+    mapRef.current.on('load', () => fetchPropsRef.current(mapRef.current!.getBounds()));
     mapRef.current.on('moveend', onMapInteraction);
 
     return () => {
@@ -323,19 +351,85 @@ export default function BrowsePage() {
         mapRef.current = null;
       }
     };
-  }, [debouncedFetchProperties, fetchProperties, searchAsIMove]);
+  }, []);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const { name, value } = e.target;
+    setFilters(prev => ({ ...prev, [name]: value }));
+
+    if (name === 'location') {
+      selectedGeoCenterRef.current = null;
+      clearTimeout(geoTimeoutRef.current);
+      geoAbortRef.current?.abort();
+      const q = value.trim();
+      if (q.length < 3) {
+        setGeoSuggestions([]);
+        setShowSuggestions(false);
+        return;
+      }
+      setShowSuggestions(true);
+      geoTimeoutRef.current = setTimeout(async () => {
+        const controller = new AbortController();
+        geoAbortRef.current = controller;
+        try {
+          const response = await fetch(
+            `https://api.maptiler.com/geocoding/${encodeURIComponent(q)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN&limit=6`,
+            { signal: controller.signal },
+          );
+          if (!response.ok) throw new Error(`geocode ${response.status}`);
+          const data = await response.json();
+          const features = (data.features || []) as any[];
+          // Invariant: never cache an empty autocomplete result — only replace on success.
+          setGeoSuggestions(features.map(f => ({ place_name: f.place_name, center: f.center })));
+        } catch (err) {
+          if ((err as Error)?.name === 'AbortError') return;
+          console.error('Geocoding failed:', err);
+        }
+      }, 300);
+    }
   };
+
+  const handleSelectSuggestion = (s: { place_name: string; center: [number, number] }) => {
+    clearTimeout(geoTimeoutRef.current);
+    geoAbortRef.current?.abort();
+    selectedGeoCenterRef.current = s.center;
+    setFilters(prev => ({ ...prev, location: s.place_name }));
+    setShowSuggestions(false);
+    setGeoSuggestions([]);
+    setSearchAsIMove(true);
+    mapRef.current?.flyTo({ center: s.center, zoom: 13, essential: true });
+  };
+
+  // Close the suggestion dropdown on outside click
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (suggestionBoxRef.current && !suggestionBoxRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showSuggestions]);
+
+  useEffect(() => () => {
+    clearTimeout(geoTimeoutRef.current);
+    geoAbortRef.current?.abort();
+  }, []);
 
   const handleApplyFilters = async () => {
     if (filters.location && process.env.NEXT_PUBLIC_MAPTILER_KEY) {
       setSearchAsIMove(true);
-      const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(filters.location)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN`);
-      const data = await response.json();
-      if (data.features && data.features.length > 0) {
-        mapRef.current?.flyTo({ center: data.features[0].center, zoom: 13, essential: true });
+      let center = selectedGeoCenterRef.current;
+      if (!center) {
+        const response = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(filters.location)}.json?key=${process.env.NEXT_PUBLIC_MAPTILER_KEY}&country=IN`);
+        const data = await response.json();
+        if (data.features && data.features.length > 0) {
+          center = data.features[0].center;
+        }
+      }
+      if (center) {
+        mapRef.current?.flyTo({ center, zoom: 13, essential: true });
       }
     } else {
         fetchProperties(searchAsIMove && mapRef.current ? mapRef.current.getBounds() : null);
@@ -361,6 +455,23 @@ export default function BrowsePage() {
       },
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
     );
+  };
+
+  const handleResetFilters = () => {
+    clearTimeout(geoTimeoutRef.current);
+    geoAbortRef.current?.abort();
+    selectedGeoCenterRef.current = null;
+    setGeoSuggestions([]);
+    setShowSuggestions(false);
+    setFilters({ location: '', minPrice: '', maxPrice: '', bhkMin: '', propertyTypeId: '' });
+    setScope('both');
+    setSearchAsIMove(true);
+    setSelected(null);
+    if (mapRef.current) {
+      mapRef.current.flyTo({ center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, essential: true });
+    } else {
+      fetchProperties(null, 'both', { location: '', minPrice: '', maxPrice: '', bhkMin: '', propertyTypeId: '' });
+    }
   };
 
   const activeFilterCount = (filters.bhkMin ? 1 : 0) + (filters.propertyTypeId ? 1 : 0) + (filters.minPrice ? 1 : 0) + (filters.maxPrice ? 1 : 0) + (filters.location ? 1 : 0);
@@ -392,7 +503,20 @@ export default function BrowsePage() {
 
               {!filtersCollapsed && (
               <>
-              <input type="text" name="location" placeholder="Search by location..." value={filters.location} onChange={handleFilterChange} className="neumorphic-input w-full"/>
+              <div ref={suggestionBoxRef} className="relative">
+                <input type="text" name="location" placeholder="Search by location..." value={filters.location} onChange={handleFilterChange} onFocus={() => { if (geoSuggestions.length) setShowSuggestions(true); }} className="neumorphic-input w-full"/>
+                {showSuggestions && geoSuggestions.length > 0 && (
+                  <ul className="absolute z-30 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-2xl bg-bg-color shadow-neumorphic-outset border border-shadow-dark/10 py-1">
+                    {geoSuggestions.map((s, i) => (
+                      <li key={`${s.place_name}-${i}`}>
+                        <button type="button" onClick={() => handleSelectSuggestion(s)} className="w-full text-left px-3 py-2 text-sm text-text-color-dark hover:bg-cta-gradient/10">
+                          {s.place_name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <input type="number" name="minPrice" placeholder="Min Price" value={filters.minPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
                 <input type="number" name="maxPrice" placeholder="Max Price" value={filters.maxPrice} onChange={handleFilterChange} className="neumorphic-input w-full"/>
@@ -414,7 +538,12 @@ export default function BrowsePage() {
                 <label htmlFor="search-as-i-move" className="text-sm font-medium text-text-color-dark">Search as I move</label>
                 <input id="search-as-i-move" type="checkbox" checked={searchAsIMove} onChange={() => setSearchAsIMove(!searchAsIMove)} className="h-4 w-4 rounded shadow-neumorphic-inset appearance-none checked:bg-success-color transition"/>
               </div>
-              <button onClick={handleApplyFilters} className="neumorphic-button bg-cta-gradient w-full">Apply Filters</button>
+              <div className="flex gap-2">
+                <button onClick={handleApplyFilters} className="neumorphic-button bg-cta-gradient flex-1">Apply Filters</button>
+                {activeFilterCount > 0 && (
+                  <button onClick={handleResetFilters} className="neumorphic-button flex-1">Reset Filters</button>
+                )}
+              </div>
               <div>
                 <button onClick={useUserLocation} disabled={isLocating} className="neumorphic-button w-full flex items-center justify-center gap-2">
                     {isLocating ? <FaSpinner className="animate-spin"/> : <FaCrosshairs/>} {isLocating ? 'Locating...' : 'Use My Location'}
